@@ -27,9 +27,13 @@ class Linear(module.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.use_bias = use_bias
+        self.key = key
 
     def __call__(self, x: Array) -> Array:
         x = jax.numpy.dot(self.weights, x)
         if self.use_bias:
             x = x + self.bias
         return x
+
+
+module.register_toylib_module(Linear)
