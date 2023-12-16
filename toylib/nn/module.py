@@ -34,9 +34,6 @@ class Module(ABC):
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        print(aux_data)
-        print(children)
-
         # Create a new empty object
         obj = object.__new__(cls)
 
