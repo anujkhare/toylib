@@ -17,7 +17,7 @@ class Linear(module.Module):
     out_features: int
     use_bias: bool
 
-    def __init__(self, in_features: int, out_features: int, use_bias: bool = True, *, key: PRNGKeyArray) -> None:
+    def __init__(self, in_features: int, out_features: int, use_bias: bool = True, name: str = 'linear', *, key: PRNGKeyArray) -> None:
         w_key, b_key = jax.random.split(key, 2)
         lim = 1 / math.sqrt(in_features)
         self.weights = jax.random.uniform(w_key, (out_features, in_features), minval=-lim, maxval=lim)
@@ -28,6 +28,7 @@ class Linear(module.Module):
         self.out_features = out_features
         self.use_bias = use_bias
         self.key = key
+        self.name = name
 
     def __call__(self, x: Array) -> Array:
         x = jax.numpy.dot(self.weights, x)

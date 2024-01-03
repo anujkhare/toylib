@@ -10,6 +10,12 @@ def _is_array(x: Any) -> bool:
     ) or hasattr(x, "__jax_array__")
 # , float, complex, bool, int
 
+def _is_dynamic(x: Any) -> bool:
+    if _is_array(x): return True
+    if isinstance(x, Module):
+        # recursively find dynamic things
+    return False
+
 def _is_random_key(x: str) -> bool:
     return x == 'key'
 
@@ -25,10 +31,16 @@ class Module(ABC):
 
     Inspired by equinox and the Custom PyTres and Initialization section in jax docs.
     """
+    name: str
+
     def tree_flatten(self):
-        dynamic = [(k, v) for k, v in self.__dict__.items() if _is_array(v) and not _is_random_key(k)]
-        aux_ = {k: v for k, v in self.__dict__.items() if not _is_array(v) or _is_random_key(k)}
-        aux_data = {'aux': aux_, 'dynamic_keys': [c[0] for c in dynamic]}
+        dynamic, static = [], {}
+        for k, v in self.__dict__.items():
+            if _is_array(v) and not _is_random_key(k):
+                dynamic.append((k, v))
+            else:
+                static[k] = v
+        aux_data = {'aux': static, 'dynamic_keys': [c[0] for c in dynamic]}
 
         return (dynamic, aux_data)
 
