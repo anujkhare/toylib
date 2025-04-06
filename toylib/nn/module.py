@@ -1,14 +1,17 @@
 from abc import ABC
-import jax
-import numpy as np
 from typing import Any
+
+import numpy as np
+
+import jax
 from jax.tree_util import register_pytree_with_keys
+
 
 def _is_array(x: Any) -> bool:
     return isinstance(
         x, (jax.Array, np.ndarray, np.generic)
     ) or hasattr(x, "__jax_array__")
-# , float, complex, bool, int
+
 
 def _is_random_key(x: str) -> bool:
     return x == 'key'

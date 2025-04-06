@@ -1,8 +1,9 @@
 import math
-import jax
-
 from typing import Optional
+
 from jaxtyping import Array, PRNGKeyArray
+
+import jax
 
 from . import module
 
