@@ -295,7 +295,7 @@ def load_dataset(
     )
     train_dataset = dataset_fn(train_val["train"])
     val_dataset = dataset_fn(train_val["test"])
-    test_dataset = dataset_fn(["test"])
+    test_dataset = dataset_fn(imdb_dataset["test"])
 
     # Set up dataloaders
     train_dataloader = DataLoader(
