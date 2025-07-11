@@ -288,7 +288,7 @@ HTML_TEMPLATE = '''
             board.innerHTML = '';
             
             const state = gameData.state;
-            const lineOwners = gameData.line_owners;
+            const lineOwners = state.line_owners;
             const gameInfo = gameData.game_info;
             
             const rows = state.rows;

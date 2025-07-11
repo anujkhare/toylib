@@ -30,6 +30,11 @@ class GameState:
             (2, self.rows - 1, self.cols - 1), dtype=np.bool_
         )
 
+        self.line_owners = {
+            'vertical': np.full((self.rows - 1, self.cols), -1, dtype=int),
+            'horizontal': np.full((self.rows, self.cols - 1), -1, dtype=int)
+        }
+
     def to_dict(self):
         """Convert GameState to a dictionary"""
         return {
@@ -39,6 +44,10 @@ class GameState:
             "filled_vertical": self.filled_vertical.tolist(),
             "filled_horizontal": self.filled_horizontal.tolist(),
             "boxes_by_player": self.boxes_by_player.tolist(),
+            'line_owners': {
+                'vertical': self.line_owners['vertical'].tolist(),
+                'horizontal': self.line_owners['horizontal'].tolist()
+            },
         }
 
     def load_from_dict(self, data):
@@ -50,6 +59,8 @@ class GameState:
         self.filled_vertical = np.array(data["filled_vertical"], dtype=np.bool_)
         self.filled_horizontal = np.array(data["filled_horizontal"], dtype=np.bool_)
         self.boxes_by_player = np.array(data["boxes_by_player"], dtype=np.bool_)
+        self.line_owners['vertical'] = np.array(data['line_owners']['vertical'], dtype=int)
+        self.line_owners['horizontal'] = np.array(data['line_owners']['horizontal'], dtype=int)
 
     def get_scores(self) -> Tuple[int, int]:
         """Get the scores for both players"""
@@ -80,10 +91,6 @@ class Game:
     def __post_init__(self):
         self.state = GameState(self.rows, self.cols)
         # Track who drew each line for UI coloring
-        self.line_owners = {
-            'vertical': np.full((self.rows - 1, self.cols), -1, dtype=int),
-            'horizontal': np.full((self.rows, self.cols - 1), -1, dtype=int)
-        }
 
     def print_state(self):
         """Print the current game state"""
@@ -155,11 +162,11 @@ class Game:
         """Get the player who drew a specific line"""
         if direction == 'vertical':
             if 0 <= r < self.rows - 1 and 0 <= c < self.cols:
-                owner = self.line_owners['vertical'][r, c]
+                owner = self.state.line_owners['vertical'][r, c]
                 return owner if owner >= 0 else None
         else:  # horizontal
             if 0 <= r < self.rows and 0 <= c < self.cols - 1:
-                owner = self.line_owners['horizontal'][r, c]
+                owner = self.state.line_owners['horizontal'][r, c]
                 return owner if owner >= 0 else None
         return None
 
@@ -175,10 +182,10 @@ class Game:
         # Mark the edge as filled in the game state
         if direction == Direction.VERTICAL:
             self.state.filled_vertical[r, c] = True
-            self.line_owners['vertical'][r, c] = current_player
+            self.state.line_owners['vertical'][r, c] = current_player
         else:
             self.state.filled_horizontal[r, c] = True
-            self.line_owners['horizontal'][r, c] = current_player
+            self.state.line_owners['horizontal'][r, c] = current_player
 
         # Check if this move completes any boxes
         boxes_completed = []
@@ -239,16 +246,9 @@ class Game:
         """Convert entire game to dictionary including line owners"""
         return {
             'state': self.state.to_dict(),
-            'line_owners': {
-                'vertical': self.line_owners['vertical'].tolist(),
-                'horizontal': self.line_owners['horizontal'].tolist()
-            },
             'game_info': self.get_game_info()
         }
 
     def load_from_dict(self, data: Dict[str, Any]):
         """Load game from dictionary"""
         self.state.load_from_dict(data['state'])
-        if 'line_owners' in data:
-            self.line_owners['vertical'] = np.array(data['line_owners']['vertical'], dtype=int)
-            self.line_owners['horizontal'] = np.array(data['line_owners']['horizontal'], dtype=int)
