@@ -1,7 +1,7 @@
-import abc
+import copy
 import dataclasses
 import numpy as np
-from typing import Type, Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, Dict, Any
 import enum
 
 
@@ -16,7 +16,12 @@ class Direction(enum.Enum):
 class GameState:
     rows: int  # number of rows of lines
     cols: int  # number of columns of lines
-    next_player: int = 0
+    next_player: int = 0   # Player to move next (0 or 1)
+
+    @property
+    def valid_actions(self) -> np.ndarray:
+        """Get the valid actions for the current game state"""
+        raise NotImplementedError("This method should be implemented by subclasses.")
 
     def __post_init__(self):
         # There are (rows - 1) vertical slots and (cols - 1) horizontal slots
@@ -24,6 +29,13 @@ class GameState:
         # with filled_vertical[r, c] indicating the vertical line going down from (r, c)
         self.filled_vertical = np.zeros((self.rows - 1, self.cols), dtype=np.bool_)
         self.filled_horizontal = np.zeros((self.rows, self.cols - 1), dtype=np.bool_)
+        self.scores = np.zeros(2, dtype=int)  # scores for player 1 and player 2
+
+        ################################################################################
+        # Auxiliary information that is not strictly necessary for the game logic,
+        # but useful for visualization and UI.
+        # These are NOT guaranteed to be up-to-date with the game state - especially during
+        # simulation if the game state is serialized and deserialized.
 
         # (rows-1, cols-1) bool array for boxes won by P1 and P2 respectively.
         self.boxes_by_player = np.zeros(
@@ -34,9 +46,10 @@ class GameState:
             'vertical': np.full((self.rows - 1, self.cols), -1, dtype=int),
             'horizontal': np.full((self.rows, self.cols - 1), -1, dtype=int)
         }
+        ################################################################################
 
     def to_dict(self):
-        """Convert GameState to a dictionary"""
+        """Convert GameState to a dictionary. Includes auxiliary information."""
         return {
             "rows": self.rows,
             "cols": self.cols,
@@ -51,7 +64,7 @@ class GameState:
         }
 
     def load_from_dict(self, data):
-        """Create GameState from a dictionary"""
+        """Create GameState from a dictionary, including auxiliary information."""
         assert self.rows == data["rows"] and self.cols == data["cols"], (
             "Loaded dimensions do not match the initialized dimensions."
         )
@@ -62,48 +75,55 @@ class GameState:
         self.line_owners['vertical'] = np.array(data['line_owners']['vertical'], dtype=int)
         self.line_owners['horizontal'] = np.array(data['line_owners']['horizontal'], dtype=int)
 
-    def get_scores(self) -> Tuple[int, int]:
-        """Get the scores for both players"""
-        scores = np.sum(self.boxes_by_player, axis=(1, 2))  # Sum over rows and columns
-        return int(scores[0]), int(scores[1])
+    def to_vector(self) -> tuple[np.ndarray, dict[str, Any]]:
+        """Convert the game state to a vector representation and an auxiliary information map."""
+        # Flatten the filled vertical and horizontal lines
+        filled_vertical_flat = self.filled_vertical.flatten()
+        filled_horizontal_flat = self.filled_horizontal.flatten()
 
-    def is_game_over(self) -> bool:
-        """Check if the game is over (all boxes are filled)"""
-        total_boxes = (self.rows - 1) * (self.cols - 1)
-        return np.sum(self.boxes_by_player) == total_boxes
+        # Combine all parts into a single vector
+        return np.concatenate((
+            filled_vertical_flat,
+            filled_horizontal_flat,
+            self.scores.ravel(),
+            np.array([self.next_player], dtype=int)
+        )), {
+            "rows": self.rows,
+            "cols": self.cols,
+        }
+    
+    @classmethod
+    def load_from_vector(cls, vector: np.ndarray, aux: dict[str, Any]) -> None:
+        """Load the game state from a vector representation and an auxiliary information map."""
+        assert 'rows' in aux and 'cols' in aux, "Auxiliary information must contain 'rows' and 'cols'."
+        rows, cols = aux['rows'], aux['cols']
+        obj = cls(rows=rows, cols=cols)
 
-    def get_winner(self) -> Optional[int]:
-        """Get the winner of the game. Returns None if game is not over or tied"""
-        score1, score2 = self.get_scores()
-        if not self.is_game_over() or score1 == score2:
-            return None
-        if score1 > score2:
-            return 0  # Player 1 wins
-        elif score2 > score1:
-            return 1  # Player 2 wins
+        n_vertical = cols * (rows - 1)
+        n_horizontal = (rows * (cols - 1))
+        obj.filled_vertical = vector[:n_vertical].reshape((rows - 1, cols))
+        obj.filled_horizontal = vector[n_vertical:n_vertical + n_horizontal].reshape((rows, cols - 1))
+        obj.scores = vector[-3: -1]
+        obj.next_player = vector[-1]
+
+        # Load auxiliary information
+        if 'boxes_by_player' in aux:
+            obj.boxes_by_player = np.array(aux['boxes_by_player'], dtype=np.bool_)
+        if 'line_owners' in aux:
+            obj.line_owners['vertical'] = np.array(aux['line_owners']['vertical'], dtype=int)
+            obj.line_owners['horizontal'] = np.array(aux['line_owners']['horizontal'], dtype=int)
+
+        return obj
+    
+    def move(self, action: int) -> 'GameState':
+        """Make a move in the game and return a new game state.
+
+        A copy of the game state is returned with the move applied.
+        """
+        raise NotImplementedError("This method should be implemented by subclasses.")
 
 
-@dataclasses.dataclass
-class Game:
-    rows: int
-    cols: int
-
-    def __post_init__(self):
-        self.state = GameState(self.rows, self.cols)
-        # Track who drew each line for UI coloring
-
-    def print_state(self):
-        """Print the current game state"""
-        print(f"Current Player: {self.state.next_player + 1}")
-        print("\nVertical edges filled:")
-        print(self.state.filled_vertical.astype(int))
-        print("\nHorizontal edges filled:")
-        print(self.state.filled_horizontal.astype(int))
-        print("\nPlayer 1 boxes:")
-        print(self.state.boxes_by_player[0].astype(int))
-        print("\nPlayer 2 boxes:")
-        print(self.state.boxes_by_player[1].astype(int))
-
+class DotsAndBoxesGame(GameState):
     @property
     def n_vertical_moves(self) -> int:
         """Get the number of vertical moves available in the game"""
@@ -138,8 +158,8 @@ class Game:
     @property
     def valid_actions(self) -> np.ndarray:
         """Get the valid actions for the current game state"""
-        valid_vertical = ~self.state.filled_vertical.flatten()
-        valid_horizontal = ~self.state.filled_horizontal.flatten()
+        valid_vertical = ~self.filled_vertical.flatten()
+        valid_horizontal = ~self.filled_horizontal.flatten()
         return np.where(np.concatenate((valid_vertical, valid_horizontal)))[0]
 
     def _is_box_completed(self, r: int, c: int) -> bool:
@@ -152,40 +172,32 @@ class Game:
         if r < 0 or r >= self.rows - 1 or c < 0 or c >= self.cols - 1:
             return False
         return (
-            self.state.filled_vertical[r, c]
-            and self.state.filled_horizontal[r, c]
-            and self.state.filled_vertical[r, c + 1]
-            and self.state.filled_horizontal[r + 1, c]
+            self.filled_vertical[r, c]
+            and self.filled_horizontal[r, c]
+            and self.filled_vertical[r, c + 1]
+            and self.filled_horizontal[r + 1, c]
         )
 
-    def get_line_owner(self, r: int, c: int, direction: str) -> Optional[int]:
-        """Get the player who drew a specific line"""
-        if direction == 'vertical':
-            if 0 <= r < self.rows - 1 and 0 <= c < self.cols:
-                owner = self.state.line_owners['vertical'][r, c]
-                return owner if owner >= 0 else None
-        else:  # horizontal
-            if 0 <= r < self.rows and 0 <= c < self.cols - 1:
-                owner = self.state.line_owners['horizontal'][r, c]
-                return owner if owner >= 0 else None
-        return None
+    def move(self, action: int) -> 'DotsAndBoxesGame':
+        """Make a move in the game and return a new game state.
 
-    def move(self, action: int) -> Dict[str, Any]:
-        """Make a move in the game and return move result information"""
+        A copy of the game state is returned with the move applied.
+        """
         # Check if the action is valid
         if action not in self.valid_actions:
             raise ValueError("Invalid action")
+        new_game = copy.deepcopy(self)
         
         r, c, direction = self._action_to_coordinates(action)
-        current_player = self.state.next_player
+        current_player = self.next_player
 
         # Mark the edge as filled in the game state
         if direction == Direction.VERTICAL:
-            self.state.filled_vertical[r, c] = True
-            self.state.line_owners['vertical'][r, c] = current_player
+            new_game.filled_vertical[r, c] = True
+            new_game.line_owners['vertical'][r, c] = current_player
         else:
-            self.state.filled_horizontal[r, c] = True
-            self.state.line_owners['horizontal'][r, c] = current_player
+            new_game.filled_horizontal[r, c] = True
+            new_game.line_owners['horizontal'][r, c] = current_player
 
         # Check if this move completes any boxes
         boxes_completed = []
@@ -193,51 +205,78 @@ class Game:
         # For a vertical line at (r, c), check boxes to the left and right
         if direction == Direction.VERTICAL:
             # Check box to the left (r, c-1)
-            if c > 0 and self._is_box_completed(r, c - 1):
-                self.state.boxes_by_player[current_player, r, c - 1] = True
+            if c > 0 and new_game._is_box_completed(r, c - 1):
+                new_game.boxes_by_player[current_player, r, c - 1] = True
                 boxes_completed.append((r, c - 1))
             # Check box to the right (r, c)
-            if c < self.cols - 1 and self._is_box_completed(r, c):
-                self.state.boxes_by_player[current_player, r, c] = True
+            if c < new_game.cols - 1 and new_game._is_box_completed(r, c):
+                new_game.boxes_by_player[current_player, r, c] = True
                 boxes_completed.append((r, c))
         else:  # Horizontal line
             # Check box above (r-1, c)
-            if r > 0 and self._is_box_completed(r - 1, c):
-                self.state.boxes_by_player[current_player, r - 1, c] = True
+            if r > 0 and new_game._is_box_completed(r - 1, c):
+                new_game.boxes_by_player[current_player, r - 1, c] = True
                 boxes_completed.append((r - 1, c))
             # Check box below (r, c)
-            if r < self.rows - 1 and self._is_box_completed(r, c):
-                self.state.boxes_by_player[current_player, r, c] = True
+            if r < new_game.rows - 1 and new_game._is_box_completed(r, c):
+                new_game.boxes_by_player[current_player, r, c] = True
                 boxes_completed.append((r, c))
+
+        # Update the score for the current player
+        if boxes_completed:
+            new_game.scores[current_player] += len(boxes_completed)
 
         # Switch to the next player only if no boxes were completed
         if not boxes_completed:
-            self.state.next_player = 1 - self.state.next_player
+            new_game.next_player = 1 - new_game.next_player
 
-        # Return information about the move
-        return {
-            'player': current_player,
-            'action': action,
-            'coordinates': (r, c),
-            'direction': direction.name,
-            'boxes_completed': boxes_completed,
-            'boxes_count': len(boxes_completed),
-            'next_player': self.state.next_player,
-            'game_over': self.state.is_game_over(),
-            'winner': self.state.get_winner(),
-            'scores': self.state.get_scores()
-        }
+        # Return the new game state
+        return new_game
+
+    def get_scores(self) -> Tuple[int, int]:
+        """Get the scores for both players"""
+        return self.scores[0], self.scores[1]
+
+    def game_over(self) -> bool:
+        """Check if the game is over (all boxes are filled)"""
+        total_boxes = (self.rows - 1) * (self.cols - 1)
+        return np.sum(self.boxes_by_player) == total_boxes
+
+    def get_winner(self) -> Optional[int]:
+        """Get the winner of the game. Returns None if game is not over or tied"""
+        score1, score2 = self.get_scores()
+        if not self.game_over() or score1 == score2:
+            return None
+        if score1 > score2:
+            return 0  # Player 1 wins
+        elif score2 > score1:
+            return 1  # Player 2 wins
+
+    #####################################################################################
+    # Functions related to visualzation and UI
+    #####################################################################################
+    def get_line_owner(self, r: int, c: int, direction: str) -> Optional[int]:
+        """Get the player who drew a specific line"""
+        if direction == 'vertical':
+            if 0 <= r < self.rows - 1 and 0 <= c < self.cols:
+                owner = self.line_owners['vertical'][r, c]
+                return owner if owner >= 0 else None
+        else:  # horizontal
+            if 0 <= r < self.rows and 0 <= c < self.cols - 1:
+                owner = self.line_owners['horizontal'][r, c]
+                return owner if owner >= 0 else None
+        return None
 
     def get_game_info(self) -> Dict[str, Any]:
         """Get comprehensive game information for UI"""
-        score1, score2 = self.state.get_scores()
+        score1, score2 = self.get_scores()
         return {
             'rows': self.rows,
             'cols': self.cols,
-            'current_player': self.state.next_player,
+            'current_player': self.next_player,
             'scores': {'player1': score1, 'player2': score2},
-            'game_over': self.state.is_game_over(),
-            'winner': self.state.get_winner(),
+            'game_over': self.game_over(),
+            'winner': self.get_winner(),
             'valid_actions': self.valid_actions.tolist(),
             'total_boxes': (self.rows - 1) * (self.cols - 1)
         }
@@ -245,10 +284,10 @@ class Game:
     def to_dict(self) -> Dict[str, Any]:
         """Convert entire game to dictionary including line owners"""
         return {
-            'state': self.state.to_dict(),
+            'state': super().to_dict(),
             'game_info': self.get_game_info()
         }
 
     def load_from_dict(self, data: Dict[str, Any]):
         """Load game from dictionary"""
-        self.state.load_from_dict(data['state'])
+        super().load_from_dict(data['state'])

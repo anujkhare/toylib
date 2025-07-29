@@ -526,7 +526,7 @@ def make_move(game_id):
     
     try:
         # Check if game is already over
-        if game.state.is_game_over():
+        if game.game_over():
             return jsonify({'error': 'Game is already over'}), 400
         
         # Check if action is valid
@@ -534,14 +534,12 @@ def make_move(game_id):
             return jsonify({'error': 'Invalid action'}), 400
         
         # Make the move and get detailed result
-        move_result = game.move(action)
-        
-        # Convert numpy types in move result
-        move_result = convert_numpy_types(move_result)
+        new_game = game.move(action)
+        games[game_id] = new_game  # Update the game instance
         
         return jsonify({
             'success': True,
-            'move_result': move_result
+            'move_result': convert_numpy_types(new_game.to_dict()),
         })
         
     except ValueError as e:
