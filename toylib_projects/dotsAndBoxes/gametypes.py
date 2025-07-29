@@ -61,6 +61,7 @@ class GameState:
                 'vertical': self.line_owners['vertical'].tolist(),
                 'horizontal': self.line_owners['horizontal'].tolist()
             },
+            'scores': self.scores.tolist()
         }
 
     def load_from_dict(self, data):
@@ -74,6 +75,7 @@ class GameState:
         self.boxes_by_player = np.array(data["boxes_by_player"], dtype=np.bool_)
         self.line_owners['vertical'] = np.array(data['line_owners']['vertical'], dtype=int)
         self.line_owners['horizontal'] = np.array(data['line_owners']['horizontal'], dtype=int)
+        self.scores = np.array(data['scores'], dtype=int)
 
     def to_vector(self) -> tuple[np.ndarray, dict[str, Any]]:
         """Convert the game state to a vector representation and an auxiliary information map."""
