@@ -1,11 +1,11 @@
 import numpy as np
 
-from toylib_projects.dotsAndBoxes import gametypes
+from toylib_projects.dotsAndBoxes import dots_and_boxes
 from toylib_projects.dotsAndBoxes import mcts
 from toylib_projects.dotsAndBoxes.interfaces import visualize
 
 
-def human_player(game: gametypes.GameState, last_action: int) -> int:
+def human_player(game: dots_and_boxes.DotsAndBoxesGame, last_action: int) -> int:
     """A human player based on terminal input."""
     del game, last_action # Unused in this function
     try:
@@ -20,7 +20,7 @@ def get_mcts_player(
     policy_fn: callable,
     max_simulattions: int = 100,
 ) -> callable:
-    def inner(game: gametypes.GameState, last_action: int) -> int:
+    def inner(game: dots_and_boxes.DotsAndBoxesGame, last_action: int) -> int:
         """Returns a player function that uses MCTS to select the next move."""
         del last_action
         root = mcts.TwoPlayerGameTreeNode(game=game)
@@ -44,7 +44,7 @@ class MCTSPlayer:
         self.debug = debug
         self.wait_for_input = wait_for_input
 
-    def __call__(self, state: gametypes.GameState, last_action: int) -> int:
+    def __call__(self, state: dots_and_boxes.DotsAndBoxesGame, last_action: int) -> int:
         # If the root node is None, create a new root node
         self.root = mcts.TwoPlayerGameTreeNode(game=state)
 
@@ -62,6 +62,6 @@ class MCTSPlayer:
             _ = input("Press Enter to continue...")
         return action
 
-def random_policy(state: gametypes.GameState) -> int:
+def random_policy(state: dots_and_boxes.DotsAndBoxesGame) -> int:
     """A random policy that selects a valid action at random."""
     return np.random.choice(state.valid_actions)

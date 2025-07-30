@@ -17,7 +17,7 @@ import abc
 import dataclasses
 import numpy as np
 
-from . import gametypes
+from . import dots_and_boxes
 
 
 @dataclasses.dataclass
@@ -66,7 +66,7 @@ class GameTreeNode(abc.ABC):
 
 
 class TwoPlayerGameTreeNode(GameTreeNode):
-    def __init__(self, game: gametypes.GameState) -> None:
+    def __init__(self, game: dots_and_boxes.DotsAndBoxesGame) -> None:
         state, aux = game.to_vector()
         super().__init__(state=state, auxiliary=aux)
         self._game_state = game

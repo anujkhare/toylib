@@ -3,7 +3,7 @@ from flask_cors import CORS
 import numpy as np
 
 # Import the game classes and AI players
-from toylib_projects.dotsAndBoxes.gametypes import DotsAndBoxesGame
+from toylib_projects.dotsAndBoxes.dots_and_boxes import DotsAndBoxesGame
 from toylib_projects.dotsAndBoxes.players import MCTSPlayer, random_policy
 
 app = Flask(__name__)

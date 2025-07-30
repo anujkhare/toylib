@@ -1,8 +1,9 @@
 import copy
 import dataclasses
-import numpy as np
-from typing import Optional, Tuple, Dict, Any
 import enum
+import numpy as np
+from typing import Any, Optional, Tuple
+
 
 
 class Direction(enum.Enum):
@@ -13,10 +14,10 @@ class Direction(enum.Enum):
 
 
 @dataclasses.dataclass
-class GameState:
+class DotsAndBoxesGame:
     rows: int  # number of rows of lines
     cols: int  # number of columns of lines
-    next_player: int = 0   # Player to move next (0 or 1)
+    next_player: int = 0  # Player to move next (0 or 1)
 
     @property
     def valid_actions(self) -> np.ndarray:
@@ -43,8 +44,8 @@ class GameState:
         )
 
         self.line_owners = {
-            'vertical': np.full((self.rows - 1, self.cols), -1, dtype=int),
-            'horizontal': np.full((self.rows, self.cols - 1), -1, dtype=int)
+            "vertical": np.full((self.rows - 1, self.cols), -1, dtype=int),
+            "horizontal": np.full((self.rows, self.cols - 1), -1, dtype=int),
         }
         ################################################################################
 
@@ -57,11 +58,11 @@ class GameState:
             "filled_vertical": self.filled_vertical.tolist(),
             "filled_horizontal": self.filled_horizontal.tolist(),
             "boxes_by_player": self.boxes_by_player.tolist(),
-            'line_owners': {
-                'vertical': self.line_owners['vertical'].tolist(),
-                'horizontal': self.line_owners['horizontal'].tolist()
+            "line_owners": {
+                "vertical": self.line_owners["vertical"].tolist(),
+                "horizontal": self.line_owners["horizontal"].tolist(),
             },
-            'scores': self.scores.tolist()
+            "scores": self.scores.tolist(),
         }
 
     def load_from_dict(self, data):
@@ -73,9 +74,13 @@ class GameState:
         self.filled_vertical = np.array(data["filled_vertical"], dtype=np.bool_)
         self.filled_horizontal = np.array(data["filled_horizontal"], dtype=np.bool_)
         self.boxes_by_player = np.array(data["boxes_by_player"], dtype=np.bool_)
-        self.line_owners['vertical'] = np.array(data['line_owners']['vertical'], dtype=int)
-        self.line_owners['horizontal'] = np.array(data['line_owners']['horizontal'], dtype=int)
-        self.scores = np.array(data['scores'], dtype=int)
+        self.line_owners["vertical"] = np.array(
+            data["line_owners"]["vertical"], dtype=int
+        )
+        self.line_owners["horizontal"] = np.array(
+            data["line_owners"]["horizontal"], dtype=int
+        )
+        self.scores = np.array(data["scores"], dtype=int)
 
     def to_vector(self) -> tuple[np.ndarray, dict[str, Any]]:
         """Convert the game state to a vector representation and an auxiliary information map."""
@@ -84,48 +89,56 @@ class GameState:
         filled_horizontal_flat = self.filled_horizontal.flatten()
 
         # Combine all parts into a single vector
-        return np.concatenate((
-            filled_vertical_flat,
-            filled_horizontal_flat,
-            self.scores.ravel(),
-            np.array([self.next_player], dtype=int)
-        )), {
+        return np.concatenate(
+            (
+                filled_vertical_flat,
+                filled_horizontal_flat,
+                self.scores.ravel(),
+                np.array([self.next_player], dtype=int),
+            )
+        ), {
             "rows": self.rows,
             "cols": self.cols,
         }
-    
+
     @classmethod
     def load_from_vector(cls, vector: np.ndarray, aux: dict[str, Any]) -> None:
         """Load the game state from a vector representation and an auxiliary information map."""
-        assert 'rows' in aux and 'cols' in aux, "Auxiliary information must contain 'rows' and 'cols'."
-        rows, cols = aux['rows'], aux['cols']
+        assert "rows" in aux and "cols" in aux, (
+            "Auxiliary information must contain 'rows' and 'cols'."
+        )
+        rows, cols = aux["rows"], aux["cols"]
         obj = cls(rows=rows, cols=cols)
 
         n_vertical = cols * (rows - 1)
-        n_horizontal = (rows * (cols - 1))
+        n_horizontal = rows * (cols - 1)
         obj.filled_vertical = vector[:n_vertical].reshape((rows - 1, cols))
-        obj.filled_horizontal = vector[n_vertical:n_vertical + n_horizontal].reshape((rows, cols - 1))
-        obj.scores = vector[-3: -1]
+        obj.filled_horizontal = vector[n_vertical : n_vertical + n_horizontal].reshape(
+            (rows, cols - 1)
+        )
+        obj.scores = vector[-3:-1]
         obj.next_player = vector[-1]
 
         # Load auxiliary information
-        if 'boxes_by_player' in aux:
-            obj.boxes_by_player = np.array(aux['boxes_by_player'], dtype=np.bool_)
-        if 'line_owners' in aux:
-            obj.line_owners['vertical'] = np.array(aux['line_owners']['vertical'], dtype=int)
-            obj.line_owners['horizontal'] = np.array(aux['line_owners']['horizontal'], dtype=int)
+        if "boxes_by_player" in aux:
+            obj.boxes_by_player = np.array(aux["boxes_by_player"], dtype=np.bool_)
+        if "line_owners" in aux:
+            obj.line_owners["vertical"] = np.array(
+                aux["line_owners"]["vertical"], dtype=int
+            )
+            obj.line_owners["horizontal"] = np.array(
+                aux["line_owners"]["horizontal"], dtype=int
+            )
 
         return obj
-    
-    def move(self, action: int) -> 'GameState':
+
+    def move(self, action: int) -> "GameState":
         """Make a move in the game and return a new game state.
 
         A copy of the game state is returned with the move applied.
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
 
-
-class DotsAndBoxesGame(GameState):
     @property
     def n_vertical_moves(self) -> int:
         """Get the number of vertical moves available in the game"""
@@ -180,7 +193,7 @@ class DotsAndBoxesGame(GameState):
             and self.filled_horizontal[r + 1, c]
         )
 
-    def move(self, action: int) -> 'DotsAndBoxesGame':
+    def move(self, action: int) -> "DotsAndBoxesGame":
         """Make a move in the game and return a new game state.
 
         A copy of the game state is returned with the move applied.
@@ -189,21 +202,21 @@ class DotsAndBoxesGame(GameState):
         if action not in self.valid_actions:
             raise ValueError("Invalid action")
         new_game = copy.deepcopy(self)
-        
+
         r, c, direction = self._action_to_coordinates(action)
         current_player = self.next_player
 
         # Mark the edge as filled in the game state
         if direction == Direction.VERTICAL:
             new_game.filled_vertical[r, c] = True
-            new_game.line_owners['vertical'][r, c] = current_player
+            new_game.line_owners["vertical"][r, c] = current_player
         else:
             new_game.filled_horizontal[r, c] = True
-            new_game.line_owners['horizontal'][r, c] = current_player
+            new_game.line_owners["horizontal"][r, c] = current_player
 
         # Check if this move completes any boxes
         boxes_completed = []
-        
+
         # For a vertical line at (r, c), check boxes to the left and right
         if direction == Direction.VERTICAL:
             # Check box to the left (r, c-1)
@@ -253,43 +266,3 @@ class DotsAndBoxesGame(GameState):
             return 0  # Player 1 wins
         elif score2 > score1:
             return 1  # Player 2 wins
-
-    #####################################################################################
-    # Functions related to visualzation and UI
-    #####################################################################################
-    def get_line_owner(self, r: int, c: int, direction: str) -> Optional[int]:
-        """Get the player who drew a specific line"""
-        if direction == 'vertical':
-            if 0 <= r < self.rows - 1 and 0 <= c < self.cols:
-                owner = self.line_owners['vertical'][r, c]
-                return owner if owner >= 0 else None
-        else:  # horizontal
-            if 0 <= r < self.rows and 0 <= c < self.cols - 1:
-                owner = self.line_owners['horizontal'][r, c]
-                return owner if owner >= 0 else None
-        return None
-
-    def get_game_info(self) -> Dict[str, Any]:
-        """Get comprehensive game information for UI"""
-        score1, score2 = self.get_scores()
-        return {
-            'rows': self.rows,
-            'cols': self.cols,
-            'current_player': self.next_player,
-            'scores': {'player1': score1, 'player2': score2},
-            'game_over': self.game_over(),
-            'winner': self.get_winner(),
-            'valid_actions': self.valid_actions.tolist(),
-            'total_boxes': (self.rows - 1) * (self.cols - 1)
-        }
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert entire game to dictionary including line owners"""
-        return {
-            'state': super().to_dict(),
-            'game_info': self.get_game_info()
-        }
-
-    def load_from_dict(self, data: Dict[str, Any]):
-        """Load game from dictionary"""
-        super().load_from_dict(data['state'])

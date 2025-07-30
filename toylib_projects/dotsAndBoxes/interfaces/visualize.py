@@ -4,10 +4,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 
-from .. import gametypes
+from .. import dots_and_boxes
 
 
-def plot_dots_and_boxes(game_state: gametypes.DotsAndBoxesGame):
+def plot_dots_and_boxes(game_state: dots_and_boxes.DotsAndBoxesGame):
     """
     Plot a Dots and Boxes game state using matplotlib.
 
@@ -16,7 +16,7 @@ def plot_dots_and_boxes(game_state: gametypes.DotsAndBoxesGame):
         - state: dict with rows, cols, next_player, filled_vertical, filled_horizontal,
                  boxes_by_player, and line_owners
     """
-    state = game_state.to_dict()['state']
+    state = game_state.to_dict()
     rows = state["rows"]
     cols = state["cols"]
 
