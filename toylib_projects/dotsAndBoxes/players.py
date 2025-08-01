@@ -59,7 +59,10 @@ class MCTSPlayer:
         if self.debug:
             visualize.plot_tree(self.root, max_children_per_node=8, max_depth=4)
         if self.wait_for_input:
-            _ = input("Press Enter to continue...")
+            key = input("Press Enter to continue ('q' or '-1' to exit)...")
+            if key == 'q' or key == '-1':
+                print("Exiting...")
+                return -1
         return action
 
 def random_policy(state: dots_and_boxes.DotsAndBoxesGame) -> int:
