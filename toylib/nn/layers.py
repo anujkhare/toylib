@@ -1,6 +1,6 @@
 import math
 import jax
-import jaxtyping
+import jaxtyping as jt
 import typing
 
 from toylib.nn import module
@@ -11,8 +11,8 @@ class Linear(module.Module):
     """Defines a simple feedforward layer: which is a linear transformation."""
 
     # Trainable parameters
-    weights: jaxtyping.Array
-    bias: typing.Optional[jaxtyping.Array]
+    weights: jt.Float[jt.Array, "in_features out_features"]
+    bias: typing.Optional[jt.Float[jt.Array, "out_features"]]
 
     # Hyperparameters / metadata
     in_features: int
@@ -25,7 +25,7 @@ class Linear(module.Module):
         out_features: int,
         use_bias: bool = True,
         *,
-        key: jaxtyping.PRNGKeyArray,
+        key: jt.PRNGKeyArray,
     ) -> None:
         # Split the random key for weights and bias
         w_key, b_key = jax.random.split(key, 2)
@@ -48,7 +48,7 @@ class Linear(module.Module):
         self.use_bias = use_bias
         self.key = key
 
-    def __call__(self, x: jaxtyping.Array) -> jaxtyping.Array:
+    def __call__(self, x: jt.Array) -> jt.Array:
         x = jax.numpy.dot(x, self.weights)
         if self.use_bias:
             x = x + self.bias
