@@ -48,8 +48,44 @@ class Linear(module.Module):
         self.use_bias = use_bias
         self.key = key
 
-    def __call__(self, x: jt.Array) -> jt.Array:
+    def __call__(
+        self, x: jt.Float[jt.Array, "... in_features"]
+    ) -> jt.Float[jt.Array, "... out_features"]:
         x = jax.numpy.dot(x, self.weights)
         if self.use_bias:
             x = x + self.bias
         return x
+
+
+@jax.tree_util.register_pytree_node_class
+class Embedding(module.Module):
+    """Defines an embedding layer that stores an embedding matrix for discrete tokens."""
+
+    # Trainable parameters
+    weights: jt.Float[jt.Array, "vocab_size embedding_dim"]
+
+    # Hyperparameters
+    vocab_size: int
+    embedding_dim: int
+
+    def __init__(
+        self,
+        vocab_size: int,
+        embedding_dim: int,
+        *,
+        key: jt.PRNGKeyArray,
+    ) -> None:
+        # Initialize the embedding weights with a uniform distribution
+        lim = 1 / math.sqrt(embedding_dim)
+        self.weights = jax.random.uniform(
+            key, (vocab_size, embedding_dim), minval=-lim, maxval=lim
+        )
+
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.key = key
+
+    def __call__(
+        self, tokens: jt.Int[jt.Array, "... num_tokens"]
+    ) -> jt.Float[jt.Array, "... num_tokens embedding_dim"]:
+        return jax.numpy.take(self.weights, tokens, axis=0)
