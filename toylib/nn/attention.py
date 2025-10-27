@@ -1,13 +1,21 @@
+import einops
 from jax import numpy as jnp
-import chex
-import dataclasses
 import jax
+import jaxtyping as jt
+import typing
 
 from toylib.nn import layers
 from toylib.nn import module
 
 
-def scaled_dot_product_attention(q, k, v, mask=None):
+def scaled_dot_product_attention(
+    q: jt.Float[jt.Array, "... seq_len qkv_dim"],
+    k: jt.Float[jt.Array, "... seq_len qkv_dim"],
+    v: jt.Float[jt.Array, "... seq_len qkv_dim"],
+    mask: typing.Optional[jt.Float[jt.Array, "... seq_len qkv_dim"]],
+) -> tuple[
+    jt.Float[jt.Array, "... seq_len qkv_dim"], jt.Float[jt.Array, "... seq_len seq_len"]
+]:
     """Compute scaled dot product attention.
 
     Given query (`q`), key (`k`), and value (`v`) tensors, this function first computes the
@@ -20,13 +28,13 @@ def scaled_dot_product_attention(q, k, v, mask=None):
     NOTE: the batch dimension is not explicitly handled in this function.
 
     Args:
-        q: [..., seq_len_q, qk_dim]
-        k: [..., seq_len_kv, qk_dim]
-        v: [..., seq_len_kv, v_dim]
-        mask: optional boolean mask of shape [..., seq_len_q, seq_len_kv] to apply to the attention logits
+        q: query tensor
+        k: keys tensor
+        v: values tensor
+        mask: optional boolean mask to apply to the attention logits
 
     Returns:
-        tuple of final values [seq_len_q, v_dim] and attention weights [seq_len_q, seq_len_kv]
+        tuple of final values and attention weights
 
     """
     d_k = q.shape[-1]
@@ -35,13 +43,13 @@ def scaled_dot_product_attention(q, k, v, mask=None):
     attention_logits = jnp.matmul(q, k.swapaxes(-1, -2)) / jnp.sqrt(d_k)
     if mask is not None:
         attention_logits = jnp.where(mask, attention_logits, -jnp.inf)
+
     attention_weights = jax.nn.softmax(attention_logits, axis=-1)
     values = jnp.matmul(attention_weights, v)
     return values, attention_weights
 
 
 @jax.tree_util.register_pytree_node_class
-@dataclasses.dataclass
 class MultiHeadAttention(module.Module):
     """
     The MultiHeadAttention defines `num_heads` attention heads. For the given input `Q`, `K`, `V`
@@ -52,69 +60,81 @@ class MultiHeadAttention(module.Module):
     single output value vector. A final linear layer is applied on top of this with non-linearity.
     """
 
-    key: jax.random.PRNGKey
-
-    num_heads: int = 4
-    qkv_dim: int = 32
-
-    def __post_init__(self) -> None:
-        keys = jax.random.split(self.key, 4)
+    def __init__(
+        self, qkv_dim: int, num_heads: int, *, key: jax.random.PRNGKey
+    ) -> None:
+        keys = jax.random.split(key, 4)
 
         # Input projections - different "heads" will be split out from the same tensor
         self.q_projection = layers.Linear(
-            in_features=self.qkv_dim, out_features=self.qkv_dim, use_bias=False, key=keys[0]
+            in_features=qkv_dim,
+            out_features=qkv_dim,
+            use_bias=False,
+            key=keys[0],
         )
         self.k_projection = layers.Linear(
-            in_features=self.qkv_dim, out_features=self.qkv_dim, use_bias=False, key=keys[1]
+            in_features=qkv_dim,
+            out_features=qkv_dim,
+            use_bias=False,
+            key=keys[1],
         )
         self.v_projection = layers.Linear(
-            in_features=self.qkv_dim, out_features=self.qkv_dim, use_bias=False, key=keys[2]
+            in_features=qkv_dim,
+            out_features=qkv_dim,
+            use_bias=False,
+            key=keys[2],
         )
 
         # Output linear layer
         self.linear = layers.Linear(
-            in_features=self.qkv_dim, out_features=self.qkv_dim, key=keys[3]
+            in_features=qkv_dim, out_features=qkv_dim, key=keys[3]
         )
 
-    def __call__(self, Q, K, V, mask):
-        chex.assert_equal_rank((Q, K, V))
-        assert Q.shape[-1] == self.qkv_dim, (
-            f"Final dimension in input tensors must be `qkv`: {self.qkv_dim}, found: {Q.shape}"
-        )
-        assert K.shape[-1] == self.qkv_dim, (
-            f"Final dimension in input tensors must be `qkv`: {self.qkv_dim}, found: {K.shape}"
-        )
-        assert V.shape[-1] == self.qkv_dim, (
-            f"Final dimension in input tensors must be `qkv`: {self.qkv_dim}, found: {V.shape}"
-        )
+        self.qkv_dim = qkv_dim
+        self.num_heads = num_heads
 
-        Q = self.q_projection(Q)  # [seq_len, qkv_dim]
-        K = self.k_projection(K)  # [seq_len, qkv_dim]
-        V = self.v_projection(V)  # [seq_len, qkv_dim]
+    def __call__(
+        self,
+        Q: jt.Float[jt.Array, "... seq_len qkv_dim"],
+        K: jt.Float[jt.Array, "... seq_len qkv_dim"],
+        V: jt.Float[jt.Array, "... seq_len qkv_dim"],
+        mask: typing.Optional[jt.Float[jt.Array, "... seq_len qkv_dim"]] = None,
+    ):
+        Q = self.q_projection(Q)
+        K = self.k_projection(K)
+        V = self.v_projection(V)
         print("Q", Q.shape)
 
         # Reshape the input tensors to split out the heads
-        Q = jnp.reshape(Q, (Q.shape[0], self.num_heads, -1)).transpose(
-            1, 0, 2
-        )  # [num_heads, seq_len, qkv_dim / num_heads]
-        K = jnp.reshape(K, (K.shape[0], self.num_heads, -1)).transpose(
-            1, 0, 2
-        )  # [num_heads, seq_len, qkv_dim / num_heads]
-        V = jnp.reshape(V, (V.shape[0], self.num_heads, -1)).transpose(
-            1, 0, 2
-        )  # [num_heads, seq_len, qkv_dim / num_heads]
+        Q = einops.rearrange(
+            Q,
+            "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim",
+            num_heads=self.num_heads,
+        )
+        K = einops.rearrange(
+            K,
+            "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim",
+            num_heads=self.num_heads,
+        )
+        V = einops.rearrange(
+            V,
+            "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim",
+            num_heads=self.num_heads,
+        )
         print("Q reshaped", Q.shape)
 
         # Apply self atttention to each head, get the output values
-        # values: [num_heads, seq_len, qkv_dim], attention_weights: [num_heads, seq_len, seq_len]
+        # values: [... num_heads, seq_len, qkv_dim/num_heads], attention_weights: [... num_heads, seq_len, qkv_dim/num_heads]
         values, attention_weights = scaled_dot_product_attention(
             q=Q, k=K, v=V, mask=mask
         )
 
-        # Reshape to [seq_len, num_heads, ...] and then collapse the last two dimensions
-        values = jax.lax.collapse(values.transpose(1, 0, 2), -2)
+        values = einops.rearrange(
+            values,
+            "... num_heads seq_len d -> ... seq_len (num_heads d)",
+        )
 
-        # Apply linear: [seq_len, qkv_dim]
+        # Apply linear: [..., seq_len, qkv_dim]
         values = self.linear(values)
 
         # return the attention weights and the output values

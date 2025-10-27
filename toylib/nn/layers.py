@@ -12,12 +12,7 @@ class Linear(module.Module):
 
     # Trainable parameters
     weights: jt.Float[jt.Array, "in_features out_features"]
-    bias: typing.Optional[jt.Float[jt.Array, "out_features"]]
-
-    # Hyperparameters / metadata
-    in_features: int
-    out_features: int
-    use_bias: bool
+    bias: typing.Optional[jt.Float[jt.Array, " out_features"]]
 
     def __init__(
         self,
@@ -64,10 +59,6 @@ class Embedding(module.Module):
     # Trainable parameters
     weights: jt.Float[jt.Array, "vocab_size embedding_dim"]
 
-    # Hyperparameters
-    vocab_size: int
-    embedding_dim: int
-
     def __init__(
         self,
         vocab_size: int,
@@ -86,6 +77,6 @@ class Embedding(module.Module):
         self.key = key
 
     def __call__(
-        self, tokens: jt.Int[jt.Array, "... num_tokens"]
-    ) -> jt.Float[jt.Array, "... num_tokens embedding_dim"]:
+        self, tokens: jt.Int[jt.Array, "... seq_len"]
+    ) -> jt.Float[jt.Array, "... seq_len embedding_dim"]:
         return jax.numpy.take(self.weights, tokens, axis=0)
