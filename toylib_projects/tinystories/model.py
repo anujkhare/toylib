@@ -27,10 +27,10 @@ class DecoderOnlyTransformer(nn.module.Module):
     for the next token prediction.
     """
 
-    key: jax.random.PRNGKey
+    key: jt.PRNGKeyArray
     config: ModelConfig
 
-    def __init__(self, config: ModelConfig, *, key: jax.random.PRNGKey) -> None:
+    def __init__(self, config: ModelConfig, *, key: jt.PRNGKeyArray) -> None:
         # Generate keys - embedding, attention layers, output projection
         keys = list(jax.random.split(key, config.num_layers + 2))
 
@@ -72,4 +72,5 @@ class DecoderOnlyTransformer(nn.module.Module):
             x, _ = layer(Q=x, K=x, V=x, mask=mask)
             x = jax.nn.relu(x)
 
-        return self.output_layer(x)
+        x = self.output_layer(x)
+        return jax.nn.log_softmax(x, axis=-1)

@@ -60,9 +60,7 @@ class MultiHeadAttention(module.Module):
     single output value vector. A final linear layer is applied on top of this with non-linearity.
     """
 
-    def __init__(
-        self, qkv_dim: int, num_heads: int, *, key: jax.random.PRNGKey
-    ) -> None:
+    def __init__(self, qkv_dim: int, num_heads: int, *, key: jt.PRNGKeyArray) -> None:
         keys = jax.random.split(key, 4)
 
         # Input projections - different "heads" will be split out from the same tensor
@@ -98,12 +96,11 @@ class MultiHeadAttention(module.Module):
         Q: jt.Float[jt.Array, "... seq_len qkv_dim"],
         K: jt.Float[jt.Array, "... seq_len qkv_dim"],
         V: jt.Float[jt.Array, "... seq_len qkv_dim"],
-        mask: typing.Optional[jt.Float[jt.Array, "... seq_len qkv_dim"]] = None,
+        mask: typing.Optional[jt.Float[jt.Array, "... seq_len seq_len"]] = None,
     ):
         Q = self.q_projection(Q)
         K = self.k_projection(K)
         V = self.v_projection(V)
-        print("Q", Q.shape)
 
         # Reshape the input tensors to split out the heads
         Q = einops.rearrange(
@@ -121,7 +118,6 @@ class MultiHeadAttention(module.Module):
             "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim",
             num_heads=self.num_heads,
         )
-        print("Q reshaped", Q.shape)
 
         # Apply self atttention to each head, get the output values
         # values: [... num_heads, seq_len, qkv_dim/num_heads], attention_weights: [... num_heads, seq_len, qkv_dim/num_heads]

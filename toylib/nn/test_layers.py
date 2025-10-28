@@ -3,6 +3,7 @@
 import pytest
 import jax
 import jax.numpy as jnp
+import jaxtyping as jt
 import numpy as np
 from toylib.nn.layers import Linear, Embedding
 
@@ -38,7 +39,7 @@ class TestLinear:
     @pytest.mark.parametrize("use_bias", [True, False])
     def test_batched_forward_pass(
         self,
-        key: jax.random.PRNGKey,
+        key: jt.PRNGKeyArray,
         batch_shape: int,
         in_features: int,
         out_features: int,
