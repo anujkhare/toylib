@@ -16,8 +16,12 @@ def main():
     )
 
     # Dataloader
-    dataset = data.BatchedTokenizedHFDataset(
-        bos_token=1000, batch_size=128, seq_len=512, tokenizer_batch_size=8
+    dataset = data.BatchedTokenizedDatasetParquet(
+        dataset_path="/tmp/",
+        split="train",
+        batch_size=128,
+        seq_len=512,
+        tokenizer_batch_size=8,
     )
 
     # Model
@@ -26,7 +30,7 @@ def main():
     )
 
     # Logger
-    logger = experiment.TensorBoardLogger(config, output_path="./tensorboard_logs")
+    logger = experiment.TensorBoardLogger(config, output_path="/tmp/tensorboard_logs")
 
     # Optimizer
     optimizer = optax.adam(learning_rate=config.training_config.learning_rate)
