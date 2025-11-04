@@ -16,13 +16,32 @@ import dataclasses
 import datasets as hf_datasets
 import einops
 import jax
-import jax.numpy as jnp
 import jaxtyping as jt
 import math
 import numpy as np
 import optax
+import pathlib
+import pyarrow.parquet as pq
 import pytest
 import typing
+
+# ============================================================
+# Project Code
+# ============================================================
+
+# ============================================================
+# File: bundled_output.py
+# ============================================================
+
+#!/usr/bin/env python3
+"""
+Bundled Python Project: tinystories
+This file contains all project code consolidated into a single file.
+"""
+
+# ============================================================
+# External Imports
+# ============================================================
 
 # ============================================================
 # Project Code
@@ -949,6 +968,237 @@ class TestTrainStep:
 
 
 # ============================================================
+# File: py
+# ============================================================
+
+
+@dataclasses.dataclass
+class BatchedTokenizedDataset(abc.ABC):
+    dataset_path: str = "karpathy/fineweb-edu-100b-shuffle"
+    split: str = "train"
+
+    tokenizer_name: str = "gpt2"
+    seq_len: int = 2048
+
+    tokenizer_batch_size: int = 8
+    batch_size: int = 128
+
+    @abc.abstractmethod
+    def _get_dataset_iterator(self) -> typing.Iterator:
+        raise NotImplementedError
+
+    def __post_init__(self):
+        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+        self.bos_token = self.tokenizer.bos_token_id
+        self.token_buffer = []
+
+        self.dataset_iter = self._get_dataset_iterator()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> jnp.ndarray:
+        token_needed = self.batch_size * self.seq_len + 1  # 1 for the last target token
+        while len(self.token_buffer) < token_needed:
+            # Load tokenizer_batch_size sequences from the dataset
+            input_batch = next(self.dataset_iter)
+            texts = input_batch["text"]
+
+            # Tokenize all sequences
+            tokenized = self.tokenizer(
+                texts,
+                return_tensors=None,  # return a list of lists
+                padding=False,
+                truncation=False,
+                max_length=None,
+            )["input_ids"]
+
+            # Add tokens to the buffer
+            for tokens in tokenized:
+                self.token_buffer.append(self.bos_token)
+                self.token_buffer.extend(tokens)
+
+        # Extract needed tokens from the buffer
+        tokens = self.token_buffer[:token_needed]
+        self.token_buffer = self.token_buffer[token_needed:]
+
+        # Create jax arrays for inputs and targets
+        inputs = jnp.array(tokens[:-1], dtype=jnp.uint16).reshape(
+            self.batch_size, self.seq_len
+        )
+        targets = jnp.array(tokens[1:], dtype=jnp.uint16).reshape(
+            self.batch_size, self.seq_len
+        )
+        return {
+            "inputs": inputs,
+            "targets": targets,
+        }
+
+
+class BatchedTokenizedDatasetHF(BatchedTokenizedDataset):
+    def _get_dataset_iterator(self):
+        # Load the dataset and fetch in batches
+        return iter(
+            hf_datasets.load_dataset(
+                self.dataset_path, streaming=True, split=self.split
+            ).batch(self.tokenizer_batch_size)
+        )
+
+
+class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
+    """Path is constructed as dataset_path/split/*.parquet"""
+
+    def list_files(self):
+        base_path = pathlib.Path(self.dataset_path) / self.split
+        return list(base_path.glob("*.parquet"))
+
+    def _get_dataset_iterator(self):
+        for file_path in self.list_files():
+            pf = pq.ParquetFile(file_path)
+            for row_group in range(pf.num_row_groups):
+                rg = pf.read_row_group(row_group)
+                yield {"text": rg.column("text").to_pylist()}
+
+
+# ============================================================
+# File: py
+# ============================================================
+
+
+@dataclasses.dataclass
+class ModelConfig:
+    """Configuration for the DecoderOnlyTransformer model."""
+
+    num_layers: int = 2
+    num_heads: int = 5
+    qkv_dim: int = 256
+
+    vocab_size: int = 50257  # GPT-2 tokenizer vocab size
+    seq_len: int = 512
+
+    # logit softcap (Gemma 2: https://storage.googleapis.com/deepmind-media/gemma/gemma-2-report.pdf)
+    logit_softcap: float = 15.0
+
+
+@jax.tree_util.register_pytree_node_class
+class DecoderOnlyTransformer(Module):
+    """A simple decoder-only transformer model.
+
+    Takes in a sequence of tokens, embeds them using a learned embedding layer,
+    applies causal self-attention with ROPE embeddings, and outputs the logits
+    for the next token prediction.
+    """
+
+    key: jt.PRNGKeyArray
+    config: ModelConfig
+
+    def __init__(self, config: ModelConfig, *, key: jt.PRNGKeyArray) -> None:
+        # Generate keys - embedding, attention layers, output projection
+        keys = jax.random.split(key, config.num_layers + 2)
+
+        # Embedding layer
+        self.embedding_layer = Embedding(
+            vocab_size=config.vocab_size, embedding_dim=config.qkv_dim, key=keys[0]
+        )
+
+        # Self-attention layers
+        self.blocks = []
+        for ix in range(config.num_layers):
+            self.blocks.append(
+                DecoderBlock(
+                    qkv_dim=config.qkv_dim,
+                    num_heads=config.num_heads,
+                    key=keys[ix + 1],
+                )
+            )
+
+        # Output projection
+        self.output_layer = Linear(
+            in_features=config.qkv_dim, out_features=config.vocab_size, key=keys[-1]
+        )
+
+        self.config = config
+
+    def __call__(
+        self, x: jt.Float[jt.Array, "batch_size seq_len"]
+    ) -> jt.Float[jt.Array, "batch_size seq_len vocab_size"]:
+        """Forward pass for the decoder-only transformer model.
+
+        Args:
+            x: Input token ids of shape [batch_size, seq_len]
+
+        Returns:
+            Unnormalized logits over the vocabulary of shape [batch_size, seq_len, vocab_size]
+        """
+        # Input projection to project the embeddings to the model dimension
+        x = self.embedding_layer(x)
+        x = rms_norm(x)
+
+        # Apply each attention layer
+        for block in self.blocks:
+            x = block(x)
+        x = rms_norm(x)
+
+        # Output projection with softcap to prevent large logit values
+        x = self.output_layer(x)
+        x = self.config.logit_softcap * jnp.tanh(x / self.config.logit_softcap)
+        return x
+
+
+# ============================================================
+# File: py
+# ============================================================
+
+"""Basic types for the training loop and configurations."""
+
+
+@dataclasses.dataclass
+class TrainingConfig:
+    batch_size: int = 128
+    learning_rate: float = 1e-3
+    num_epochs: int = 1
+
+
+@dataclasses.dataclass
+class Config:
+    """Configuration for the experiment."""
+
+    model_config: ModelConfig = dataclasses.field(default_factory=ModelConfig)
+    training_config: TrainingConfig = dataclasses.field(default_factory=TrainingConfig)
+
+
+def _serlialize_dataclass_config(config: Config) -> dict:
+    result = dataclasses.asdict(config)
+    for k, v in result.items():
+        if dataclasses.is_dataclass(v):
+            result[k] = _serlialize_dataclass_config(v)
+    return result
+
+
+class Logger(abc.ABC):
+    """Interface for logging training metrics."""
+
+    def __init__(self, config: Config, *args, **kwargs) -> None:
+        self.config = config
+
+    @abc.abstractmethod
+    def log(self, step: int, metrics: dict) -> None:
+        """Log the given metrics at the specified step."""
+        pass
+
+    @abc.abstractmethod
+    def close(self) -> None:
+        """Close any resources held by the logger."""
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+
+# ============================================================
 # File: train.py
 # ============================================================
 
@@ -965,8 +1215,12 @@ def main():
     )
 
     # Dataloader
-    dataset = BatchedTokenizedHFDataset(
-        bos_token=1000, batch_size=128, seq_len=512, tokenizer_batch_size=8
+    dataset = BatchedTokenizedDatasetParquet(
+        dataset_path="/tmp/",
+        split="train",
+        batch_size=128,
+        seq_len=512,
+        tokenizer_batch_size=8,
     )
 
     # Model
@@ -975,7 +1229,7 @@ def main():
     )
 
     # Logger
-    logger = TensorBoardLogger(config, output_path="./tensorboard_logs")
+    logger = TensorBoardLogger(config, output_path="/tmp/tensorboard_logs")
 
     # Optimizer
     optimizer = optax.adam(learning_rate=config.training_config.learning_rate)
@@ -1017,3 +1271,83 @@ def main():
 
             # Increment step
             step += 1
+
+
+if __name__ == "__main__":
+    main()
+
+
+# ============================================================
+# File: toylib/nn/py
+# ============================================================
+
+
+def _is_array(x: Any) -> bool:
+    return isinstance(x, (jax.Array, np.ndarray, np.generic)) or hasattr(
+        x, "__jax_array__"
+    )
+
+
+def _is_random_key(x: str) -> bool:
+    return x == "key"
+
+
+def _is_supported_container(x: typing.Any) -> bool:
+    return isinstance(x, (list, tuple))
+
+
+@jax.tree_util.register_pytree_node_class
+class Module:
+    """
+    Defines a base class to use for the neural network modules in toylib.
+
+    Assumes that all jax arrays are leaf nodes that are trainable and
+    everything else is a static param. Defines the flatten and unflatten methods
+    to make the modules compatible with jax `jit` and `grad` functions.
+
+    Refer https://jax.readthedocs.io/en/latest/pytrees.html#extending-pytrees
+
+    Inspired by equinox and the Custom PyTres and Initialization section in jax docs.
+    """
+
+    def tree_flatten(self) -> tuple:
+        params = []
+        param_keys = []
+        aux_data = dict()
+
+        # Look through each attribute in the object
+        for k, v in self.__dict__.items():
+            if (
+                (_is_array(v) and not _is_random_key(k))
+                or isinstance(v, Module)
+                or (
+                    _is_supported_container(v)
+                    and all(isinstance(elem, Module) for elem in v)
+                )
+            ):
+                # trainable leaf param!
+                params.append(v)
+                param_keys.append(k)
+            else:
+                aux_data[k] = v
+
+        aux_data["param_keys"] = param_keys
+        return params, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, static, dynamic) -> "Module":
+        # Create a new empty object
+        obj = object.__new__(cls)
+
+        # overwrite all of the children using the values in the given pytree
+        for k, v in zip(static["param_keys"], dynamic):
+            obj.__setattr__(k, v)
+
+        for k, v in static.items():
+            obj.__setattr__(k, v)
+
+        return obj
+
+    def __repr__(self) -> str:
+        _, aux = self.tree_flatten()
+        return str(aux)
