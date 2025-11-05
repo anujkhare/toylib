@@ -19,7 +19,7 @@ class Linear(module.Module):
         self,
         in_features: int,
         out_features: int,
-        use_bias: bool = True,
+        use_bias: bool = False,
         *,
         key: jt.PRNGKeyArray,
     ) -> None:

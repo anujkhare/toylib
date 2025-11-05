@@ -43,7 +43,7 @@ class MLP(module.Module):
         self, x: jt.Float[jt.Array, "... qkv_dim"]
     ) -> jt.Float[jt.Array, "... qkv_dim"]:
         x = self.fc1(x)
-        # TODO: nanochat using relu squared. why? answer: https://arxiv.org/abs/2002.05202
+        # TODO: relu squared (https://arxiv.org/abs/2002.05202) or SwiGLU (https://arxiv.org/pdf/2204.02311)
         x = jax.nn.gelu(x)
         x = self.fc2(x)
         return x
