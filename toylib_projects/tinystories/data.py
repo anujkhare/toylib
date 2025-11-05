@@ -89,6 +89,7 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
         base_path = pathlib.Path(self.dataset_path) / self.split
         return list(base_path.glob("*.parquet"))
 
+    # TODO(anujkhare): does not respect tokenizer_batch_size yet
     def _get_dataset_iterator(self):
         for file_path in self.list_files():
             pf = pq.ParquetFile(file_path)

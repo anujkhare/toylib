@@ -1,8 +1,11 @@
 """Tests for data.py."""
 
+import pytest
+
 from toylib_projects.tinystories import data
 
 
+@pytest.mark.expensive
 class TestHFDataset:
     def test_smoke(self):
         """Test that we can fetch data from the internet! Non-hermetic: requires internet access."""
