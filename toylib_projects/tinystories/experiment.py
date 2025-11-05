@@ -107,9 +107,10 @@ class FileLogger(Logger):
         self.config = config
         self.file_ptr = open(output_path, "w")
         json.dump(_serlialize_dataclass_config(self.config), self.file_ptr, indent=4)
+        self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:
-        self.temp_file.write(f"Step {step}: {metrics}\n")
+        self.file_ptr.write(f"Step {step}: {metrics}\n")
 
     def close(self) -> None:
         self.file_ptr.close()
