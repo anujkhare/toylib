@@ -36,6 +36,8 @@ class MLP(module.Module):
         self.fc2 = layers.Linear(
             in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1]
         )
+        # Initialize weights to zero to stabilize training at the start
+        self.fc2.weights = jnp.zeros_like(self.fc2.weights)
 
     def __call__(
         self, x: jt.Float[jt.Array, "... qkv_dim"]
@@ -54,6 +56,8 @@ class CausalSelfAttention(module.Module):
         self.mha = attention.MultiHeadAttention(
             qkv_dim=qkv_dim, num_heads=num_heads, key=keys[0], use_qk_norm=True
         )
+        # Initialize weights to zero to stabilize training at the start
+        self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
 
     def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
         return jnp.tril(jnp.ones((seq_len, seq_len)))

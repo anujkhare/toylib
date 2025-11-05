@@ -23,21 +23,12 @@ class Linear(module.Module):
         *,
         key: jt.PRNGKeyArray,
     ) -> None:
-        # Split the random key for weights and bias
-        w_key, b_key = jax.random.split(key, 2)
+        w_key = key
 
-        # We initialize the weights with a uniform distribution with Xavier initialization
-        # lim = 1 / math.sqrt(in_features)
-        lim = math.sqrt(6 / (in_features + out_features))
-
-        self.weights = jax.random.uniform(
-            w_key, (in_features, out_features), minval=-lim, maxval=lim
-        )
-        self.bias = (
-            jax.random.uniform(b_key, (out_features,), minval=-lim, maxval=lim)
-            if use_bias
-            else None
-        )
+        # https://arxiv.org/pdf/2310.17813
+        std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(in_features)
+        self.weights = jax.random.normal(w_key, (in_features, out_features)) * std
+        self.bias = jax.numpy.zeros((out_features,)) if use_bias else None
 
         self.in_features = in_features
         self.out_features = out_features
