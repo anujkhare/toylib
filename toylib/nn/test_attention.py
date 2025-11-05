@@ -1,18 +1,15 @@
+"""Tests for model.py."""
 
-# in_ = 10
-# out_ = (8, 12)
-# x = np.zeros((4, in_))
-# w = np.zeros((in_, 4, 12))
-# jax.numpy.dot(x, w).shape
+import jax.numpy as jnp
 
-# nn.attention.scaled_dot_product_attention(q, k, v)
-# mha = nn.attention.MultiHeadAttention(num_heads=2, qkv_dim=8, key=jax.random.PRNGKey(10))
+from toylib.nn import attention
 
-# values, att_mask = mha(q, k, v, mask=None)
-# print(values.shape, att_mask.shape)
 
-# in_ = 10
-# out_ = (8, 12)
-# x = np.zeros((4, in_))
-# out = encoder(x, mask=None)
-# print(out.shape)
+class TestROPE:
+    def test_smoke(self):
+        qkv_dim, seq_len = 8, 16
+        rope = attention.RotaryPositionalEmbedding(qkv_dim=qkv_dim, seq_len=seq_len)
+        # [batch_size, num_heads, seq_len, qkv_dim]
+        x = jnp.ones((3, 4, seq_len, qkv_dim))
+        actual = rope(x)
+        assert actual.shape == (3, 4, seq_len, qkv_dim)

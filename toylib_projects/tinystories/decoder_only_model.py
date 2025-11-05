@@ -51,13 +51,18 @@ class MLP(module.Module):
 
 @jax.tree_util.register_pytree_node_class
 class CausalSelfAttention(module.Module):
-    def __init__(self, qkv_dim: int, num_heads: int, *, key: jt.PRNGKeyArray) -> None:
-        keys = jax.random.split(key, 2)
+    def __init__(
+        self, qkv_dim: int, num_heads: int, seq_len: int, *, key: jt.PRNGKeyArray
+    ) -> None:
         self.mha = attention.MultiHeadAttention(
-            qkv_dim=qkv_dim, num_heads=num_heads, key=keys[0], use_qk_norm=True
+            qkv_dim=qkv_dim, num_heads=num_heads, key=key, use_qk_norm=True
         )
         # Initialize weights to zero to stabilize training at the start
         self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
+
+        self.rope = attention.RotaryPositionalEmbedding(
+            qkv_dim=qkv_dim // num_heads, seq_len=seq_len
+        )
 
     def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
         return jnp.tril(jnp.ones((seq_len, seq_len)))
@@ -65,16 +70,20 @@ class CausalSelfAttention(module.Module):
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
     ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
-        x = self.mha(Q=x, K=x, V=x, mask=self._make_causal_mask(x.shape[-2]))
+        x = self.mha(
+            Q=x, K=x, V=x, mask=self._make_causal_mask(x.shape[-2]), rope=self.rope
+        )
         return x
 
 
 @jax.tree_util.register_pytree_node_class
 class DecoderBlock(module.Module):
-    def __init__(self, qkv_dim: int, num_heads: int, *, key: jt.PRNGKeyArray) -> None:
+    def __init__(
+        self, qkv_dim: int, num_heads: int, seq_len: int, *, key: jt.PRNGKeyArray
+    ) -> None:
         keys = jax.random.split(key, 2)
         self.causal_attn = CausalSelfAttention(
-            qkv_dim=qkv_dim, num_heads=num_heads, key=keys[0]
+            qkv_dim=qkv_dim, num_heads=num_heads, seq_len=seq_len, key=keys[0]
         )
         self.mlp = MLP(qkv_dim=qkv_dim, key=keys[1])
 
@@ -117,6 +126,7 @@ class DecoderOnlyTransformer(module.Module):
                 DecoderBlock(
                     qkv_dim=config.qkv_dim,
                     num_heads=config.num_heads,
+                    seq_len=config.seq_len,
                     key=keys[ix + 1],
                 )
             )
@@ -134,7 +144,9 @@ class DecoderOnlyTransformer(module.Module):
         """Forward pass for the decoder-only transformer model.
 
         Args:
-            x: Input token ids of shape [batch_size, seq_len]
+            x: Input token ids of shape [batch_size, seq_len]. Note that the sequence
+                length should match the configuration `seq_len` as this is used for
+                positional embeddings.
 
         Returns:
             Unnormalized logits over the vocabulary of shape [batch_size, seq_len, vocab_size]

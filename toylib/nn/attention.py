@@ -8,6 +8,44 @@ from toylib.nn import layers
 from toylib.nn import module
 
 
+@jax.tree_util.register_pytree_node_class
+class RotaryPositionalEmbedding(module.Module):
+    """Implements Rotary Positional Embeddings (RoPE) as described in https://arxiv.org/abs/2104.09864."""
+
+    def __init__(
+        self, *, seq_len: int = 1024, qkv_dim: int = 128, base: int = 100_000
+    ) -> None:
+        self.base = base
+        self.seq_len = seq_len
+        self.qkv_dim = qkv_dim
+
+        # Construct the frequencies
+        positions = jnp.arange(0, seq_len)
+        freqs = base ** (jnp.arange(0, qkv_dim, 2) / qkv_dim)
+        # [seq_len, qkv_dim // 2]
+        self.gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
+        self.cos = jnp.cos(self.gamma)
+        self.sin = jnp.sin(self.gamma)
+
+    def __call__(
+        self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
+    ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
+        d = x.shape[-1]
+        x1, x2 = x[..., : d // 2], x[..., d // 2 :]
+        # element-wise multiplication: rotate dims clockwise pair-wise
+        es_shape = "... t d, t d -> ... t d"
+        print("RoPE shapes:")
+        print(x1.shape, x2.shape)
+        print(self.cos.shape, self.sin.shape)
+        y1 = einops.einsum(x1, self.cos, es_shape) + einops.einsum(
+            x2, self.sin, es_shape
+        )
+        y2 = -einops.einsum(x1, self.sin, es_shape) + einops.einsum(
+            x2, self.cos, es_shape
+        )
+        return jnp.concatenate([y1, y2], axis=-1)
+
+
 def scaled_dot_product_attention(
     q: jt.Float[jt.Array, "... seq_len qkv_dim"],
     k: jt.Float[jt.Array, "... seq_len qkv_dim"],
@@ -107,6 +145,7 @@ class MultiHeadAttention(module.Module):
         V: jt.Float[jt.Array, "... seq_len qkv_dim"],
         mask: typing.Optional[jt.Float[jt.Array, "... seq_len seq_len"]] = None,
         *,
+        rope: typing.Optional[RotaryPositionalEmbedding] = None,
         return_attention_weights: bool = False,
     ) -> typing.Union[
         tuple[
@@ -140,6 +179,10 @@ class MultiHeadAttention(module.Module):
                 mask, "... seq_len1 seq_len2 -> ... 1 seq_len1 seq_len2"
             )
 
+        if rope is not None:
+            Q = rope(Q)
+            K = rope(K)
+
         if self.use_qk_norm:
             Q = layers.rms_norm(Q)
             K = layers.rms_norm(K)
@@ -162,15 +205,3 @@ class MultiHeadAttention(module.Module):
         if return_attention_weights:
             return values, attention_weights
         return values
-
-
-class RotaryPositionalEmbedding:
-    """Implements Rotary Positional Embeddings (RoPE) as described in https://arxiv.org/abs/2104.09864."""
-
-    def __init__(self, base: int = 10000):
-        self.base = base
-
-    def __call__(
-        self, inputs: jt.Float[jt.Array, "... seq_len qkv_dim"]
-    ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
-        return inputs

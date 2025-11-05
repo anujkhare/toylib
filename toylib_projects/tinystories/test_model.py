@@ -14,7 +14,7 @@ class TestDecoderOnlyTransformer:
             (
                 jnp.array([[1, 2, 3], [4, 5, 6]]),
                 decoder_only_model.ModelConfig(
-                    num_layers=2, num_heads=2, qkv_dim=16, vocab_size=10, seq_len=5
+                    num_layers=2, num_heads=2, qkv_dim=16, vocab_size=10, seq_len=3
                 ),
             ),
         ],
@@ -39,8 +39,8 @@ class TestTrainStep:
         "input_tokens,target_tokens,model_config",
         [
             (
-                jnp.array([[1, 2, 3], [4, 5, 6]]),
-                jnp.array([[2, 3, 4], [5, 6, 7]]),
+                jnp.array([[1, 2, 3, 0, 0], [4, 5, 6, 0, 0]]),
+                jnp.array([[2, 3, 4, 0, 0], [5, 6, 7, 0, 0]]),
                 decoder_only_model.ModelConfig(
                     num_layers=2, num_heads=2, qkv_dim=16, vocab_size=10, seq_len=5
                 ),
