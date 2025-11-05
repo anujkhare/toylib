@@ -61,7 +61,14 @@ class MultiHeadAttention(module.Module):
     single output value vector. A final linear layer is applied on top of this with non-linearity.
     """
 
-    def __init__(self, qkv_dim: int, num_heads: int, *, key: jt.PRNGKeyArray) -> None:
+    def __init__(
+        self,
+        qkv_dim: int,
+        num_heads: int,
+        *,
+        use_qk_norm: bool = True,
+        key: jt.PRNGKeyArray,
+    ) -> None:
         keys = jax.random.split(key, 4)
 
         # Input projections - different "heads" will be split out from the same tensor
@@ -91,6 +98,7 @@ class MultiHeadAttention(module.Module):
 
         self.qkv_dim = qkv_dim
         self.num_heads = num_heads
+        self.use_qk_norm = use_qk_norm
 
     def __call__(
         self,
@@ -98,7 +106,15 @@ class MultiHeadAttention(module.Module):
         K: jt.Float[jt.Array, "... seq_len qkv_dim"],
         V: jt.Float[jt.Array, "... seq_len qkv_dim"],
         mask: typing.Optional[jt.Float[jt.Array, "... seq_len seq_len"]] = None,
-    ):
+        *,
+        return_attention_weights: bool = False,
+    ) -> typing.Union[
+        tuple[
+            jt.Float[jt.Array, "... seq_len qkv_dim"],
+            jt.Float[jt.Array, "... seq_len seq_len"],
+        ],
+        jt.Float[jt.Array, "... seq_len qkv_dim"],
+    ]:
         Q = self.q_projection(Q)
         K = self.k_projection(K)
         V = self.v_projection(V)
@@ -119,11 +135,14 @@ class MultiHeadAttention(module.Module):
             "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim",
             num_heads=self.num_heads,
         )
-        mask = (
-            einops.rearrange(mask, "... seq_len seq_len -> ... 1 seq_len seq_len")
-            if mask is not None
-            else None
-        )
+        if mask is not None:
+            mask = einops.rearrange(
+                mask, "... seq_len1 seq_len2 -> ... 1 seq_len1 seq_len2"
+            )
+
+        if self.use_qk_norm:
+            Q = layers.rms_norm(Q)
+            K = layers.rms_norm(K)
 
         # Apply self atttention to each head, get the output values
         # values: [... num_heads, seq_len, qkv_dim/num_heads], attention_weights: [... num_heads, seq_len, seq_len]
@@ -139,8 +158,10 @@ class MultiHeadAttention(module.Module):
         # Apply linear: [..., seq_len, qkv_dim]
         values = self.linear(values)
 
-        # return the attention weights and the output values
-        return values, attention_weights
+        # return the output values and attention weights if specified
+        if return_attention_weights:
+            return values, attention_weights
+        return values
 
 
 class RotaryPositionalEmbedding:

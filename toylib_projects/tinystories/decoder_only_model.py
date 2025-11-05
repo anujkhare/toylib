@@ -52,9 +52,8 @@ class CausalSelfAttention(module.Module):
     def __init__(self, qkv_dim: int, num_heads: int, *, key: jt.PRNGKeyArray) -> None:
         keys = jax.random.split(key, 2)
         self.mha = attention.MultiHeadAttention(
-            qkv_dim=qkv_dim, num_heads=num_heads, key=keys[0]
+            qkv_dim=qkv_dim, num_heads=num_heads, key=keys[0], use_qk_norm=True
         )
-        self.pos_emb = attention.RotaryPositionalEmbedding()
 
     def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
         return jnp.tril(jnp.ones((seq_len, seq_len)))
@@ -62,7 +61,7 @@ class CausalSelfAttention(module.Module):
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
     ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
-        # TODO
+        x = self.mha(Q=x, K=x, V=x, mask=self._make_causal_mask(x.shape[-2]))
         return x
 
 
@@ -79,7 +78,7 @@ class DecoderBlock(module.Module):
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
     ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
         # "Serial" implementation: y = x + MLP(LN(x + CausalSelfAttention(LN(x))))
-        # A "parallel" implementation is also possible:
+        # A "parallel" implementation is also possible (https://arxiv.org/pdf/2204.02311):
         #  y = x + MLP(LN(x)) + CausalSelfAttention(LN(x))
         x = x + self.causal_attn(layers.rms_norm(x))
         x = x + self.mlp(layers.rms_norm(x))
