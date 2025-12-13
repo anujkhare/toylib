@@ -11,11 +11,11 @@ class TestSerializeDataclassConfig:
     def test_simple_dataclass(self):
         """Test serialization of simple dataclass."""
         config = experiment.TrainingConfig(
-            batch_size=64, learning_rate=0.001, num_epochs=5
+            batch_size=64, learning_rate=0.001, max_steps=5000
         )
         result = experiment._serlialize_dataclass_config(config)
 
-        assert result == {"batch_size": 64, "learning_rate": 0.001, "num_epochs": 5}
+        assert result == {"batch_size": 64, "learning_rate": 0.001, "max_steps": 5000}
 
     def test_nested_dataclass(self):
         """Test serialization of nested dataclass."""

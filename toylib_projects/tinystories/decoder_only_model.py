@@ -12,7 +12,7 @@ class ModelConfig:
     """Configuration for the DecoderOnlyTransformer model."""
 
     num_layers: int = 2
-    num_heads: int = 5
+    num_heads: int = 8
     qkv_dim: int = 256
 
     vocab_size: int = 50257  # GPT-2 tokenizer vocab size

@@ -3,6 +3,8 @@
 import dataclasses
 import jax
 import optax
+import orbax.checkpoint as ocp
+import typing
 
 from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import data
@@ -10,10 +12,17 @@ from toylib_projects.tinystories import logger
 
 
 @dataclasses.dataclass
+class CheckpointConfig:
+    save_interval_steps: int = 5_000
+    max_to_keep: typing.Optional[int] = 10
+    checkpoint_dir: str = "/tmp/checkpoints"
+
+
+@dataclasses.dataclass
 class TrainingConfig:
     batch_size: int = 128
     learning_rate: float = 1e-3
-    num_epochs: int = 1
+    max_steps: int = 100_000
 
 
 @dataclasses.dataclass
@@ -38,23 +47,47 @@ class Experiment:
     train_task: Task
     eval_tasks: list[Task] = dataclasses.field(default_factory=list)
 
+    # Model config
     model_config: decoder_only_model.ModelConfig = dataclasses.field(
         default_factory=decoder_only_model.ModelConfig
     )
+    # Training Hyperparameters
     training_config: TrainingConfig = dataclasses.field(default_factory=TrainingConfig)
+    # Checkpointing config
+    checkpoint_config: CheckpointConfig = dataclasses.field(
+        default_factory=CheckpointConfig
+    )
+
+    log_dir: str = "/tmp/tensorboard_logs/"
 
     def __post_init__(self):
         # Logger
         self.logger_obj = logger.TensorBoardLogger(
-            self,
             config_dict=_serlialize_dataclass_config(self),
-            output_path="/tmp/tensorboard_logs/",
+            output_path=self.log_dir,
         )
 
         # Optimizer
         self.optimizer = optax.adam(learning_rate=self.training_config.learning_rate)
         self.opt_state = None
         self.model = None
+
+        # Value and gradient function
+        self.loss_and_grad_fn = jax.jit(
+            jax.value_and_grad(decoder_only_model.train_step)
+        )
+
+        # Checkpoint manager
+        self.ckpt_manager = ocp.CheckpointManager(
+            self.checkpoint_config.checkpoint_dir,
+            checkpointers={
+                "model": ocp.StandardCheckpointer(),
+                "opt_state": ocp.StandardCheckpointer(),
+            },
+            options=ocp.CheckpointManagerOptions(
+                max_to_keep=self.checkpoint_config.max_to_keep
+            ),
+        )
 
     def init_state(self):
         # Model
@@ -68,10 +101,34 @@ class Experiment:
         # Global step
         self.step = 0
 
-        # Value and gradient function
-        self.loss_and_grad_fn = jax.jit(
-            jax.value_and_grad(decoder_only_model.train_step)
+    def _assert_initialized(self) -> bool:
+        initialized = self.model is not None and self.opt_state is not None
+        assert initialized, "Experiment state not initialized. Call init_state() first."
+
+    def save_checkpoint(self):
+        self._assert_initialized()
+        self.ckpt_manager.save(
+            self.step,
+            args=ocp.args.Composite(
+                model=ocp.args.StandardSave(self.model),
+                opt_state=ocp.args.StandardSave(self.opt_state),
+            ),
         )
+        self.ckpt_manager.wait_until_finished()
+
+    def restore_checkpoint(self, step: int):
+        self._assert_initialized()
+        restored = self.ckpt_manager.restore(
+            step,
+            args=ocp.args.Composite(
+                model=ocp.args.StandardRestore(),
+                opt_state=ocp.args.StandardRestore(),
+            ),
+        )
+        # Update the local state
+        self.model = restored["model"]
+        self.opt_state = restored["opt_state"]
+        self.step = step
 
     def log_metrics(self, step: int, loss_val: float, updates):
         leaves, _ = jax.tree_util.tree_flatten(updates)
@@ -84,14 +141,8 @@ class Experiment:
         }
         self.logger_obj.log(step=step, metrics=metrics)
 
-    def _is_initialized(self) -> bool:
-        return self.model is not None and self.opt_state is not None
-
     def inner_loop(self, batch: dict):
-        assert self._is_initialized(), (
-            "Experiment state not initialized. Call init_state() first."
-        )
-
+        self._assert_initialized()
         inputs, targets = batch["inputs"], batch["targets"]
         mask = jax.numpy.ones_like(inputs)
 
@@ -110,10 +161,18 @@ class Experiment:
 
     def outer_loop(self):
         # Training loop
-        for _ in range(self.training_config.num_epochs):
+        while self.step < self.training_config.max_steps:
             for batch in self.train_task.dataset:
                 # Perform inner loop step
                 self.inner_loop(batch)
 
                 # Increment step
                 self.step += 1
+
+                if self.step % self.checkpoint_config.save_interval_steps == 0:
+                    self.save_checkpoint()
+
+    # TODO: how to ensure this is always called?
+    def cleanup(self):
+        self.logger_obj.close()
+        self.ckpt_manager.close()
