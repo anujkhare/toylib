@@ -1,30 +1,8 @@
 """Tests for bundler."""
 
 import ast
-import collections
 
-from . import bundler_v2 as bundler
-
-
-class TestTopologicalSort:
-    def test_topological_sort(self):
-        # A: [B, C] -> A imports B & C
-        # This should resolve to:
-        #  baz, bar, foo, boo
-        dependency_graph = {
-            "foo": ["bar", "baz"],
-            "bar": ["baz"],
-            "boo": ["foo"],
-        }
-
-        # Standard algorithms assume A->B means that A comes before B
-        # Reverse the edges
-        graph = collections.defaultdict(list)
-        for module, dependencies in dependency_graph.items():
-            for dep in dependencies:
-                graph[dep].append(module)
-
-        assert bundler.topological_sort(graph) == ["baz", "bar", "foo", "boo"]
+from . import bundler as bundler
 
 
 class TestImportRemover:

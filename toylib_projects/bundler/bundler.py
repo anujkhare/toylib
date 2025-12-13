@@ -1,7 +1,7 @@
 """Bundle a pure-python project into a single file.
 
 Example usage:
-python bundler_v2.py \
+python bundler.py \
     --packages toylib toylib_projects \
     --input_path "../tinystories/train.py" \
     --output_path foo.py
@@ -9,55 +9,8 @@ python bundler_v2.py \
 
 from typing import Iterable, Optional, Set, Union
 import ast
-import collections
 import dataclasses
 import importlib.util
-
-
-def reverse_graph(graph):
-    # Standard algorithms assume A->B means that A comes before B
-    # Reverse the edges
-    new_graph = collections.defaultdict(list)
-    for module, dependencies in graph.items():
-        for dep in dependencies:
-            new_graph[dep].append(module)
-    return new_graph
-
-
-def topological_sort(graph: dict[str, list[str]]) -> list[str]:
-    # Kahn's algorithm
-    result = []
-    q = collections.deque()
-    in_degrees = collections.defaultdict(int)
-
-    # Compute in-degree of each node
-    for source in graph:
-        for dest in graph[source]:
-            in_degrees[dest] += 1
-
-    # Find the starting node(s) with in-degree=0
-    for node in graph:
-        if in_degrees[node] == 0:
-            q.append(node)
-
-    # Peform a BFS from starting nodes
-    while q:
-        node = q.popleft()
-        result.append(node)
-
-        # reduce the in-degree of each neighbor by 1
-        for neighbor in graph[node]:
-            in_degrees[neighbor] -= 1
-
-            # if in-degree becomes 0, add to queue
-            if in_degrees[neighbor] == 0:
-                q.append(neighbor)
-
-    # return final sorted order
-    if len(result) != len(graph):
-        raise ValueError("Graph has at least one cycle")
-
-    return result
 
 
 @dataclasses.dataclass
