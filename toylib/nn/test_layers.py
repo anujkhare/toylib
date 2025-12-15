@@ -25,7 +25,7 @@ class TestLinear:
     )
     def test_initialization_shapes(self, key, in_features, out_features):
         """Test various layer sizes."""
-        layer = Linear(in_features, out_features, key=key)
+        layer = Linear(in_features, out_features, key=key, use_bias=True)
         assert layer.weights.shape == (in_features, out_features)
         assert layer.bias.shape == (out_features,)
 
