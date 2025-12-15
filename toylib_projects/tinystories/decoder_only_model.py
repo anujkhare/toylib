@@ -22,10 +22,15 @@ class ModelConfig:
     logit_softcap: float = 15.0
 
 
-@jax.tree_util.register_pytree_node_class
 class MLP(module.Module):
-    def __init__(self, qkv_dim: int, *, key: jt.PRNGKeyArray) -> None:
-        keys = jax.random.split(key, 2)
+    """A simple feedforward MLP with one hidden layer."""
+
+    qkv_dim: int
+    key: jt.PRNGKeyArray
+
+    def init(self) -> None:
+        qkv_dim = self.qkv_dim
+        keys = jax.random.split(self.key, 2)
         # standard transformer architecture uses a feedforward layer
         # with an inner dimension of 4 times the model dimension.
         # See "Attention is All You Need" paper for more details.
@@ -49,19 +54,26 @@ class MLP(module.Module):
         return x
 
 
-@jax.tree_util.register_pytree_node_class
 class CausalSelfAttention(module.Module):
-    def __init__(
-        self, qkv_dim: int, num_heads: int, seq_len: int, *, key: jt.PRNGKeyArray
-    ) -> None:
+    """Causal Self-Attention layer with Rotary Positional Embeddings (RoPE)."""
+
+    qkv_dim: int
+    num_heads: int
+    seq_len: int
+    key: jt.PRNGKeyArray
+
+    def init(self) -> None:
         self.mha = attention.MultiHeadAttention(
-            qkv_dim=qkv_dim, num_heads=num_heads, key=key, use_qk_norm=True
+            qkv_dim=self.qkv_dim,
+            num_heads=self.num_heads,
+            key=self.key,
+            use_qk_norm=True,
         )
         # Initialize weights to zero to stabilize training at the start
         self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
 
         self.rope = attention.RotaryPositionalEmbedding(
-            qkv_dim=qkv_dim // num_heads, seq_len=seq_len
+            qkv_dim=self.qkv_dim // self.num_heads, seq_len=self.seq_len
         )
 
     def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
@@ -76,16 +88,21 @@ class CausalSelfAttention(module.Module):
         return x
 
 
-@jax.tree_util.register_pytree_node_class
 class DecoderBlock(module.Module):
-    def __init__(
-        self, qkv_dim: int, num_heads: int, seq_len: int, *, key: jt.PRNGKeyArray
-    ) -> None:
-        keys = jax.random.split(key, 2)
+    qkv_dim: int
+    num_heads: int
+    seq_len: int
+    key: jt.PRNGKeyArray
+
+    def init(self) -> None:
+        keys = jax.random.split(self.key, 2)
         self.causal_attn = CausalSelfAttention(
-            qkv_dim=qkv_dim, num_heads=num_heads, seq_len=seq_len, key=keys[0]
+            qkv_dim=self.qkv_dim,
+            num_heads=self.num_heads,
+            seq_len=self.seq_len,
+            key=keys[0],
         )
-        self.mlp = MLP(qkv_dim=qkv_dim, key=keys[1])
+        self.mlp = MLP(qkv_dim=self.qkv_dim, key=keys[1])
 
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
@@ -98,7 +115,6 @@ class DecoderBlock(module.Module):
         return x
 
 
-@jax.tree_util.register_pytree_node_class
 class DecoderOnlyTransformer(module.Module):
     """A simple decoder-only transformer model.
 
@@ -110,9 +126,11 @@ class DecoderOnlyTransformer(module.Module):
     key: jt.PRNGKeyArray
     config: ModelConfig
 
-    def __init__(self, config: ModelConfig, *, key: jt.PRNGKeyArray) -> None:
+    def init(self) -> None:
+        config = self.config
+
         # Generate keys - embedding, attention layers, output projection
-        keys = jax.random.split(key, config.num_layers + 2)
+        keys = jax.random.split(self.key, config.num_layers + 2)
 
         # Embedding layer
         self.embedding_layer = layers.Embedding(
@@ -135,8 +153,6 @@ class DecoderOnlyTransformer(module.Module):
         self.output_layer = layers.Linear(
             in_features=config.qkv_dim, out_features=config.vocab_size, key=keys[-1]
         )
-
-        self.config = config
 
     def __call__(
         self, x: jt.Float[jt.Array, "batch_size seq_len"]

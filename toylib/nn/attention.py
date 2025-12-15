@@ -8,20 +8,17 @@ from toylib.nn import layers
 from toylib.nn import module
 
 
-@jax.tree_util.register_pytree_node_class
 class RotaryPositionalEmbedding(module.Module):
     """Implements Rotary Positional Embeddings (RoPE) as described in https://arxiv.org/abs/2104.09864."""
 
-    def __init__(
-        self, *, seq_len: int = 1024, qkv_dim: int = 128, base: int = 100_000
-    ) -> None:
-        self.base = base
-        self.seq_len = seq_len
-        self.qkv_dim = qkv_dim
+    seq_len: int = 1024
+    qkv_dim: int = 128
+    base: int = 100_000
 
+    def init(self) -> None:
         # Construct the frequencies
-        positions = jnp.arange(0, seq_len)
-        freqs = base ** (jnp.arange(0, qkv_dim, 2) / qkv_dim)
+        positions = jnp.arange(0, self.seq_len)
+        freqs = self.base ** (jnp.arange(0, self.qkv_dim, 2) / self.qkv_dim)
         # [seq_len, qkv_dim // 2]
         self.gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
         self.cos = jnp.cos(self.gamma)
@@ -34,9 +31,6 @@ class RotaryPositionalEmbedding(module.Module):
         x1, x2 = x[..., : d // 2], x[..., d // 2 :]
         # element-wise multiplication: rotate dims clockwise pair-wise
         es_shape = "... t d, t d -> ... t d"
-        print("RoPE shapes:")
-        print(x1.shape, x2.shape)
-        print(self.cos.shape, self.sin.shape)
         y1 = einops.einsum(x1, self.cos, es_shape) + einops.einsum(
             x2, self.sin, es_shape
         )
@@ -88,7 +82,6 @@ def scaled_dot_product_attention(
     return values, attention_weights
 
 
-@jax.tree_util.register_pytree_node_class
 class MultiHeadAttention(module.Module):
     """
     The MultiHeadAttention defines `num_heads` attention heads. For the given input `Q`, `K`, `V`
@@ -99,15 +92,14 @@ class MultiHeadAttention(module.Module):
     single output value vector. A final linear layer is applied on top of this with non-linearity.
     """
 
-    def __init__(
-        self,
-        qkv_dim: int,
-        num_heads: int,
-        *,
-        use_qk_norm: bool = True,
-        key: jt.PRNGKeyArray,
-    ) -> None:
-        keys = jax.random.split(key, 4)
+    qkv_dim: int
+    num_heads: int
+    use_qk_norm: bool = True
+    key: jt.PRNGKeyArray
+
+    def init(self) -> None:
+        qkv_dim = self.qkv_dim
+        keys = jax.random.split(self.key, 4)
 
         # Input projections - different "heads" will be split out from the same tensor
         self.q_projection = layers.Linear(
@@ -133,10 +125,6 @@ class MultiHeadAttention(module.Module):
         self.linear = layers.Linear(
             in_features=qkv_dim, out_features=qkv_dim, key=keys[3]
         )
-
-        self.qkv_dim = qkv_dim
-        self.num_heads = num_heads
-        self.use_qk_norm = use_qk_norm
 
     def __call__(
         self,

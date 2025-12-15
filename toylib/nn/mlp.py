@@ -6,7 +6,6 @@ from toylib.nn import layers
 from toylib.nn import module
 
 
-@jax.tree_util.register_pytree_node_class
 class MLP(module.Module):
     output_layer: layers.Linear
     hidden_layers: typing.List[module.Module]
@@ -14,28 +13,22 @@ class MLP(module.Module):
     in_features: int
     hidden_dims: list[int]
     out_features: int
+    key: jaxtyping.PRNGKeyArray
 
-    def __init__(
-        self,
-        in_features: int,
-        hidden_dims: list[int],
-        out_features: int,
-        *,
-        key: jaxtyping.PRNGKeyArray,
-    ) -> None:
+    def init(self) -> None:
         # Split the random key for weights and bias
-        keys = jax.random.split(key, len(hidden_dims) + 1)
+        keys = jax.random.split(self.key, len(self.hidden_dims) + 1)
 
         # Create the layers
         hidden_layers = []
-        input_dim = in_features
-        for i, hidden_dim in enumerate(hidden_dims):
+        input_dim = self.in_features
+        for i, hidden_dim in enumerate(self.hidden_dims):
             layer = hidden_layers.Linear(input_dim, hidden_dim, key=keys[i])
             hidden_layers.append(layer)
             input_dim = hidden_dim
 
         # Create the output layer
-        output_layer = layers.Linear(input_dim, out_features, key=keys[-1])
+        output_layer = layers.Linear(input_dim, self.out_features, key=keys[-1])
 
         self.hidden_layers = hidden_layers
         self.output_layer = output_layer

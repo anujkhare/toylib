@@ -8,9 +8,11 @@
 .pymon
 .python-version
 build/
+checkpoints/
 dist/
 examples/CIFAR
 examples/MNIST
 examples/data
 examples/multipart_serialised.eqx
 site/
+tensorboard_logs/

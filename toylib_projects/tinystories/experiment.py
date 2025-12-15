@@ -31,6 +31,12 @@ class Task:
     dataset: data.BatchedTokenizedDataset
 
 
+@dataclasses.dataclass(kw_only=True)
+class LoggerConfig:
+    logger_cls: logger.Logger = logger.TensorBoardLogger
+    log_dir: str = "/tmp/tensorboard_logs/"
+
+
 def _serlialize_dataclass_config(config: dataclasses.dataclass) -> dict:
     result = dataclasses.asdict(config)
     for k, v in result.items():
@@ -57,14 +63,14 @@ class Experiment:
     checkpoint_config: CheckpointConfig = dataclasses.field(
         default_factory=CheckpointConfig
     )
-
-    log_dir: str = "/tmp/tensorboard_logs/"
+    # Logger config
+    logger_config: LoggerConfig = dataclasses.field(default_factory=LoggerConfig)
 
     def __post_init__(self):
         # Logger
-        self.logger_obj = logger.TensorBoardLogger(
+        self.logger_obj = self.logger_config.logger_cls(
             config_dict=_serlialize_dataclass_config(self),
-            output_path=self.log_dir,
+            output_path=self.logger_config.log_dir,
         )
 
         # Optimizer

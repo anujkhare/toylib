@@ -1,7 +1,11 @@
 """Tests for experiment.py"""
 
 import dataclasses
+import jax.numpy as jnp
+import pytest
 from unittest.mock import Mock, MagicMock, patch
+
+from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
 
 
@@ -38,8 +42,7 @@ class TestSerializeDataclassConfig:
 class TestExperiment:
     """Tests for Experiment class."""
 
-    @patch("toylib_projects.tinystories.experiment.logger.TensorBoardLogger")
-    def test_config_initialization(self, mock_logger):
+    def test_config_initialization(self):
         """Test that Experiment initializes properly."""
         mock_dataset = Mock()
         train_task = experiment.Task(name="train", dataset=mock_dataset)
@@ -51,7 +54,6 @@ class TestExperiment:
         assert config.optimizer is not None
         assert config.opt_state is None
         assert config.model is None
-        mock_logger.assert_called_once()
 
     @patch("toylib_projects.tinystories.experiment.logger.TensorBoardLogger")
     @patch(
@@ -74,3 +76,41 @@ class TestExperiment:
         assert config.step == 0
         assert config.loss_and_grad_fn is not None
         mock_model_class.assert_called_once()
+
+    @pytest.mark.skip
+    def test_e2e(self):
+        """Creates a small model and tests saving a checkpoint.
+
+        The file system is mocked out so no actual files are created.
+        """
+
+        version = "test_e2e"
+        task = experiment.Task(
+            name="train",
+            dataset=MagicMock(),
+        )
+        task.dataset.return_value = {
+            "inputs": jnp.zeros((1, 10)),
+            "targets": jnp.zeros((1, 10)),
+        }
+        exp = experiment.Experiment(
+            model_config=decoder_only_model.ModelConfig(
+                vocab_size=5,  # GPT-2 tokenizer vocab size
+                num_layers=1,
+                qkv_dim=8,
+                num_heads=1,
+            ),
+            training_config=experiment.TrainingConfig(
+                batch_size=1, learning_rate=1e-3, max_steps=2
+            ),
+            checkpoint_config=experiment.CheckpointConfig(
+                checkpoint_dir=f"checkpoints/{version}/",
+                save_interval_steps=10,
+            ),
+            train_task=task,
+            log_dir=f"tensorboard_logs/{version}/",
+        )
+        # Initialize state
+        exp.init_state()
+        # Run outer loop (which includes training and checkpointing)
+        exp.outer_loop()

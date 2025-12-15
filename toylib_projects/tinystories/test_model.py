@@ -57,7 +57,7 @@ class TestTrainStep:
         model = decoder_only_model.DecoderOnlyTransformer(
             config=model_config, key=jax.random.PRNGKey(42)
         )
-        loss = decoder_only_model.train_step(
+        loss, grad = jax.jit(jax.value_and_grad(decoder_only_model.train_step))(
             model, input_tokens, target_tokens, jnp.ones_like(target_tokens)
         )
 

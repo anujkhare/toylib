@@ -25,7 +25,9 @@ class TestLinear:
     )
     def test_initialization_shapes(self, key, in_features, out_features):
         """Test various layer sizes."""
-        layer = Linear(in_features, out_features, key=key, use_bias=True)
+        layer = Linear(
+            in_features=in_features, out_features=out_features, key=key, use_bias=True
+        )
         assert layer.weights.shape == (in_features, out_features)
         assert layer.bias.shape == (out_features,)
 
@@ -48,7 +50,12 @@ class TestLinear:
         use_bias: bool,
     ):
         """Test forward pass with various batch dimensions."""
-        layer = Linear(in_features, out_features, key=key, use_bias=use_bias)
+        layer = Linear(
+            in_features=in_features,
+            out_features=out_features,
+            key=key,
+            use_bias=use_bias,
+        )
         x = jax.random.normal(key, batch_shape + (in_features,))
 
         output = layer(x)
@@ -73,7 +80,7 @@ class TestEmbedding:
     )
     def test_initialization_shapes(self, key, vocab_size, embedding_dim):
         """Test various embedding sizes."""
-        layer = Embedding(vocab_size, embedding_dim, key=key)
+        layer = Embedding(vocab_size=vocab_size, embedding_dim=embedding_dim, key=key)
         assert layer.weights.shape == (vocab_size, embedding_dim)
 
     @pytest.mark.parametrize(
@@ -86,7 +93,7 @@ class TestEmbedding:
     )
     def test_forward_pass_shapes(self, key, sequence_shape, vocab_size, embedding_dim):
         """Test embedding lookup with various input shapes."""
-        layer = Embedding(vocab_size, embedding_dim, key=key)
+        layer = Embedding(vocab_size=vocab_size, embedding_dim=embedding_dim, key=key)
 
         # Generate random valid token indices
         tokens = jax.random.randint(key, sequence_shape, minval=0, maxval=vocab_size)

@@ -7,33 +7,28 @@ import typing
 from toylib.nn import module
 
 
-@jax.tree_util.register_pytree_node_class
 class Linear(module.Module):
     """Defines a simple feedforward layer: which is a linear transformation."""
 
-    # Trainable parameters
-    weights: jt.Float[jt.Array, "in_features out_features"]
-    bias: typing.Optional[jt.Float[jt.Array, " out_features"]]
+    # Hyperparameters
+    in_features: int
+    out_features: int
+    use_bias: bool = False
+    key: jt.PRNGKeyArray
 
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        use_bias: bool = False,
-        *,
-        key: jt.PRNGKeyArray,
-    ) -> None:
-        w_key = key
+    # Trainable parameters
+    weights: jt.Float[jt.Array, "in_features out_features"] | None = None
+    bias: typing.Optional[jt.Float[jt.Array, " out_features"]] | None = None
+
+    def init(self) -> None:
+        w_key = self.key
+        in_features = self.in_features
+        out_features = self.out_features
 
         # https://arxiv.org/pdf/2310.17813
         std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(in_features)
         self.weights = jax.random.normal(w_key, (in_features, out_features)) * std
-        self.bias = jax.numpy.zeros((out_features,)) if use_bias else None
-
-        self.in_features = in_features
-        self.out_features = out_features
-        self.use_bias = use_bias
-        self.key = key
+        self.bias = jax.numpy.zeros((out_features,)) if self.use_bias else None
 
     def __call__(
         self, x: jt.Float[jt.Array, "... in_features"]
@@ -44,26 +39,23 @@ class Linear(module.Module):
         return x
 
 
-@jax.tree_util.register_pytree_node_class
 class Embedding(module.Module):
     """Defines an embedding layer that stores an embedding matrix for discrete tokens."""
 
-    # Trainable parameters
-    weights: jt.Float[jt.Array, "vocab_size embedding_dim"]
+    vocab_size: int
+    embedding_dim: int
+    key: jt.PRNGKeyArray
 
-    def __init__(
+    # Trainable parameters
+    weights: jt.Float[jt.Array, "vocab_size embedding_dim"] | None = None
+
+    def init(
         self,
-        vocab_size: int,
-        embedding_dim: int,
-        *,
-        key: jt.PRNGKeyArray,
     ) -> None:
         # Initialize the embedding weights with a std normal distribution
-        self.weights = jax.random.normal(key, (vocab_size, embedding_dim))
-
-        self.vocab_size = vocab_size
-        self.embedding_dim = embedding_dim
-        self.key = key
+        self.weights = jax.random.normal(
+            self.key, (self.vocab_size, self.embedding_dim)
+        )
 
     def __call__(
         self, tokens: jt.Int[jt.Array, "... seq_len"]
