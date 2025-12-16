@@ -84,3 +84,16 @@ class FileLogger(Logger):
 
     def close(self) -> None:
         self.file_ptr.close()
+
+
+class StdoutLogger(Logger):
+    """Logger implementation that logs metrics to standard output."""
+
+    def __init__(self, config_dict: dict, *args, **kwargs) -> None:
+        self.config_dict = config_dict
+
+    def log(self, step: int, metrics: dict) -> None:
+        print(f"Step {step}: {metrics}")
+
+    def close(self) -> None:
+        pass

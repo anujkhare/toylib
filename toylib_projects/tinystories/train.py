@@ -4,6 +4,30 @@ from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
 
 
+def get_model_config(depth: int, seq_len: int = 1024) -> decoder_only_model.ModelConfig:
+    # Rules of thumbs copied over from the nanochat repo
+    num_layers = depth
+    model_dim = (
+        depth * 64
+    )  # aspect ratio 64 (usually this is varied from 64 -> 128 as model size increases)
+    num_heads = max(
+        1, (model_dim + 127) // 128
+    )  # head dim 128 (the division here is ceil div)
+    num_kv_heads = num_heads  # default is 1:1 GQA (Group Query Attention) ratio (i.e. GQA is disabled)
+    print(f"num_layers: {num_layers}")
+    print(f"model_dim: {model_dim}")
+    print(f"num_heads: {num_heads}")
+    print(f"num_kv_heads: {num_kv_heads}")
+    return decoder_only_model.ModelConfig(
+        num_layers=depth,
+        num_heads=num_heads,
+        qkv_dim=model_dim,
+        vocab_size=50257,  # GPT-2 tokenizer vocab size
+        seq_len=seq_len,
+        dropout_rate=0.1,
+    )
+
+
 def main():
     # Dataloader
     dataset = data.BatchedTokenizedDatasetParquet(

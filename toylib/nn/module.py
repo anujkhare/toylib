@@ -98,5 +98,4 @@ class Module(abc.ABC):
         return obj
 
     def __repr__(self) -> str:
-        _, aux = self.tree_flatten()
-        return str(aux)
+        return self.__class__.__name__
