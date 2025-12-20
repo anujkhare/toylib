@@ -72,11 +72,8 @@ class FileLogger(Logger):
     """Logger implementation that logs metrics to a local file."""
 
     def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
-        import json
-
         self.config_dict = config_dict
         self.file_ptr = open(output_path, "w")
-        json.dump(self.config_dict, self.file_ptr, indent=4)
         self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:

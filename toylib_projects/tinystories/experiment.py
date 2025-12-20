@@ -168,6 +168,7 @@ class Experiment:
     def outer_loop(self):
         # Training loop
         while self.step < self.training_config.max_steps:
+            epoch_start_step = self.step
             for batch in self.train_task.dataset:
                 # Perform inner loop step
                 self.inner_loop(batch)
@@ -177,6 +178,10 @@ class Experiment:
 
                 if self.step % self.checkpoint_config.save_interval_steps == 0:
                     self.save_checkpoint()
+
+            if self.step == epoch_start_step:
+                # Dataset is empty!
+                raise ValueError(f"Dataset for task {self.train_task.name} is empty.")
 
     # TODO: how to ensure this is always called?
     def cleanup(self):
