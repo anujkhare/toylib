@@ -158,7 +158,8 @@ class Bundler:
         self.topologically_sorted_modules = []
 
     def parse_modules_dfs(self, module: Module) -> str:
-        assert module.path
+        if not module.path:
+            raise ValueError(f"Could not find location for module {module.name}")
 
         # Skip if already parsed
         if module.id in self.parsed_modules:
