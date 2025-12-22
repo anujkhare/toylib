@@ -1,4 +1,5 @@
 import abc
+import datetime
 
 
 class Logger(abc.ABC):
@@ -77,7 +78,8 @@ class FileLogger(Logger):
         self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:
-        self.file_ptr.write(f"Step {step}: {metrics}\n")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.file_ptr.write(f"[{timestamp}] Step {step}: {metrics}\n")
 
     def close(self) -> None:
         self.file_ptr.close()
@@ -90,7 +92,8 @@ class StdoutLogger(Logger):
         self.config_dict = config_dict
 
     def log(self, step: int, metrics: dict) -> None:
-        print(f"Step {step}: {metrics}")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{timestamp}] Step {step}: {metrics}")
 
     def close(self) -> None:
         pass
