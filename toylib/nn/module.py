@@ -37,7 +37,7 @@ class Module(abc.ABC):
         # Make all Modules dataclasses
         cls = dataclasses.dataclass(cls, kw_only=True)
         # Automatically register subclasses as pytree nodes
-        cls = jax.tree_util.register_pytree_node_class(cls)
+        cls = jax.tree_util.register_pytree_with_keys_class(cls)
 
     @abc.abstractmethod
     def init(self) -> None:
@@ -68,8 +68,8 @@ class Module(abc.ABC):
         self.init()
         self._trainable_param_keys = self._get_trainable_param_keys()
 
-    def tree_flatten(self) -> tuple:
-        params = []
+    def tree_flatten_with_keys(self) -> tuple:
+        params_with_keys = []
         aux_data = dict()
 
         # Look through each attribute in the object
@@ -78,9 +78,9 @@ class Module(abc.ABC):
                 aux_data[k] = v
         for k in self._trainable_param_keys:
             v = self.__dict__[k]
-            params.append(v)
+            params_with_keys.append((jax.tree_util.GetAttrKey(k), v))
 
-        return params, aux_data
+        return params_with_keys, aux_data
 
     @classmethod
     def tree_unflatten(cls, static, dynamic) -> "Module":
@@ -96,6 +96,3 @@ class Module(abc.ABC):
             obj.__setattr__(k, v)
 
         return obj
-
-    def __repr__(self) -> str:
-        return self.__class__.__name__
