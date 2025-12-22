@@ -127,8 +127,8 @@ class Experiment:
         restored = self.ckpt_manager.restore(
             step,
             args=ocp.args.Composite(
-                model=ocp.args.StandardRestore(),
-                opt_state=ocp.args.StandardRestore(),
+                model=ocp.args.StandardRestore(self.model),
+                opt_state=ocp.args.StandardRestore(self.opt_state),
             ),
         )
         # Update the local state

@@ -6,16 +6,16 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 ### TODOs
 * [ ] Baseline: Train a single-device model
     * [ ] Metrics
+        * [ ] Sampling / inference eval
         * [ ] val bpb
         * [ ] CORE metric
-        * [ ] Sampling / inference eval
     * [*] Checkpointing
     * [ ] Train a single-device model
 * [ ] Inference setup
     * [ ]
 * [ ] Evaluations
 * [ ] Improvements
-    * [ ] Param counts
+    * [*] Param counts
     * [ ] CPU/TPU memory usage, profiling
     * [ ] LR/optimizers for different parts of the model
     * [ ] LR schedule
@@ -23,6 +23,7 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
     * [ ] Gradient clipping
     * [ ] fix dep management
 * [ ] Scaling
+    * [*] Memory and parameter analysis
     * [ ] Training budget - # tokens
     * [ ] Multi-device training?
     * [ ] Gradient accumulation / micro-batching

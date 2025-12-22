@@ -4,7 +4,9 @@ from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
 
 
-def get_model_config(depth: int, seq_len: int = 1024) -> decoder_only_model.ModelConfig:
+def get_model_config(
+    depth: int, seq_len: int = 1024, vocab_size: int = 50257
+) -> decoder_only_model.ModelConfig:
     # Rules of thumbs copied over from the nanochat repo
     num_layers = depth
     model_dim = (
@@ -22,9 +24,8 @@ def get_model_config(depth: int, seq_len: int = 1024) -> decoder_only_model.Mode
         num_layers=depth,
         num_heads=num_heads,
         qkv_dim=model_dim,
-        vocab_size=50257,  # GPT-2 tokenizer vocab size
+        vocab_size=vocab_size,
         seq_len=seq_len,
-        dropout_rate=0.1,
     )
 
 
