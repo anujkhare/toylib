@@ -180,7 +180,7 @@ class Experiment:
         self.log_metrics(self.step, loss_val)
 
     def outer_loop(self):
-        finished = False
+        finished = self.step >= self.training_config.max_steps
 
         while True:
             epoch_start_step = self.step
