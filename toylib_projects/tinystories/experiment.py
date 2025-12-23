@@ -166,8 +166,9 @@ class Experiment:
         self.log_metrics(self.step, loss_val, updates)
 
     def outer_loop(self):
-        # Training loop
-        while self.step < self.training_config.max_steps:
+        finished = False
+
+        while True:
             epoch_start_step = self.step
             for batch in self.train_task.dataset:
                 # Perform inner loop step
@@ -178,6 +179,13 @@ class Experiment:
 
                 if self.step % self.checkpoint_config.save_interval_steps == 0:
                     self.save_checkpoint()
+
+                if self.step >= self.training_config.max_steps:
+                    finished = True
+                    break
+
+            if finished:
+                break
 
             if self.step == epoch_start_step:
                 # Dataset is empty!
