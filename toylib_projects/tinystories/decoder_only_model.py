@@ -230,5 +230,5 @@ def train_step(
         Loss value for the batch.
     """
     logits = model(tokens)  # doesn't use mask right now
-    total_loss, _ = loss_fn(logits, targets, mask)
-    return total_loss
+    total_loss, per_token_loss = loss_fn(logits, targets, mask)
+    return total_loss, {"logits": logits, "per_token_loss": per_token_loss}

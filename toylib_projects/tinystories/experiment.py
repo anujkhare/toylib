@@ -65,6 +65,14 @@ class Experiment:
     # Logger config
     logger_config: LoggerConfig = dataclasses.field(default_factory=LoggerConfig)
 
+    # Forward function: returns loss value and aux data dict
+    forward_fn: ... = dataclasses.field(
+        default_factory=lambda: decoder_only_model.train_step
+    )
+
+    # Whether to JIT compile the training step - disable only for debugging
+    jit_train_fn: bool = True
+
     def __post_init__(self):
         # Logger
         self.logger_obj = self.logger_config.logger_cls(
@@ -77,11 +85,6 @@ class Experiment:
         self.opt_state = None
         self.model = None
 
-        # Value and gradient function
-        self.loss_and_grad_fn = jax.jit(
-            jax.value_and_grad(decoder_only_model.train_step)
-        )
-
         # Checkpoint manager
         self.ckpt_manager = ocp.CheckpointManager(
             self.checkpoint_config.checkpoint_dir,
@@ -93,6 +96,29 @@ class Experiment:
                 max_to_keep=self.checkpoint_config.max_to_keep
             ),
         )
+
+        # Train step
+        def train_step(model, opt_state, batch):
+            inputs, targets = batch["inputs"], batch["targets"]
+            mask = jax.numpy.ones_like(inputs)
+
+            # Compute loss and gradients
+            (loss_val, _), grads = jax.value_and_grad(self.forward_fn, has_aux=True)(
+                model, inputs, mask, targets
+            )
+
+            # Apply gradients
+            updates, opt_state = self.optimizer.update(grads, opt_state)
+
+            # Update the model and optimizer state
+            model = optax.apply_updates(model, updates)
+
+            return model, opt_state, loss_val
+
+        if self.jit_train_fn:
+            self.train_step_fn = jax.jit(train_step)
+        else:
+            self.train_step_fn = train_step
 
     def init_state(self):
         # Model
@@ -135,34 +161,23 @@ class Experiment:
         self.opt_state = restored["opt_state"]
         self.step = step
 
-    def log_metrics(self, step: int, loss_val: float, updates):
-        leaves, _ = jax.tree_util.tree_flatten(updates)
+    def log_metrics(self, step: int, loss_val: float):
         metrics = {
             "train/loss": float(loss_val),
             "train/learning_rate": self.training_config.learning_rate,
-            "gradients/0/mean": leaves[0].mean(),
-            "gradients/1/mean": leaves[1].mean(),
-            "gradients/2/mean": leaves[2].mean(),
         }
         self.logger_obj.log(step=step, metrics=metrics)
 
     def inner_loop(self, batch: dict):
         self._assert_initialized()
-        inputs, targets = batch["inputs"], batch["targets"]
-        mask = jax.numpy.ones_like(inputs)
 
         # Compute loss and gradients
-        loss_val, grads = self.loss_and_grad_fn(self.model, inputs, mask, targets)
-
-        # Apply gradients
-        updates, opt_state = self.optimizer.update(grads, self.opt_state)
-
-        # Update the model and optimizer state
-        self.model = optax.apply_updates(self.model, updates)
-        self.opt_state = opt_state
+        self.model, self.opt_state, loss_val = self.train_step_fn(
+            self.model, self.opt_state, batch
+        )
 
         # Log metrics
-        self.log_metrics(self.step, loss_val, updates)
+        self.log_metrics(self.step, loss_val)
 
     def outer_loop(self):
         finished = False

@@ -14,12 +14,10 @@ class TestSerializeDataclassConfig:
 
     def test_simple_dataclass(self):
         """Test serialization of simple dataclass."""
-        config = experiment.TrainingConfig(
-            batch_size=64, learning_rate=0.001, max_steps=5000
-        )
+        config = experiment.TrainingConfig(learning_rate=0.001, max_steps=5000)
         result = experiment._serlialize_dataclass_config(config)
 
-        assert result == {"batch_size": 64, "learning_rate": 0.001, "max_steps": 5000}
+        assert result == {"learning_rate": 0.001, "max_steps": 5000}
 
     def test_nested_dataclass(self):
         """Test serialization of nested dataclass."""
@@ -47,13 +45,13 @@ class TestExperiment:
         mock_dataset = Mock()
         train_task = experiment.Task(name="train", dataset=mock_dataset)
 
-        config = experiment.Experiment(train_task=train_task)
+        exp = experiment.Experiment(train_task=train_task)
 
-        assert config.train_task == train_task
-        assert config.eval_tasks == []
-        assert config.optimizer is not None
-        assert config.opt_state is None
-        assert config.model is None
+        assert exp.train_task == train_task
+        assert exp.eval_tasks == []
+        assert exp.optimizer is not None
+        assert exp.opt_state is None
+        assert exp.model is None
 
     @patch("toylib_projects.tinystories.experiment.logger.TensorBoardLogger")
     @patch(
@@ -68,13 +66,13 @@ class TestExperiment:
         mock_model_class.return_value = mock_model
         mock_opt.return_value.init.return_value = "mock_opt_state"
 
-        config = experiment.Experiment(train_task=train_task)
-        config.init_state()
+        exp = experiment.Experiment(train_task=train_task)
+        exp.init_state()
 
-        assert config.model == mock_model
-        assert config.opt_state == "mock_opt_state"
-        assert config.step == 0
-        assert config.loss_and_grad_fn is not None
+        assert exp.model == mock_model
+        assert exp.opt_state == "mock_opt_state"
+        assert exp.step == 0
+        assert exp.train_step_fn is not None
         mock_model_class.assert_called_once()
 
     @pytest.mark.skip
@@ -100,9 +98,7 @@ class TestExperiment:
                 qkv_dim=8,
                 num_heads=1,
             ),
-            training_config=experiment.TrainingConfig(
-                batch_size=1, learning_rate=1e-3, max_steps=2
-            ),
+            training_config=experiment.TrainingConfig(learning_rate=1e-3, max_steps=2),
             checkpoint_config=experiment.CheckpointConfig(
                 checkpoint_dir=f"checkpoints/{version}/",
                 save_interval_steps=10,
