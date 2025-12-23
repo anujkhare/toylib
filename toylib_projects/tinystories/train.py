@@ -30,26 +30,30 @@ def get_model_config(
 
 
 def main():
+    batch_size = 8
+    seq_len = 1024
+    depth = 12
+    vocab_size = 50257
+
     # Dataloader
     dataset = data.BatchedTokenizedDatasetParquet(
         dataset_path="/tmp/",
         split="train",
-        batch_size=128,
-        seq_len=512,
+        batch_size=batch_size,
+        seq_len=seq_len,
         tokenizer_batch_size=8,
     )
     train_task = experiment.Task(name="train", dataset=dataset)
     exp = experiment.Experiment(
-        model_config=decoder_only_model.ModelConfig(
-            vocab_size=50257,  # GPT-2 tokenizer vocab size
+        model_config=get_model_config(
+            depth=depth, seq_len=seq_len, vocab_size=vocab_size
         ),
         training_config=experiment.TrainingConfig(
-            batch_size=128,
             learning_rate=1e-3,
             max_steps=100_000,
         ),
         checkpoint_config=experiment.CheckpointConfig(
-            save_interval_steps=5000,
+            save_interval_steps=2500,
             max_to_keep=10,
             checkpoint_dir="/tmp/checkpoints",
         ),

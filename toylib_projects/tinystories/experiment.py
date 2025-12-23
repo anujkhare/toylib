@@ -20,7 +20,6 @@ class CheckpointConfig:
 
 @dataclasses.dataclass
 class TrainingConfig:
-    batch_size: int = 128
     learning_rate: float = 1e-3
     max_steps: int = 100_000
 
@@ -33,8 +32,8 @@ class Task:
 
 @dataclasses.dataclass(kw_only=True)
 class LoggerConfig:
-    logger_cls: logger.Logger = logger.TensorBoardLogger
-    log_dir: str = "/tmp/tensorboard_logs/"
+    logger_cls: logger.Logger = logger.FileLogger
+    log_dir: str = "/tmp/train_logs.txt"
 
 
 def _serlialize_dataclass_config(config: dataclasses.dataclass) -> dict:
