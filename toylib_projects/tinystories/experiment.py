@@ -102,16 +102,18 @@ class Experiment:
             inputs, targets = batch["inputs"], batch["targets"]
             mask = jax.numpy.ones_like(inputs)
 
-            # Compute loss and gradients
-            (loss_val, _), grads = jax.value_and_grad(self.forward_fn, has_aux=True)(
-                model, inputs, mask, targets
-            )
+            with jax.profiler.TraceAnnotation("value_and_grad"):
+                # Compute loss and gradients
+                (loss_val, _), grads = jax.value_and_grad(
+                    self.forward_fn, has_aux=True
+                )(model, inputs, mask, targets)
 
-            # Apply gradients
-            updates, opt_state = self.optimizer.update(grads, opt_state)
+            with jax.profiler.TraceAnnotation("optimizer_update"):
+                # Apply gradients
+                updates, opt_state = self.optimizer.update(grads, opt_state)
 
-            # Update the model and optimizer state
-            model = optax.apply_updates(model, updates)
+                # Update the model and optimizer state
+                model = optax.apply_updates(model, updates)
 
             return model, opt_state, loss_val
 
@@ -179,6 +181,9 @@ class Experiment:
         # Log metrics
         self.log_metrics(self.step, loss_val)
 
+        # Increment step
+        self.step += 1
+
     def outer_loop(self):
         finished = self.step >= self.training_config.max_steps
 
@@ -186,10 +191,8 @@ class Experiment:
             epoch_start_step = self.step
             for batch in self.train_task.dataset:
                 # Perform inner loop step
-                self.inner_loop(batch)
-
-                # Increment step
-                self.step += 1
+                with jax.profiler.StepTraceAnnotation("inner_loop", step_num=self.step):
+                    self.inner_loop(batch)
 
                 if self.step % self.checkpoint_config.save_interval_steps == 0:
                     self.save_checkpoint()
