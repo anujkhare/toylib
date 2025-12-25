@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 
-from toylib_projects.tinystories import decoder_only_model
+from toylib_projects.tinystories import model
 from toylib_projects.tinystories import experiment
 
 
@@ -92,7 +92,7 @@ class TestExperiment:
             "targets": jnp.zeros((1, 10)),
         }
         exp = experiment.Experiment(
-            model_config=decoder_only_model.ModelConfig(
+            model_config=model.ModelConfig(
                 vocab_size=5,  # GPT-2 tokenizer vocab size
                 num_layers=1,
                 qkv_dim=8,

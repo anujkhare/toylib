@@ -155,12 +155,12 @@ class DecoderOnlyTransformer(module.Module):
         )
 
     def __call__(
-        self, x: jt.Float[jt.Array, "batch_size seq_len"]
-    ) -> jt.Float[jt.Array, "batch_size seq_len vocab_size"]:
+        self, x: jt.Float[jt.Array, "... seq_len"]
+    ) -> jt.Float[jt.Array, "... seq_len vocab_size"]:
         """Forward pass for the decoder-only transformer model.
 
         Args:
-            x: Input token ids of shape [batch_size, seq_len]. Note that the sequence
+            x: Input token ids of shape [seq_len]. Note that the sequence
                 length should match the configuration `seq_len` as this is used for
                 positional embeddings.
 
