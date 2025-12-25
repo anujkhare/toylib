@@ -20,7 +20,7 @@ class TestModule:
         obj = Foo()
         obj.a = jnp.array([1, 2, 3])
         obj.b = "hello"
-        params, aux = obj.tree_flatten()
+        params, aux = obj.tree_flatten_with_keys()
         unflattened = Foo.tree_unflatten(aux, params)
         assert jnp.array_equal(unflattened.a, obj.a)
         assert unflattened.b == obj.b
