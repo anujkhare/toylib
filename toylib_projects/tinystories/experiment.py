@@ -26,6 +26,11 @@ class TrainingConfig:
 
 
 @dataclasses.dataclass
+class EvalConfig:
+    eval_interval_steps: int = 500
+
+
+@dataclasses.dataclass
 class Task:
     name: str
     dataset: data.BatchedTokenizedDataset
@@ -35,6 +40,8 @@ class Task:
 class LoggerConfig:
     logger_cls: logger.Logger = logger.FileLogger
     log_dir: str = "/tmp/train_logs.txt"
+
+    train_log_interval_steps: int = 1
 
 
 def _serlialize_dataclass_config(config: dataclasses.dataclass) -> dict:
@@ -59,10 +66,15 @@ class Experiment:
     )
     # Training Hyperparameters
     training_config: TrainingConfig = dataclasses.field(default_factory=TrainingConfig)
+
+    # Eval config
+    eval_config: EvalConfig = dataclasses.field(default_factory=EvalConfig)
+
     # Checkpointing config
     checkpoint_config: CheckpointConfig = dataclasses.field(
         default_factory=CheckpointConfig
     )
+
     # Logger config
     logger_config: LoggerConfig = dataclasses.field(default_factory=LoggerConfig)
 
@@ -145,6 +157,7 @@ class Experiment:
             "model": ocp.args.StandardSave(self.model),
             "opt_state": ocp.args.StandardSave(self.opt_state),
         }
+        # Only the train dataset iterator is checkpointed
         if self.checkpoint_config.checkpoint_dataset_iterator:
             args["dataset_iterator"] = ocp.args.StandardSave(
                 self.train_task.dataset.get_state()
@@ -174,12 +187,17 @@ class Experiment:
             self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
 
-    def log_metrics(self, step: int, loss_val: float):
+    def log_metrics(self, step: int, loss_val: float, split: str = "train"):
         metrics = {
+            "split": split,
             "train/loss": float(loss_val),
             "train/learning_rate": self.training_config.learning_rate,
         }
         self.logger_obj.log(step=step, metrics=metrics)
+
+    def eval(self):
+        self._assert_initialized()
+        raise NotImplementedError("Evaluation not yet implemented.")
 
     def inner_loop(self, batch: dict):
         self._assert_initialized()
@@ -190,7 +208,8 @@ class Experiment:
         )
 
         # Log metrics
-        self.log_metrics(self.step, loss_val)
+        if self.step % self.logger_config.train_log_interval_steps == 0:
+            self.log_metrics(self.step, loss_val)
 
         # Increment step
         self.step += 1
@@ -207,6 +226,9 @@ class Experiment:
 
                 if self.step % self.checkpoint_config.save_interval_steps == 0:
                     self.save_checkpoint()
+
+                if self.step % self.eval_config.eval_interval_steps == 0:
+                    pass
 
                 if self.step >= self.training_config.max_steps:
                     finished = True
