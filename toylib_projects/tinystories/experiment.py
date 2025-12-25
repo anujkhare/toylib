@@ -16,6 +16,7 @@ class CheckpointConfig:
     save_interval_steps: int = 5_000
     max_to_keep: typing.Optional[int] = 10
     checkpoint_dir: str = "/tmp/checkpoints"
+    checkpoint_dataset_iterator: bool = False
 
 
 @dataclasses.dataclass
@@ -140,27 +141,39 @@ class Experiment:
 
     def save_checkpoint(self):
         self._assert_initialized()
+        args = {
+            "model": ocp.args.StandardSave(self.model),
+            "opt_state": ocp.args.StandardSave(self.opt_state),
+        }
+        if self.checkpoint_config.checkpoint_dataset_iterator:
+            args["dataset_iterator"] = ocp.args.StandardSave(
+                self.train_task.dataset.get_state()
+            )
         self.ckpt_manager.save(
             self.step,
-            args=ocp.args.Composite(
-                model=ocp.args.StandardSave(self.model),
-                opt_state=ocp.args.StandardSave(self.opt_state),
-            ),
+            args=ocp.args.Composite(**args.items()),
         )
         self.ckpt_manager.wait_until_finished()
 
     def restore_checkpoint(self, step: int):
         self._assert_initialized()
+        args = {
+            "model": ocp.args.StandardRestore(self.model),
+            "opt_state": ocp.args.StandardRestore(self.opt_state),
+        }
+        if self.checkpoint_config.checkpoint_dataset_iterator:
+            args["dataset_iterator"] = ocp.args.StandardRestore(
+                self.train_task.dataset.get_state()
+            )
+
         restored = self.ckpt_manager.restore(
-            step,
-            args=ocp.args.Composite(
-                model=ocp.args.StandardRestore(self.model),
-                opt_state=ocp.args.StandardRestore(self.opt_state),
-            ),
+            step, args=ocp.args.Composite(**args.items())
         )
         # Update the local state
         self.model = restored["model"]
         self.opt_state = restored["opt_state"]
+        if self.checkpoint_config.checkpoint_dataset_iterator:
+            self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
 
     def log_metrics(self, step: int, loss_val: float):

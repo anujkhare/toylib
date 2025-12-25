@@ -10,6 +10,13 @@ from transformers import AutoTokenizer
 
 
 @dataclasses.dataclass
+class DatasetState:
+    """Serializable state for dataset checkpointing."""
+
+    pass
+
+
+@dataclasses.dataclass
 class BatchedTokenizedDataset(abc.ABC):
     dataset_path: str = "karpathy/fineweb-edu-100b-shuffle"
     split: str = "train"
@@ -36,6 +43,7 @@ class BatchedTokenizedDataset(abc.ABC):
 
     def __next__(self) -> jnp.ndarray:
         token_needed = self.batch_size * self.seq_len + 1  # 1 for the last target token
+        print(f"{len(self.token_buffer)} tokens in buffer, need {token_needed}")
         while len(self.token_buffer) < token_needed:
             # Load tokenizer_batch_size sequences from the dataset
             input_batch = next(self.dataset_iter)
@@ -54,6 +62,7 @@ class BatchedTokenizedDataset(abc.ABC):
             for tokens in tokenized:
                 self.token_buffer.append(self.bos_token)
                 self.token_buffer.extend(tokens)
+            print(len(self.token_buffer), "tokens in buffer")
 
         # Extract needed tokens from the buffer
         tokens = self.token_buffer[:token_needed]
@@ -71,6 +80,14 @@ class BatchedTokenizedDataset(abc.ABC):
             "targets": targets,
         }
 
+    def get_state(self) -> dict[str, typing.Any]:
+        """Get current state for checkpointing. Override in subclasses."""
+        raise NotImplementedError("Checkpointing not supported for this dataset type")
+
+    def restore_state(self, state: dict[str, typing.Any]) -> None:
+        """Restore from a checkpoint state. Override in subclasses."""
+        raise NotImplementedError("Checkpointing not supported for this dataset type")
+
 
 class BatchedTokenizedDatasetHF(BatchedTokenizedDataset):
     def _get_dataset_iterator(self):
@@ -82,17 +99,58 @@ class BatchedTokenizedDatasetHF(BatchedTokenizedDataset):
         )
 
 
+@dataclasses.dataclass
+class DatasetStateParquet(DatasetState):
+    file_index: int = 0
+    row_group_index: int = 0
+    token_buffer: list[int] = dataclasses.field(default_factory=list)
+
+
 class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
     """Path is constructed as dataset_path/split/*.parquet"""
 
-    def list_files(self):
-        base_path = pathlib.Path(self.dataset_path) / self.split
-        return list(base_path.glob("*.parquet"))
+    def __post_init__(self):
+        # Initialize position tracking before calling parent
+        self._state = DatasetStateParquet()
+        super().__post_init__()
 
-    # TODO(anujkhare): does not respect tokenizer_batch_size yet
-    def _get_dataset_iterator(self):
-        for file_path in self.list_files():
-            pf = pq.ParquetFile(file_path)
-            for row_group in range(pf.num_row_groups):
-                rg = pf.read_row_group(row_group)
+    def list_files(self) -> list[pathlib.Path]:
+        base_path = pathlib.Path(self.dataset_path) / self.split
+        # Sort for deterministic ordering across runs
+        return sorted(base_path.glob("*.parquet"))
+
+    def _get_dataset_iterator(self) -> typing.Iterator:
+        """Generator that tracks position for checkpointing."""
+        files = self.list_files()
+
+        # Start from the tracked position
+        for file_idx in range(self._state.file_index, len(files)):
+            self._state.file_index = file_idx
+            pf = pq.ParquetFile(files[file_idx])
+
+            # Read row groups from the current file
+            for rg_idx in range(self._state.row_group_index, pf.num_row_groups):
+                print(
+                    f"Reading file {file_idx}, row group {rg_idx} of {pf.num_row_groups}"
+                )
+                self._state.row_group_index = rg_idx
+                rg = pf.read_row_group(rg_idx)
                 yield {"text": rg.column("text").to_pylist()}
+
+            # Reset row group index for next file
+            self._state.row_group_index = 0
+
+    def get_state(self) -> dict[str, typing.Any]:
+        """Get current state for checkpointing."""
+        self._state.token_buffer = self.token_buffer.copy()
+        print(f"Checkpointing state, {len(self._state.token_buffer)} tokens in buffer")
+        return dataclasses.asdict(self._state)
+
+    def restore_state(self, state: dict[str, typing.Any]) -> None:
+        """Restore iterator position from checkpoint."""
+        self._state = DatasetStateParquet(**state)
+        self._state.token_buffer = state["token_buffer"].copy()
+        print(f"Restoring state, {len(self._state.token_buffer)} tokens in buffer")
+
+        # Recreate the iterator starting from the restored position
+        self.dataset_iter = self._get_dataset_iterator()
