@@ -151,7 +151,7 @@ class Experiment:
             )
         self.ckpt_manager.save(
             self.step,
-            args=ocp.args.Composite(**args.items()),
+            args=ocp.args.Composite(**args),
         )
         self.ckpt_manager.wait_until_finished()
 
@@ -166,9 +166,7 @@ class Experiment:
                 self.train_task.dataset.get_state()
             )
 
-        restored = self.ckpt_manager.restore(
-            step, args=ocp.args.Composite(**args.items())
-        )
+        restored = self.ckpt_manager.restore(step, args=ocp.args.Composite(**args))
         # Update the local state
         self.model = restored["model"]
         self.opt_state = restored["opt_state"]
