@@ -29,16 +29,19 @@ def get_model_config(
     )
 
 
-def main():
-    batch_size = 8
-    seq_len = 1024
-    depth = 12
-    vocab_size = 50257
-
+def create_experiment(
+    batch_size: int = 8,
+    seq_len: int = 2048,
+    depth: int = 12,
+    vocab_size: int = 50257,
+    checkpoint_dir: str = "/tmp/checkpoints",
+    dataset_path: str = "/tmp/",
+    dataset_train_split: str = "train",
+) -> experiment.Experiment:
     # Dataloader
     dataset = data.BatchedTokenizedDatasetParquet(
-        dataset_path="/tmp/",
-        split="train",
+        dataset_path=dataset_path,
+        split=dataset_train_split,
         batch_size=batch_size,
         seq_len=seq_len,
         tokenizer_batch_size=8,
@@ -55,13 +58,17 @@ def main():
         checkpoint_config=experiment.CheckpointConfig(
             save_interval_steps=2500,
             max_to_keep=10,
-            checkpoint_dir="/tmp/checkpoints",
+            checkpoint_dir=checkpoint_dir,
+            save_dataset_iterator=False,
         ),
         train_task=train_task,
     )
-    exp.init_state()
-    exp.outer_loop()
+    return exp
 
 
 if __name__ == "__main__":
-    main()
+    exp = create_experiment(
+        batch_size=48,
+    )
+    exp.init_state()
+    exp.outer_loop()
