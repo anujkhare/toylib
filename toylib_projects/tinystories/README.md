@@ -16,6 +16,8 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 * [ ] Evaluations
 * [ ] Improvements
     * [*] Param counts
+    * [ ] Mixed-precision training
+    * [ ] bf16 inference
     * [ ] CPU/TPU memory usage, profiling
     * [ ] LR/optimizers for different parts of the model
     * [ ] LR schedule
