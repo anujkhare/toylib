@@ -21,22 +21,32 @@ class RotaryPositionalEmbedding(module.Module):
         freqs = self.base ** (jnp.arange(0, self.qkv_dim, 2) / self.qkv_dim)
         # [seq_len, qkv_dim // 2]
         self.gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
-        self.cos = jnp.cos(self.gamma)
-        self.sin = jnp.sin(self.gamma)
+        self.cos = jnp.cos(self.gamma).astype(jnp.bfloat16)
+        self.sin = jnp.sin(self.gamma).astype(jnp.bfloat16)
 
     def __call__(
-        self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
+        self, x: jt.Float[jt.Array, "... seq_len qkv_dim"], t0: int = 0
     ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
-        d = x.shape[-1]
+        t, d = x.shape[-2:]
+        # The position embeddings are cached for `seq_len` which may be larger
+        # than the maximum sequence length of the model. We index the cached
+        # embeddings equal to the current sequence length `t`. During training,
+        # this length is (likely) equal to the model's `seq_len`. During
+        # inference, this would vary based on the input sequence. `t0` is
+        # used when the starting token is not at time 0 - for instance,
+        # when using a KV cache.
+        if t0 + t > self.seq_len:
+            raise ValueError(
+                "Position index out of range of RoPE cache:"
+                f"t0 ({t0}) + t ({t}) > seq_len ({self.seq_len})"
+            )
+        sin, cos = self.sin[t0 : t0 + t, :], self.cos[t0 : t0 + t, :]
+
         x1, x2 = x[..., : d // 2], x[..., d // 2 :]
         # element-wise multiplication: rotate dims clockwise pair-wise
         es_shape = "... t d, t d -> ... t d"
-        y1 = einops.einsum(x1, self.cos, es_shape) + einops.einsum(
-            x2, self.sin, es_shape
-        )
-        y2 = -einops.einsum(x1, self.sin, es_shape) + einops.einsum(
-            x2, self.cos, es_shape
-        )
+        y1 = einops.einsum(x1, cos, es_shape) + einops.einsum(x2, sin, es_shape)
+        y2 = -einops.einsum(x1, sin, es_shape) + einops.einsum(x2, cos, es_shape)
         return jnp.concatenate([y1, y2], axis=-1)
 
 
