@@ -232,3 +232,55 @@ def train_step(
     logits = model(tokens)  # doesn't use mask right now
     total_loss, per_token_loss = loss_fn(logits, targets, mask)
     return total_loss, {"logits": logits, "per_token_loss": per_token_loss}
+
+
+# TODO: jitted version??
+def sample(
+    model: DecoderOnlyTransformer,
+    input_tokens: list[int],
+    key: jt.PRNGKeyArray,
+    *,
+    max_output_tokens: int = 100,
+    temperature: float = 1.0,
+    top_k: int | None = None,
+) -> jt.Int[jt.Array, "batch_size seq_len"]:
+    """Generates samples from the model given input tokens.
+
+    This is a simple implementation with no optimizations or batching support.
+
+    Args:
+        model: The DecoderOnlyTransformer model.
+        input_tokens: Input token ids of shape [seq_len].
+        key: JAX PRNG key for sampling.
+        max_output_tokens: Maximum number of tokens to generate.
+        temperature: Sampling temperature. Higher values increase randomness.
+        top_k: If specified, only consider the top_k logits for sampling. Set
+            to 1 for greedy sampling.
+
+    Yields:
+        Generated token ids one at a time.
+    """
+    if temperature < 0:
+        raise ValueError("Temperature must be non-negative.")
+    tokens = input_tokens.copy()
+
+    # Generate up-to the max_output_tokens, no early stopping / stopping token
+    for _ in range(max_output_tokens):
+        # forward pass
+        outputs = model(jnp.array(tokens))  # [seq_len, vocab_size]
+
+        # Get the logits for the last token
+        logits = outputs[-1, :]  # [vocab_size]
+        logits /= temperature
+
+        # Filter out to only top-k logits if specified
+        # This is a method to reduce the sampling noise
+        if top_k:
+            top_k_logits, _ = jax.lax.top_k(logits, top_k)
+            logits = jnp.where(logits < top_k_logits[-1], -jnp.inf, logits)
+
+        # Sample the next token and update the inputs
+        next_token = jax.random.categorical(key=key, logits=logits)
+        tokens.append(next_token)
+
+        yield next_token
