@@ -48,7 +48,7 @@ class TestExperiment:
         exp = experiment.Experiment(train_task=train_task)
 
         assert exp.train_task == train_task
-        assert exp.eval_tasks == []
+        assert exp.eval_task is None
         assert exp.optimizer is not None
         assert exp.opt_state is None
         assert exp.model is None
