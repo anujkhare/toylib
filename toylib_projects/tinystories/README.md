@@ -6,7 +6,7 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 ### TODOs
 * [ ] Baseline: Train a single-device model
     * [ ] Metrics
-        * [ ] Sampling / inference eval
+        * [*] Sampling / inference eval
         * [ ] val bpb
         * [ ] CORE metric
     * [*] Checkpointing

@@ -37,16 +37,32 @@ def create_experiment(
     checkpoint_dir: str = "/tmp/checkpoints",
     dataset_path: str = "/tmp/",
     dataset_train_split: str = "train",
+    dataset_val_split: str | None = "val",
 ) -> experiment.Experiment:
     # Dataloader
-    dataset = data.BatchedTokenizedDatasetParquet(
-        dataset_path=dataset_path,
-        split=dataset_train_split,
-        batch_size=batch_size,
-        seq_len=seq_len,
-        tokenizer_batch_size=8,
+    train_task = experiment.Task(
+        name="train",
+        dataset=data.BatchedTokenizedDatasetParquet(
+            dataset_path=dataset_path,
+            split=dataset_train_split,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            tokenizer_batch_size=8,
+        ),
     )
-    train_task = experiment.Task(name="train", dataset=dataset)
+    val_task = None
+    if dataset_val_split is not None:
+        val_task = experiment.Task(
+            name="val",
+            dataset=data.BatchedTokenizedDatasetParquet(
+                dataset_path=dataset_path,
+                split=dataset_val_split,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                tokenizer_batch_size=8,
+            ),
+        )
+    # Experiment
     exp = experiment.Experiment(
         model_config=get_model_config(
             depth=depth, seq_len=seq_len, vocab_size=vocab_size
@@ -62,6 +78,7 @@ def create_experiment(
             save_dataset_iterator=False,
         ),
         train_task=train_task,
+        eval_task=val_task,
     )
     return exp
 
