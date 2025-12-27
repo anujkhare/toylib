@@ -11,6 +11,17 @@ from toylib_projects.tinystories import data
 from toylib_projects.tinystories import logger
 
 
+DEFAULT_PROMPTS = [
+    "The capital of France is",
+    "The chemical symbol of gold is",
+    "If yesterday was Friday, then tomorrow will be",
+    "The opposite of hot is",
+    "The planets of the solar system are:",
+    "My favorite color is",
+    "If 5*x + 3 = 13, then x is",
+]
+
+
 @dataclasses.dataclass
 class CheckpointConfig:
     save_interval_steps: int = 5_000
@@ -27,7 +38,10 @@ class TrainingConfig:
 
 @dataclasses.dataclass
 class EvalConfig:
+    # Evaluation interval in steps
     eval_interval_steps: int = 500
+    # Number of batches to use for evaluation
+    num_eval_steps: int = 1
 
 
 @dataclasses.dataclass
@@ -58,7 +72,7 @@ class Experiment:
 
     # Tasks to train and evaluate
     train_task: Task
-    eval_tasks: list[Task] = dataclasses.field(default_factory=list)
+    eval_task: Task | None = None
 
     # Model config
     model_config: decoder_only_model.ModelConfig = dataclasses.field(
@@ -84,7 +98,7 @@ class Experiment:
     )
 
     # Whether to JIT compile the training step - disable only for debugging
-    jit_train_fn: bool = True
+    jit_computations: bool = True
 
     def __post_init__(self):
         # Logger
@@ -130,10 +144,21 @@ class Experiment:
 
             return model, opt_state, loss_val
 
-        if self.jit_train_fn:
+        def eval_step(model, batch):
+            inputs, targets = batch["inputs"], batch["targets"]
+            mask = jax.numpy.ones_like(inputs)
+
+            with jax.profiler.TraceAnnotation("eval_forward"):
+                loss_val, _ = self.forward_fn(model, inputs, mask, targets)
+
+            return loss_val
+
+        if self.jit_computations:
             self.train_step_fn = jax.jit(train_step)
+            self.eval_step_fn = jax.jit(eval_step)
         else:
             self.train_step_fn = train_step
+            self.eval_step_fn = eval_step
 
     def init_state(self):
         # Model
@@ -187,17 +212,65 @@ class Experiment:
             self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
 
-    def log_metrics(self, step: int, loss_val: float, split: str = "train"):
-        metrics = {
-            "split": split,
-            "train/loss": float(loss_val),
-            "train/learning_rate": self.training_config.learning_rate,
-        }
-        self.logger_obj.log(step=step, metrics=metrics)
+    def run_validation(self) -> float:
+        self._assert_initialized()
+        if self.eval_task is None:
+            print("No eval task defined, skipping validation loss.")
+            return
+
+        total_val_loss = 0.0
+        for ix, batch in enumerate(self.eval_task.dataset):
+            val_loss = self.eval_step_fn(self.model, batch)
+            total_val_loss += val_loss
+            if ix >= self.eval_config.num_eval_steps:
+                break
+
+        avg_val_loss = total_val_loss / (ix + 1)
+        self.logger_obj.log(self.step, metrics={"val/loss": float(avg_val_loss)})
+
+    def sampling_evaluation(
+        self, prompts: list[str] | None = None, max_tokens: int = 10
+    ) -> None:
+        """Run sampling evaluation on the model given a list of prompts.
+
+        Args:
+            prompts: List of string prompts to evaluate.
+        """
+        self._assert_initialized()
+        if prompts is None:
+            prompts = DEFAULT_PROMPTS
+
+        results = []
+        tokenized_prompts = self.train_task.dataset.tokenizer(
+            prompts,
+            return_tensors=None,  # return a list of lists
+            padding=False,
+            truncation=False,
+            max_length=None,
+        )["input_ids"]
+        for ix in range(len(tokenized_prompts)):
+            generated = list(
+                decoder_only_model.sample(
+                    model=self.model,
+                    input_tokens=tokenized_prompts[ix],
+                    key=jax.random.PRNGKey(0),
+                    max_output_tokens=max_tokens,
+                    temperature=1.0,
+                    top_k=5,
+                )
+            )
+            results.append(
+                {
+                    "prompt": prompts[ix],
+                    "output": self.train_task.dataset.tokenizer.decode(generated),
+                }
+            )
+        self.logger_obj.log(self.step, metrics={"step": self.step, "samples": results})
 
     def eval(self):
         self._assert_initialized()
-        raise NotImplementedError("Evaluation not yet implemented.")
+        self.run_validation()
+        self.sampling_evaluation()
 
     def inner_loop(self, batch: dict):
         self._assert_initialized()
@@ -209,7 +282,7 @@ class Experiment:
 
         # Log metrics
         if self.step % self.logger_config.train_log_interval_steps == 0:
-            self.log_metrics(self.step, loss_val)
+            self.logger_obj.log(self.step, metrics={"train/loss": float(loss_val)})
 
         # Increment step
         self.step += 1
@@ -228,7 +301,7 @@ class Experiment:
                     self.save_checkpoint()
 
                 if self.step % self.eval_config.eval_interval_steps == 0:
-                    pass
+                    self.eval()
 
                 if self.step >= self.training_config.max_steps:
                     finished = True
