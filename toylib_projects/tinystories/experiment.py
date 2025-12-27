@@ -284,9 +284,6 @@ class Experiment:
         if self.step % self.logger_config.train_log_interval_steps == 0:
             self.logger_obj.log(self.step, metrics={"train/loss": float(loss_val)})
 
-        # Increment step
-        self.step += 1
-
     def outer_loop(self):
         finished = self.step >= self.training_config.max_steps
 
@@ -302,6 +299,9 @@ class Experiment:
 
                 if self.step % self.eval_config.eval_interval_steps == 0:
                     self.eval()
+
+                # Increment step
+                self.step += 1
 
                 if self.step >= self.training_config.max_steps:
                     finished = True
