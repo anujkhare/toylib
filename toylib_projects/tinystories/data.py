@@ -43,7 +43,6 @@ class BatchedTokenizedDataset(abc.ABC):
 
     def __next__(self) -> jnp.ndarray:
         token_needed = self.batch_size * self.seq_len + 1  # 1 for the last target token
-        print(f"{len(self.token_buffer)} tokens in buffer, need {token_needed}")
         while len(self.token_buffer) < token_needed:
             # Load tokenizer_batch_size sequences from the dataset
             input_batch = next(self.dataset_iter)
@@ -62,7 +61,6 @@ class BatchedTokenizedDataset(abc.ABC):
             for tokens in tokenized:
                 self.token_buffer.append(self.bos_token)
                 self.token_buffer.extend(tokens)
-            print(len(self.token_buffer), "tokens in buffer")
 
         # Extract needed tokens from the buffer
         tokens = self.token_buffer[:token_needed]
@@ -130,9 +128,6 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
 
             # Read row groups from the current file
             for rg_idx in range(self._state.row_group_index, pf.num_row_groups):
-                print(
-                    f"Reading file {file_idx}, row group {rg_idx} of {pf.num_row_groups}"
-                )
                 self._state.row_group_index = rg_idx
                 rg = pf.read_row_group(rg_idx)
                 yield {"text": rg.column("text").to_pylist()}
@@ -143,14 +138,12 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
     def get_state(self) -> dict[str, typing.Any]:
         """Get current state for checkpointing."""
         self._state.token_buffer = self.token_buffer.copy()
-        print(f"Checkpointing state, {len(self._state.token_buffer)} tokens in buffer")
         return dataclasses.asdict(self._state)
 
     def restore_state(self, state: dict[str, typing.Any]) -> None:
         """Restore iterator position from checkpoint."""
         self._state = DatasetStateParquet(**state)
         self._state.token_buffer = state["token_buffer"].copy()
-        print(f"Restoring state, {len(self._state.token_buffer)} tokens in buffer")
 
         # Recreate the iterator starting from the restored position
         self.dataset_iter = self._get_dataset_iterator()
