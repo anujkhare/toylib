@@ -27,7 +27,8 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 * [ ] Scaling
     * [*] Memory and parameter analysis
     * [ ] Training budget - # tokens
-    * [ ] Multi-device training?
+    * [ ] Multi-core training?
+    * [ ] Multi-pod training?
     * [ ] Gradient accumulation / micro-batching
 * [ ] Mid-training
 * [ ] Post-training
