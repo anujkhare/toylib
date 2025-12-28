@@ -80,6 +80,7 @@ class FileLogger(Logger):
     def log(self, step: int, metrics: dict) -> None:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.file_ptr.write(f"[{timestamp}] Step {step}: {metrics}\n")
+        self.file_ptr.flush()
 
     def close(self) -> None:
         self.file_ptr.close()
