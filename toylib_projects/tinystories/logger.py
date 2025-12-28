@@ -1,5 +1,6 @@
 import abc
 import datetime
+import json
 
 
 class Logger(abc.ABC):
@@ -79,7 +80,9 @@ class FileLogger(Logger):
 
     def log(self, step: int, metrics: dict) -> None:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.file_ptr.write(f"[{timestamp}] Step {step}: {metrics}\n")
+        metrics["timestamp"] = timestamp
+        metrics["step"] = step
+        self.file_ptr.write(json.dumps(metrics) + "\n")
         self.file_ptr.flush()
 
     def close(self) -> None:
