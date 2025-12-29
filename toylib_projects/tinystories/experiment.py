@@ -114,6 +114,20 @@ class Experiment:
         # Data: sharded along batch dimension across devices
         self.data_sharding = NamedSharding(self.mesh, P("data"))
 
+        train_batch_size = self.train_task.dataset.batch_size
+        eval_batch_size = (
+            self.eval_task.dataset.batch_size if self.eval_task is not None else 0
+        )
+        if train_batch_size % self.num_devices != 0:
+            raise ValueError(
+                f"Batch size {self.batch_size} not divisible by number of devices "
+                f"{self.num_devices}"
+            )
+        if eval_batch_size % self.num_devices != 0 and eval_batch_size != 0:
+            raise ValueError(
+                f"Eval batch size {eval_batch_size} not divisible by number of "
+                f"devices {self.num_devices}"
+            )
         print(f"Initialized mesh with {self.num_devices} devices: {devices}")
 
         # Logger
