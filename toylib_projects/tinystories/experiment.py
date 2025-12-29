@@ -128,7 +128,9 @@ class Experiment:
                 f"Eval batch size {eval_batch_size} not divisible by number of "
                 f"devices {self.num_devices}"
             )
-        print(f"Initialized mesh with {self.num_devices} devices: {devices}")
+        print(
+            f"Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}"
+        )
 
         # Logger
         self.logger_obj = self.logger_config.logger_cls(
@@ -163,12 +165,9 @@ class Experiment:
                 (loss_val, _), grads = jax.value_and_grad(
                     self.forward_fn, has_aux=True
                 )(model, inputs, mask, targets)
+                grads = jax.tree.map(lambda g: g / self.num_devices, grads)
 
             with jax.profiler.TraceAnnotation("optimizer_update"):
-                # Average gradients across all devices in the mesh
-                grads = jax.lax.pmean(grads, axis_name="data")
-                loss_val = jax.lax.pmean(loss_val, axis_name="data")
-
                 updates, opt_state = self.optimizer.update(grads, opt_state)
 
                 # Update the model and optimizer state
@@ -183,8 +182,6 @@ class Experiment:
             with jax.profiler.TraceAnnotation("eval_forward"):
                 loss_val, _ = self.forward_fn(model, inputs, mask, targets)
 
-            # Average loss across devices
-            loss_val = jax.lax.pmean(loss_val, axis_name="data")
             return loss_val
 
         if self.jit_computations:
