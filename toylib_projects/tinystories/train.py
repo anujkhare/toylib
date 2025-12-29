@@ -75,7 +75,7 @@ def create_experiment(
             save_interval_steps=2500,
             max_to_keep=10,
             checkpoint_dir=checkpoint_dir,
-            save_dataset_iterator=False,
+            checkpoint_dataset_iterator=False,
         ),
         train_task=train_task,
         eval_task=val_task,
