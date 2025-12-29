@@ -2,6 +2,9 @@
 
 import dataclasses
 import jax
+import jax.numpy as jnp
+from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
+import numpy as np
 import optax
 import orbax.checkpoint as ocp
 import typing
@@ -58,11 +61,11 @@ class LoggerConfig:
     train_log_interval_steps: int = 1
 
 
-def _serlialize_dataclass_config(config: dataclasses.dataclass) -> dict:
+def _serialize_dataclass_config(config: dataclasses.dataclass) -> dict:
     result = dataclasses.asdict(config)
     for k, v in result.items():
         if dataclasses.is_dataclass(v):
-            result[k] = _serlialize_dataclass_config(v)
+            result[k] = _serialize_dataclass_config(v)
     return result
 
 
@@ -101,9 +104,21 @@ class Experiment:
     jit_computations: bool = True
 
     def __post_init__(self):
+        # Set up device mesh for data parallelism
+        self.num_devices = jax.local_device_count()
+        devices = np.array(jax.local_devices())
+        self.mesh = Mesh(devices, axis_names=("data",))
+
+        # Model and optimizer state: replicated across all devices
+        self.replicated_sharding = NamedSharding(self.mesh, P())
+        # Data: sharded along batch dimension across devices
+        self.data_sharding = NamedSharding(self.mesh, P("data"))
+
+        print(f"Initialized mesh with {self.num_devices} devices: {devices}")
+
         # Logger
         self.logger_obj = self.logger_config.logger_cls(
-            config_dict=_serlialize_dataclass_config(self),
+            config_dict=_serialize_dataclass_config(self),
             output_path=self.logger_config.log_dir,
         )
 
@@ -127,7 +142,7 @@ class Experiment:
         # Train step
         def train_step(model, opt_state, batch):
             inputs, targets = batch["inputs"], batch["targets"]
-            mask = jax.numpy.ones_like(inputs)
+            mask = jnp.ones_like(inputs)
 
             with jax.profiler.TraceAnnotation("value_and_grad"):
                 # Compute loss and gradients
@@ -136,7 +151,10 @@ class Experiment:
                 )(model, inputs, mask, targets)
 
             with jax.profiler.TraceAnnotation("optimizer_update"):
-                # Apply gradients
+                # Average gradients across all devices in the mesh
+                grads = jax.lax.pmean(grads, axis_name="data")
+                loss_val = jax.lax.pmean(loss_val, axis_name="data")
+
                 updates, opt_state = self.optimizer.update(grads, opt_state)
 
                 # Update the model and optimizer state
@@ -146,58 +164,97 @@ class Experiment:
 
         def eval_step(model, batch):
             inputs, targets = batch["inputs"], batch["targets"]
-            mask = jax.numpy.ones_like(inputs)
+            mask = jnp.ones_like(inputs)
 
             with jax.profiler.TraceAnnotation("eval_forward"):
                 loss_val, _ = self.forward_fn(model, inputs, mask, targets)
 
+            # Average loss across devices
+            loss_val = jax.lax.pmean(loss_val, axis_name="data")
             return loss_val
 
         if self.jit_computations:
-            self.train_step_fn = jax.jit(train_step)
-            self.eval_step_fn = jax.jit(eval_step)
+            # JIT with explicit sharding specifications
+            self.train_step_fn = jax.jit(
+                train_step,
+                in_shardings=(
+                    self.replicated_sharding,  # model
+                    self.replicated_sharding,  # opt_state
+                    self.data_sharding,  # batch (sharded)
+                ),
+                out_shardings=(
+                    self.replicated_sharding,  # model
+                    self.replicated_sharding,  # opt_state
+                    self.replicated_sharding,  # loss (scalar, replicated)
+                ),
+            )
+            self.eval_step_fn = jax.jit(
+                eval_step,
+                in_shardings=(
+                    self.replicated_sharding,
+                    self.data_sharding,
+                ),
+                out_shardings=self.replicated_sharding,
+            )
         else:
             self.train_step_fn = train_step
             self.eval_step_fn = eval_step
 
     def init_state(self):
-        # Model
+        # Initialize model on CPU first
         self.model = decoder_only_model.DecoderOnlyTransformer(
             config=self.model_config, key=jax.random.PRNGKey(0)
         )
+        # Replicate model across all devices
+        self.model = jax.device_put(self.model, self.replicated_sharding)
 
-        # Optimizer
+        # Initialize and replicate optimizer state
         self.opt_state = self.optimizer.init(self.model)
+        self.opt_state = jax.device_put(self.opt_state, self.replicated_sharding)
 
-        # Global step
         self.step = 0
+
+        print(f"Model initialized and replicated across {self.num_devices} devices")
 
     def _assert_initialized(self) -> bool:
         initialized = self.model is not None and self.opt_state is not None
         assert initialized, "Experiment state not initialized. Call init_state() first."
 
+    def _unreplicate_for_checkpoint(self, pytree):
+        """Get a single copy of replicated state for checkpointing."""
+        # For replicated sharding, all devices have the same data,
+        # so we just take from the first device
+        return jax.tree.map(lambda x: np.asarray(x), pytree)
+
     def save_checkpoint(self):
         self._assert_initialized()
+
+        # Convert to numpy arrays for checkpointing
+        model_to_save = self._unreplicate_for_checkpoint(self.model)
+        opt_state_to_save = self._unreplicate_for_checkpoint(self.opt_state)
+
         args = {
-            "model": ocp.args.StandardSave(self.model),
-            "opt_state": ocp.args.StandardSave(self.opt_state),
+            "model": ocp.args.StandardSave(model_to_save),
+            "opt_state": ocp.args.StandardSave(opt_state_to_save),
         }
         # Only the train dataset iterator is checkpointed
         if self.checkpoint_config.checkpoint_dataset_iterator:
             args["dataset_iterator"] = ocp.args.StandardSave(
                 self.train_task.dataset.get_state()
             )
-        self.ckpt_manager.save(
-            self.step,
-            args=ocp.args.Composite(**args),
-        )
+        self.ckpt_manager.save(self.step, args=ocp.args.Composite(**args))
         self.ckpt_manager.wait_until_finished()
 
     def restore_checkpoint(self, step: int):
         self._assert_initialized()
+
+        # Restore to numpy first
+        model_template = self._unreplicate_for_checkpoint(self.model)
+        opt_state_template = self._unreplicate_for_checkpoint(self.opt_state)
+
         args = {
-            "model": ocp.args.StandardRestore(self.model),
-            "opt_state": ocp.args.StandardRestore(self.opt_state),
+            "model": ocp.args.StandardRestore(model_template),
+            "opt_state": ocp.args.StandardRestore(opt_state_template),
         }
         if self.checkpoint_config.checkpoint_dataset_iterator:
             args["dataset_iterator"] = ocp.args.StandardRestore(
@@ -205,9 +262,11 @@ class Experiment:
             )
 
         restored = self.ckpt_manager.restore(step, args=ocp.args.Composite(**args))
-        # Update the local state
-        self.model = restored["model"]
-        self.opt_state = restored["opt_state"]
+
+        # Re-replicate the restored state
+        self.model = jax.device_put(restored["model"], self.replicated_sharding)
+        self.opt_state = jax.device_put(restored["opt_state"], self.replicated_sharding)
+
         if self.checkpoint_config.checkpoint_dataset_iterator:
             self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
@@ -221,17 +280,18 @@ class Experiment:
         total_val_loss = 0.0
         for ix, batch in enumerate(self.eval_task.dataset):
             val_loss = self.eval_step_fn(self.model, batch)
-            total_val_loss += val_loss
+            total_val_loss += float(val_loss)
             if ix >= self.eval_config.num_eval_steps:
                 break
 
         avg_val_loss = total_val_loss / (ix + 1)
-        self.logger_obj.log(self.step, metrics={"val/loss": float(avg_val_loss)})
+        self.logger_obj.log(self.step, metrics={"val/loss": avg_val_loss})
+        return avg_val_loss
 
     def sampling_evaluation(
         self, prompts: list[str] | None = None, max_tokens: int = 10
     ) -> None:
-        """Run sampling evaluation on the model given a list of prompts.
+        """Run sampling evaluation (runs on single device for simplicity).
 
         Args:
             prompts: List of string prompts to evaluate.
@@ -240,18 +300,23 @@ class Experiment:
         if prompts is None:
             prompts = DEFAULT_PROMPTS
 
+        # For sampling, we use a single-device copy of the model
+        # This is simpler and sampling is not the bottleneck
+        model_single = jax.tree.map(lambda x: np.asarray(x), self.model)
+
         results = []
         tokenized_prompts = self.train_task.dataset.tokenizer(
             prompts,
-            return_tensors=None,  # return a list of lists
+            return_tensors=None,
             padding=False,
             truncation=False,
             max_length=None,
         )["input_ids"]
+
         for ix in range(len(tokenized_prompts)):
             generated = list(
                 decoder_only_model.sample(
-                    model=self.model,
+                    model=model_single,
                     input_tokens=tokenized_prompts[ix],
                     key=jax.random.PRNGKey(0),
                     max_output_tokens=max_tokens,
@@ -282,6 +347,7 @@ class Experiment:
 
         # Log metrics
         if self.step % self.logger_config.train_log_interval_steps == 0:
+            # loss_val is already averaged across devices
             self.logger_obj.log(self.step, metrics={"train/loss": float(loss_val)})
 
     def outer_loop(self):
