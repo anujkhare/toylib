@@ -3,6 +3,7 @@
 # ============================================================
 
 from jax import numpy as jnp
+from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 from transformers import AutoTokenizer
 import abc
 import dataclasses
@@ -10,6 +11,7 @@ import datetime
 import einops
 import jax
 import jaxtyping as jt
+import json
 import math
 import numpy as np
 import optax
@@ -710,7 +712,9 @@ class FileLogger(Logger):
 
     def log(self, step: int, metrics: dict) -> None:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.file_ptr.write(f"[{timestamp}] Step {step}: {metrics}\n")
+        metrics["timestamp"] = timestamp
+        metrics["step"] = step
+        self.file_ptr.write(json.dumps(metrics) + "\n")
         self.file_ptr.flush()
 
     def close(self) -> None:
@@ -780,11 +784,11 @@ class LoggerConfig:
     train_log_interval_steps: int = 1
 
 
-def _serlialize_dataclass_config(config: dataclasses.dataclass) -> dict:
+def _serialize_dataclass_config(config: dataclasses.dataclass) -> dict:
     result = dataclasses.asdict(config)
     for k, v in result.items():
         if dataclasses.is_dataclass(v):
-            result[k] = _serlialize_dataclass_config(v)
+            result[k] = _serialize_dataclass_config(v)
     return result
 
 
@@ -805,8 +809,28 @@ class Experiment:
     jit_computations: bool = True
 
     def __post_init__(self):
+        self.num_devices = jax.local_device_count()
+        devices = np.array(jax.local_devices())
+        self.mesh = Mesh(devices, axis_names=("data",))
+        self.replicated_sharding = NamedSharding(self.mesh, P())
+        self.data_sharding = NamedSharding(self.mesh, P("data"))
+        train_batch_size = self.train_task.dataset.batch_size
+        eval_batch_size = (
+            self.eval_task.dataset.batch_size if self.eval_task is not None else 0
+        )
+        if train_batch_size % self.num_devices != 0:
+            raise ValueError(
+                f"Batch size {self.batch_size} not divisible by number of devices {self.num_devices}"
+            )
+        if eval_batch_size % self.num_devices != 0 and eval_batch_size != 0:
+            raise ValueError(
+                f"Eval batch size {eval_batch_size} not divisible by number of devices {self.num_devices}"
+            )
+        print(
+            f"Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}"
+        )
         self.logger_obj = self.logger_config.logger_cls(
-            config_dict=_serlialize_dataclass_config(self),
+            config_dict=_serialize_dataclass_config(self),
             output_path=self.logger_config.log_dir,
         )
         self.optimizer = optax.adam(learning_rate=self.training_config.learning_rate)
@@ -825,11 +849,12 @@ class Experiment:
 
         def train_step(model, opt_state, batch):
             inputs, targets = (batch["inputs"], batch["targets"])
-            mask = jax.numpy.ones_like(inputs)
+            mask = jnp.ones_like(inputs)
             with jax.profiler.TraceAnnotation("value_and_grad"):
                 (loss_val, _), grads = jax.value_and_grad(
                     self.forward_fn, has_aux=True
                 )(model, inputs, mask, targets)
+                grads = jax.tree.map(lambda g: g / self.num_devices, grads)
             with jax.profiler.TraceAnnotation("optimizer_update"):
                 updates, opt_state = self.optimizer.update(grads, opt_state)
                 model = optax.apply_updates(model, updates)
@@ -837,14 +862,30 @@ class Experiment:
 
         def eval_step(model, batch):
             inputs, targets = (batch["inputs"], batch["targets"])
-            mask = jax.numpy.ones_like(inputs)
+            mask = jnp.ones_like(inputs)
             with jax.profiler.TraceAnnotation("eval_forward"):
                 loss_val, _ = self.forward_fn(model, inputs, mask, targets)
             return loss_val
 
         if self.jit_computations:
-            self.train_step_fn = jax.jit(train_step)
-            self.eval_step_fn = jax.jit(eval_step)
+            self.train_step_fn = jax.jit(
+                train_step,
+                in_shardings=(
+                    self.replicated_sharding,
+                    self.replicated_sharding,
+                    self.data_sharding,
+                ),
+                out_shardings=(
+                    self.replicated_sharding,
+                    self.replicated_sharding,
+                    self.replicated_sharding,
+                ),
+            )
+            self.eval_step_fn = jax.jit(
+                eval_step,
+                in_shardings=(self.replicated_sharding, self.data_sharding),
+                out_shardings=self.replicated_sharding,
+            )
         else:
             self.train_step_fn = train_step
             self.eval_step_fn = eval_step
@@ -853,18 +894,27 @@ class Experiment:
         self.model = DecoderOnlyTransformer(
             config=self.model_config, key=jax.random.PRNGKey(0)
         )
+        self.model = jax.device_put(self.model, self.replicated_sharding)
         self.opt_state = self.optimizer.init(self.model)
+        self.opt_state = jax.device_put(self.opt_state, self.replicated_sharding)
         self.step = 0
+        print(f"Model initialized and replicated across {self.num_devices} devices")
 
     def _assert_initialized(self) -> bool:
         initialized = self.model is not None and self.opt_state is not None
         assert initialized, "Experiment state not initialized. Call init_state() first."
 
+    def _unreplicate_for_checkpoint(self, pytree):
+        """Get a single copy of replicated state for checkpointing."""
+        return jax.tree.map(lambda x: np.asarray(x), pytree)
+
     def save_checkpoint(self):
         self._assert_initialized()
+        model_to_save = self._unreplicate_for_checkpoint(self.model)
+        opt_state_to_save = self._unreplicate_for_checkpoint(self.opt_state)
         args = {
-            "model": ocp.args.StandardSave(self.model),
-            "opt_state": ocp.args.StandardSave(self.opt_state),
+            "model": ocp.args.StandardSave(model_to_save),
+            "opt_state": ocp.args.StandardSave(opt_state_to_save),
         }
         if self.checkpoint_config.checkpoint_dataset_iterator:
             args["dataset_iterator"] = ocp.args.StandardSave(
@@ -875,17 +925,19 @@ class Experiment:
 
     def restore_checkpoint(self, step: int):
         self._assert_initialized()
+        model_template = self._unreplicate_for_checkpoint(self.model)
+        opt_state_template = self._unreplicate_for_checkpoint(self.opt_state)
         args = {
-            "model": ocp.args.StandardRestore(self.model),
-            "opt_state": ocp.args.StandardRestore(self.opt_state),
+            "model": ocp.args.StandardRestore(model_template),
+            "opt_state": ocp.args.StandardRestore(opt_state_template),
         }
         if self.checkpoint_config.checkpoint_dataset_iterator:
             args["dataset_iterator"] = ocp.args.StandardRestore(
                 self.train_task.dataset.get_state()
             )
         restored = self.ckpt_manager.restore(step, args=ocp.args.Composite(**args))
-        self.model = restored["model"]
-        self.opt_state = restored["opt_state"]
+        self.model = jax.device_put(restored["model"], self.replicated_sharding)
+        self.opt_state = jax.device_put(restored["opt_state"], self.replicated_sharding)
         if self.checkpoint_config.checkpoint_dataset_iterator:
             self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
@@ -898,16 +950,17 @@ class Experiment:
         total_val_loss = 0.0
         for ix, batch in enumerate(self.eval_task.dataset):
             val_loss = self.eval_step_fn(self.model, batch)
-            total_val_loss += val_loss
+            total_val_loss += float(val_loss)
             if ix >= self.eval_config.num_eval_steps:
                 break
         avg_val_loss = total_val_loss / (ix + 1)
-        self.logger_obj.log(self.step, metrics={"val/loss": float(avg_val_loss)})
+        self.logger_obj.log(self.step, metrics={"val/loss": avg_val_loss})
+        return avg_val_loss
 
     def sampling_evaluation(
         self, prompts: list[str] | None = None, max_tokens: int = 10
     ) -> None:
-        """Run sampling evaluation on the model given a list of prompts.
+        """Run sampling evaluation (runs on single device for simplicity).
 
         Args:
             prompts: List of string prompts to evaluate.
@@ -915,6 +968,7 @@ class Experiment:
         self._assert_initialized()
         if prompts is None:
             prompts = DEFAULT_PROMPTS
+        model_single = jax.tree.map(lambda x: np.asarray(x), self.model)
         results = []
         tokenized_prompts = self.train_task.dataset.tokenizer(
             prompts,
@@ -926,7 +980,7 @@ class Experiment:
         for ix in range(len(tokenized_prompts)):
             generated = list(
                 sample(
-                    model=self.model,
+                    model=model_single,
                     input_tokens=tokenized_prompts[ix],
                     key=jax.random.PRNGKey(0),
                     max_output_tokens=max_tokens,
