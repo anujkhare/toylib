@@ -3,6 +3,7 @@
 import jax
 import jax.numpy as jnp
 import jaxtyping as jt
+import optax
 import pytest
 
 from toylib.nn import module
@@ -114,3 +115,29 @@ class TestModule:
 
         # Should have captured the path to 'weight'
         assert len(paths) > 0
+
+    def test_optax_training_loop(self, linear_module, sample_input):
+        """Test a full training loop with optax."""
+        model = linear_module(key=jax.random.PRNGKey(0))
+        optimizer = optax.adam(learning_rate=0.01)
+        opt_state = optimizer.init(model)
+
+        target = jnp.array([1.0, 0.0])
+
+        def loss_fn(model, inputs):
+            return jnp.mean((model(inputs) - target) ** 2)
+
+        @jax.jit
+        def train_step(m, opt_state, x):
+            loss, grads = jax.value_and_grad(loss_fn)(m, x)
+            updates, new_opt_state = optimizer.update(grads, opt_state, m)
+            new_model = optax.apply_updates(m, updates)
+            return new_model, new_opt_state, loss
+
+        new_model, opt_state, loss = train_step(model, opt_state, sample_input)
+
+        assert isinstance(new_model, linear_module)
+        assert not jnp.array_equal(new_model.w, model.w)
+        assert not jnp.array_equal(new_model.bias, model.bias)
+
+        assert loss > 0
