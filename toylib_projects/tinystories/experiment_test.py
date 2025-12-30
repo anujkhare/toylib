@@ -10,14 +10,21 @@ from toylib_projects.tinystories import experiment
 
 
 class TestSerializeDataclassConfig:
-    """Tests for _serlialize_dataclass_config function."""
+    """Tests for _serialize_dataclass_config function."""
 
     def test_simple_dataclass(self):
         """Test serialization of simple dataclass."""
-        config = experiment.TrainingConfig(learning_rate=0.001, max_steps=5000)
-        result = experiment._serlialize_dataclass_config(config)
 
-        assert result == {"learning_rate": 0.001, "max_steps": 5000}
+        @dataclasses.dataclass
+        class TestConfig:
+            foo: int = 10
+            bar: str = "test"
+            baz: float = 3.14
+
+        config = TestConfig()
+        result = experiment._serialize_dataclass_config(config)
+
+        assert result == {"foo": 10, "bar": "test", "baz": 3.14}
 
     def test_nested_dataclass(self):
         """Test serialization of nested dataclass."""
@@ -32,7 +39,7 @@ class TestSerializeDataclassConfig:
             name: str = "test"
 
         config = Outer()
-        result = experiment._serlialize_dataclass_config(config)
+        result = experiment._serialize_dataclass_config(config)
 
         assert result == {"inner": {"value": 10}, "name": "test"}
 
@@ -43,6 +50,7 @@ class TestExperiment:
     def test_config_initialization(self):
         """Test that Experiment initializes properly."""
         mock_dataset = Mock()
+        mock_dataset.batch_size = 4
         train_task = experiment.Task(name="train", dataset=mock_dataset)
 
         exp = experiment.Experiment(train_task=train_task)
@@ -53,14 +61,19 @@ class TestExperiment:
         assert exp.opt_state is None
         assert exp.model is None
 
+    @patch(
+        "toylib_projects.tinystories.experiment.jax.device_put",
+        side_effect=lambda x, *a, **kw: x,
+    )
     @patch("toylib_projects.tinystories.experiment.logger.TensorBoardLogger")
     @patch(
         "toylib_projects.tinystories.experiment.decoder_only_model.DecoderOnlyTransformer"
     )
     @patch("optax.adam")
-    def test_init_state(self, mock_opt, mock_model_class, mock_logger):
+    def test_init_state(self, mock_opt, mock_model_class, mock_logger, mock_device_put):
         """Test that init_state initializes model and optimizer state."""
         mock_dataset = Mock()
+        mock_dataset.batch_size = 4
         train_task = experiment.Task(name="train", dataset=mock_dataset)
         mock_model = MagicMock()
         mock_model_class.return_value = mock_model

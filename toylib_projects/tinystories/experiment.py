@@ -3,6 +3,7 @@
 import dataclasses
 import jax
 import jax.numpy as jnp
+import jaxtyping as jt
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import numpy as np
 import optax
@@ -37,6 +38,12 @@ class CheckpointConfig:
 class TrainingConfig:
     learning_rate: float = 1e-3
     max_steps: int = 100_000
+    # The total batch size is effectively `batch_size * num_microbatches`.
+    # This leads to an effective total number of tokens of
+    # `batch_size * seq_len * num_microbatches`. The batch is sharded
+    # between the available devices.
+    # Only applied to the training config.
+    num_microbatches: int = 1
 
 
 @dataclasses.dataclass
@@ -103,17 +110,8 @@ class Experiment:
     # Whether to JIT compile the training step - disable only for debugging
     jit_computations: bool = True
 
-    def __post_init__(self):
-        # Set up device mesh for data parallelism
-        self.num_devices = jax.local_device_count()
-        devices = np.array(jax.local_devices())
-        self.mesh = Mesh(devices, axis_names=("data",))
-
-        # Model and optimizer state: replicated across all devices
-        self.replicated_sharding = NamedSharding(self.mesh, P())
-        # Data: sharded along batch dimension across devices
-        self.data_sharding = NamedSharding(self.mesh, P("data"))
-
+    def _validate_configs(self) -> None:
+        # Validate train and eval batch sizes
         train_batch_size = self.train_task.dataset.batch_size
         eval_batch_size = (
             self.eval_task.dataset.batch_size if self.eval_task is not None else 0
@@ -128,9 +126,33 @@ class Experiment:
                 f"Eval batch size {eval_batch_size} not divisible by number of "
                 f"devices {self.num_devices}"
             )
+        if (
+            train_batch_size / self.num_devices
+        ) % self.training_config.num_microbatches != 0:
+            raise ValueError(
+                f"Number of microbatches {self.training_config.num_microbatches} "
+                f"does not evenly divide per-device batch size "
+                f"{train_batch_size // self.num_devices}"
+            )
+
+    def _setup_sharding(self) -> None:
+        # Set up device mesh for data parallelism
+        self.num_devices = jax.local_device_count()
+        devices = np.array(jax.local_devices())
+        self.mesh = Mesh(devices, axis_names=("data",))
+
+        # Model and optimizer state: replicated across all devices
+        self.replicated_sharding = NamedSharding(self.mesh, P())
+        # Data: sharded along batch dimension across devices
+        self.data_sharding = NamedSharding(self.mesh, P("data"))
+
         print(
             f"Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}"
         )
+
+    def __post_init__(self):
+        self._setup_sharding()
+        self._validate_configs()
 
         # Logger
         self.logger_obj = self.logger_config.logger_cls(
@@ -155,32 +177,56 @@ class Experiment:
             ),
         )
 
+        def _slice_tensors(
+            inputs: jt.PyTree, start: int = 0, end: int | None = None
+        ) -> jt.PyTree:
+            return jax.tree_util.tree_map(lambda x: x[start:end], inputs)
+
         # Train step
         def train_step(model, opt_state, batch):
-            inputs, targets = batch["inputs"], batch["targets"]
-            mask = jnp.ones_like(inputs)
+            # train_step is run on each device with a shard of the batch
+            sharded_batch_size = batch["inputs"].shape[0]
 
-            with jax.profiler.TraceAnnotation("value_and_grad"):
-                # Compute loss and gradients
-                (loss_val, _), grads = jax.value_and_grad(
-                    self.forward_fn, has_aux=True
-                )(model, inputs, mask, targets)
-                grads = jax.tree.map(lambda g: g / self.num_devices, grads)
+            # Microbatching related config
+            num_microbatches = self.training_config.num_microbatches
+            microbatch_size = sharded_batch_size // num_microbatches
+
+            total_grads = jax.tree.map(lambda x: jnp.zeros_like(x), model)
+            total_loss = 0.0
+            with jax.profiler.TraceAnnotation("microbatch_loop"):
+                for microbatch_idx in range(num_microbatches):
+                    start_idx, end_idx = (
+                        microbatch_idx * microbatch_size,
+                        (microbatch_idx + 1) * microbatch_size,
+                    )
+
+                    # Run forward and backward pass on the microbatch
+                    (loss_val, _), grads = jax.value_and_grad(
+                        self.forward_fn, has_aux=True
+                    )(model, _slice_tensors(batch, start_idx, end_idx))
+
+                    # Accumulate the gradients and loss over microbatches
+                    total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
+                    total_loss += loss_val
+
+                # The default reduce operation in jax is a sum across devices
+                # Average the grads by the number of devices and microbatches
+                total_grads = jax.tree.map(
+                    lambda g: g / self.num_devices / num_microbatches, total_grads
+                )
+                total_loss /= num_microbatches
 
             with jax.profiler.TraceAnnotation("optimizer_update"):
-                updates, opt_state = self.optimizer.update(grads, opt_state)
+                updates, opt_state = self.optimizer.update(total_grads, opt_state)
 
                 # Update the model and optimizer state
                 model = optax.apply_updates(model, updates)
 
-            return model, opt_state, loss_val
+            return model, opt_state, total_loss
 
         def eval_step(model, batch):
-            inputs, targets = batch["inputs"], batch["targets"]
-            mask = jnp.ones_like(inputs)
-
             with jax.profiler.TraceAnnotation("eval_forward"):
-                loss_val, _ = self.forward_fn(model, inputs, mask, targets)
+                loss_val, _ = self.forward_fn(model, batch)
 
             return loss_val
 
