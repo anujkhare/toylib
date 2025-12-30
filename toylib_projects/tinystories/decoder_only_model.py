@@ -7,7 +7,7 @@ from toylib.nn import layers
 from toylib.nn import module
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class ModelConfig:
     """Configuration for the DecoderOnlyTransformer model."""
 
