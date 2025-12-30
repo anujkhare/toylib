@@ -34,7 +34,7 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
   * [*] Training budget - # tokens
   * [*] Multi-core training?
   * [*] Gradient accumulation / micro-batching
-  * [ ] TF Grain
+  * [*] TF Grain
   * [ ] Handle interrupts: restore checkpoints and dataset iterators
   * [ ] Profile / improve resource usage
   * [ ] Multi-pod training?

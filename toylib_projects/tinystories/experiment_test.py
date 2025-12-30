@@ -528,3 +528,51 @@ class TestExperimentE2E:
         assert exp.step == 10
 
         exp.cleanup()
+
+    @pytest.mark.skip
+    def test_dataset_checkpointing(self, train_dataset, checkpoint_dir, log_dir):
+        """Test that dataset state is checkpointed and restored correctly."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        # Enable dataset checkpointing
+        exp.checkpoint_config.checkpoint_dataset_iterator = True
+        exp.init_state()
+
+        # Fetch some batches to advance the dataset iterator
+        batch1 = next(iter(train_dataset))
+        exp.inner_loop(batch1)
+
+        batch2 = next(iter(train_dataset))
+        exp.inner_loop(batch2)
+
+        exp.step = 100
+
+        # Get the dataset state before saving
+        dataset_state_before_save = train_dataset.get_state()
+
+        # Save checkpoint
+        exp.save_checkpoint()
+
+        # Continue iterating the dataset
+        batch3 = next(iter(train_dataset))
+        exp.inner_loop(batch3)
+
+        # Dataset state should have advanced
+        dataset_state_after_batch3 = train_dataset.get_state()
+        assert (
+            dataset_state_after_batch3["iteration_count"]
+            > dataset_state_before_save["iteration_count"]
+        )
+
+        # Restore checkpoint
+        exp.restore_checkpoint(100)
+
+        # Dataset state should be restored to the saved state
+        dataset_state_after_restore = train_dataset.get_state()
+        assert (
+            dataset_state_after_restore["iteration_count"]
+            == dataset_state_before_save["iteration_count"]
+        )
+
+        exp.cleanup()

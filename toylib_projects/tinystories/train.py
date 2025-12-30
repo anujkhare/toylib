@@ -50,7 +50,7 @@ def create_experiment(
     # Dataloader
     train_task = experiment.Task(
         name="train",
-        dataset=data.BatchedTokenizedDatasetParquet(
+        dataset=data.BatchedTokenizedDatasetGrain(
             dataset_path=dataset_path,
             split=dataset_train_split,
             batch_size=batch_size,
@@ -62,7 +62,7 @@ def create_experiment(
     if dataset_val_split is not None:
         val_task = experiment.Task(
             name="val",
-            dataset=data.BatchedTokenizedDatasetParquet(
+            dataset=data.BatchedTokenizedDatasetGrain(
                 dataset_path=dataset_path,
                 split=dataset_val_split,
                 batch_size=batch_size,
