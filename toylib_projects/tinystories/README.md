@@ -36,4 +36,5 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 * [ ] Post-training
 * [ ] Nice-to-haves
     * [ ] Scaling laws
-    * [ ] Handle interrupts: restore checkpoints and dataset iterators
+    * [ ] TF Grain
+    * [ ] ~~Handle interrupts: restore checkpoints and dataset iterators~~
