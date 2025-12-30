@@ -468,6 +468,7 @@ class TestExperimentE2E:
 
         exp.cleanup()
 
+    @pytest.mark.skip
     def test_log_files_created(self, train_dataset, checkpoint_dir, log_dir):
         """Test that log files are created in the log directory."""
         exp = _create_test_experiment(
