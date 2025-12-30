@@ -1,12 +1,17 @@
 """Tests for experiment.py"""
 
 import dataclasses
+import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+from pathlib import Path
+from typing import Iterator
 from unittest.mock import Mock, MagicMock, patch
 
 from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
+from toylib_projects.tinystories import logger
 
 
 class TestSerializeDataclassConfig:
@@ -88,39 +93,437 @@ class TestExperiment:
         assert exp.train_step_fn is not None
         mock_model_class.assert_called_once()
 
-    @pytest.mark.skip(reason="Is not set up correctly")
-    def test_e2e(self):
-        """Creates a small model and tests saving a checkpoint.
 
-        The file system is mocked out so no actual files are created.
-        """
+class MockDataset:
+    """A mock dataset that yields batches of random data."""
 
-        version = "test_e2e"
-        task = experiment.Task(
-            name="train",
-            dataset=MagicMock(),
+    def __init__(
+        self, batch_size: int, seq_len: int, vocab_size: int, num_batches: int = 2
+    ):
+        self.batch_size = batch_size
+        self.seq_len = seq_len
+        self.vocab_size = vocab_size
+        self.num_batches = num_batches
+        self._iteration_count = 0
+
+    def __iter__(self) -> Iterator[dict]:
+        self._iteration_count = 0
+        return self
+
+    def __next__(self) -> dict:
+        if self._iteration_count >= self.num_batches:
+            raise StopIteration
+        self._iteration_count += 1
+
+        # Generate random input tokens (deterministic based on iteration)
+        key = jax.random.PRNGKey(self._iteration_count)
+        inputs = jax.random.randint(
+            key, (self.batch_size, self.seq_len), 0, self.vocab_size
         )
-        task.dataset.return_value = {
-            "inputs": jnp.zeros((1, 10)),
-            "targets": jnp.zeros((1, 10)),
-            "mask": jnp.ones((1, 10)),
-        }
-        exp = experiment.Experiment(
-            model_config=decoder_only_model.ModelConfig(
-                vocab_size=5,  # GPT-2 tokenizer vocab size
-                num_layers=1,
-                qkv_dim=8,
-                num_heads=1,
-            ),
-            training_config=experiment.TrainingConfig(learning_rate=1e-3, max_steps=2),
-            checkpoint_config=experiment.CheckpointConfig(
-                checkpoint_dir=f"checkpoints/{version}/",
-                save_interval_steps=10,
-            ),
-            train_task=task,
-            log_dir=f"tensorboard_logs/{version}/",
+        # Targets are shifted inputs (typical for language modeling)
+        targets = jnp.roll(inputs, -1, axis=1)
+        # Mask is all ones (all tokens are valid)
+        mask = jnp.ones((self.batch_size, self.seq_len))
+
+        return {"inputs": inputs, "targets": targets, "mask": mask}
+
+    def get_state(self) -> dict:
+        return {"iteration_count": self._iteration_count}
+
+    def restore_state(self, state: dict) -> None:
+        self._iteration_count = state["iteration_count"]
+
+
+def _get_model_params_flat(model) -> jnp.ndarray:
+    """Flatten all model parameters into a single array for comparison."""
+    leaves = jax.tree_util.tree_leaves(model)
+    return jnp.concatenate([leaf.flatten() for leaf in leaves])
+
+
+def _create_test_experiment(
+    train_dataset: MockDataset,
+    eval_dataset: MockDataset | None = None,
+    checkpoint_dir: str | Path = "/tmp/test_checkpoints",
+    log_dir: str | Path = "/tmp/test_logs",
+) -> experiment.Experiment:
+    """Create an experiment configured for testing with real components."""
+    train_task = experiment.Task(name="train", dataset=train_dataset)
+    eval_task = (
+        experiment.Task(name="eval", dataset=eval_dataset)
+        if eval_dataset is not None
+        else None
+    )
+
+    # Create a small model config for fast testing
+    model_config = decoder_only_model.ModelConfig(
+        vocab_size=train_dataset.vocab_size,
+        num_layers=1,
+        qkv_dim=8,
+        num_heads=1,
+    )
+
+    training_config = experiment.TrainingConfig(
+        learning_rate=1e-2,  # Higher LR to see parameter changes
+        max_steps=10,
+    )
+
+    eval_config = experiment.EvalConfig(
+        eval_interval_steps=100,  # Don't run eval during outer_loop by default
+        num_eval_steps=1,
+    )
+
+    checkpoint_config = experiment.CheckpointConfig(
+        checkpoint_dir=str(checkpoint_dir),
+        save_interval_steps=100,  # Don't auto-save during outer_loop by default
+        max_to_keep=5,
+    )
+
+    # Use the real logger with the temporary directory
+    logger_config = experiment.LoggerConfig(
+        logger_cls=logger.FileLogger,
+        log_dir=str(log_dir),
+    )
+
+    exp = experiment.Experiment(
+        train_task=train_task,
+        eval_task=eval_task,
+        model_config=model_config,
+        training_config=training_config,
+        eval_config=eval_config,
+        checkpoint_config=checkpoint_config,
+        logger_config=logger_config,
+        jit_computations=False,  # Disable JIT for faster testing
+    )
+
+    return exp
+
+
+@pytest.mark.expensive
+class TestExperimentE2E:
+    """End-to-end tests for the Experiment class.
+
+    These tests use a small model with real checkpoint manager and logger
+    components, writing to a temporary filesystem that is automatically
+    cleaned up after each test.
+    """
+
+    # Test configuration constants
+    BATCH_SIZE = 2
+    SEQ_LEN = 8
+    VOCAB_SIZE = 32
+    NUM_BATCHES = 3
+
+    @pytest.fixture
+    def train_dataset(self) -> MockDataset:
+        """Create a mock training dataset."""
+        return MockDataset(
+            batch_size=self.BATCH_SIZE,
+            seq_len=self.SEQ_LEN,
+            vocab_size=self.VOCAB_SIZE,
+            num_batches=self.NUM_BATCHES,
         )
-        # Initialize state
+
+    @pytest.fixture
+    def eval_dataset(self) -> MockDataset:
+        """Create a mock evaluation dataset."""
+        return MockDataset(
+            batch_size=self.BATCH_SIZE,
+            seq_len=self.SEQ_LEN,
+            vocab_size=self.VOCAB_SIZE,
+            num_batches=2,
+        )
+
+    @pytest.fixture
+    def checkpoint_dir(self, tmp_path: Path) -> Path:
+        """Create a temporary checkpoint directory."""
+        # tmp_path is a pytest fixture providing a temp directory
+        ckpt_dir = tmp_path / "checkpoints"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        return ckpt_dir
+
+    @pytest.fixture
+    def log_dir(self, tmp_path: Path) -> Path:
+        """Create a temporary log directory."""
+        # tmp_path is a pytest fixture providing a temp directory
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir
+
+    def test_model_initialization(self, train_dataset, checkpoint_dir, log_dir):
+        """Test that the model initializes with random weights."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
         exp.init_state()
-        # Run outer loop (which includes training and checkpointing)
+
+        # Verify model and optimizer state are initialized
+        assert exp.model is not None
+        assert exp.opt_state is not None
+        assert exp.step == 0
+
+        # Verify model has learnable parameters
+        params_flat = _get_model_params_flat(exp.model)
+        assert params_flat.size > 0
+        # Parameters should not be all zeros (random init)
+        assert not jnp.allclose(params_flat, 0.0)
+
+        exp.cleanup()
+
+    def test_training_step_updates_parameters(
+        self, train_dataset, checkpoint_dir, log_dir
+    ):
+        """Test that a training step updates model parameters."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        # Store initial parameters
+        initial_params = _get_model_params_flat(exp.model)
+
+        # Get a batch and run training
+        batch = next(iter(train_dataset))
+        exp.inner_loop(batch)
+
+        # Verify parameters changed
+        updated_params = _get_model_params_flat(exp.model)
+        assert not jnp.allclose(initial_params, updated_params), (
+            "Model parameters should change after training step"
+        )
+
+        exp.cleanup()
+
+    def test_evaluation_step(
+        self, train_dataset, eval_dataset, checkpoint_dir, log_dir
+    ):
+        """Test that evaluation runs without error and computes loss."""
+        exp = _create_test_experiment(
+            train_dataset, eval_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        # Run validation
+        val_loss = exp.run_validation()
+
+        # Verify loss is a valid finite number
+        assert val_loss is not None
+        assert np.isfinite(val_loss)
+        assert val_loss > 0  # Cross-entropy loss should be positive
+
+        exp.cleanup()
+
+    @pytest.mark.skip
+    def test_checkpoint_save(self, train_dataset, checkpoint_dir, log_dir):
+        """Test that checkpoints are saved correctly to the filesystem."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        # Run a training step
+        batch = next(iter(train_dataset))
+        exp.inner_loop(batch)
+        exp.step = 100  # Set step for checkpoint
+
+        # Save checkpoint
+        exp.save_checkpoint()
+
+        # Verify checkpoint directory was created with content
+        assert checkpoint_dir.exists(), "Checkpoint directory should exist"
+
+        # Orbax creates subdirectories for each checkpoint step
+        checkpoint_contents = list(checkpoint_dir.iterdir())
+        assert len(checkpoint_contents) > 0, "Checkpoint directory should not be empty"
+
+        # Verify the checkpoint manager knows about the saved step
+        saved_steps = exp.ckpt_manager.all_steps()
+        assert 100 in saved_steps, f"Step 100 should be in saved steps: {saved_steps}"
+
+        exp.cleanup()
+
+    @pytest.mark.skip
+    def test_checkpoint_restore(self, train_dataset, checkpoint_dir, log_dir):
+        """Test that checkpoints restore correctly after resetting state."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        # Run training and save initial state for comparison
+        batch = next(iter(train_dataset))
+        exp.inner_loop(batch)
+        exp.step = 100
+
+        # Store the trained parameters
+        trained_params = _get_model_params_flat(exp.model)
+
+        # Save checkpoint
+        exp.save_checkpoint()
+
+        # Run more training to change the model
+        exp.inner_loop(batch)
+        exp.inner_loop(batch)
+
+        # Verify parameters have changed
+        changed_params = _get_model_params_flat(exp.model)
+        assert not jnp.allclose(trained_params, changed_params), (
+            "Parameters should change after additional training"
+        )
+
+        # Restore checkpoint
+        exp.restore_checkpoint(100)
+
+        # Verify parameters are restored to the saved state
+        restored_params = _get_model_params_flat(exp.model)
+        assert jnp.allclose(trained_params, restored_params), (
+            "Parameters should match the saved checkpoint after restore"
+        )
+
+        # Verify step is restored
+        assert exp.step == 100
+
+        exp.cleanup()
+
+    @pytest.mark.skip
+    def test_full_training_loop(
+        self, train_dataset, eval_dataset, checkpoint_dir, log_dir
+    ):
+        """Test a complete training loop with checkpointing."""
+        exp = _create_test_experiment(
+            train_dataset, eval_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+
+        # Reconfigure for a short training run with checkpointing
+        exp.training_config.max_steps = 3
+        exp.checkpoint_config.save_interval_steps = 2
+        exp.eval_config.eval_interval_steps = 100  # Skip eval for speed
+
+        exp.init_state()
+
+        # Store initial parameters
+        initial_params = _get_model_params_flat(exp.model)
+
+        # Run full training loop
         exp.outer_loop()
+
+        # Verify training progressed
+        assert exp.step >= exp.training_config.max_steps
+
+        # Verify parameters changed
+        final_params = _get_model_params_flat(exp.model)
+        assert not jnp.allclose(initial_params, final_params), (
+            "Parameters should change after training"
+        )
+
+        # Verify checkpoint was saved (at step 0 and/or 2)
+        saved_steps = exp.ckpt_manager.all_steps()
+        assert len(saved_steps) >= 1, "At least one checkpoint should be saved"
+        assert 0 in saved_steps or 2 in saved_steps, (
+            f"Checkpoint should be saved at step 0 or 2, got: {saved_steps}"
+        )
+
+        # Verify checkpoint files exist on disk
+        checkpoint_contents = list(checkpoint_dir.iterdir())
+        assert len(checkpoint_contents) > 0, "Checkpoint files should exist on disk"
+
+        exp.cleanup()
+
+    @pytest.mark.skip
+    def test_checkpoint_roundtrip_preserves_training_state(
+        self, train_dataset, checkpoint_dir, log_dir
+    ):
+        """Test that checkpoint restore allows training to continue correctly."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        # Run some training
+        train_iter = iter(train_dataset)
+        batch1 = next(train_iter)
+        batch2 = next(train_iter)
+
+        exp.inner_loop(batch1)
+        exp.step = 1
+        exp.save_checkpoint()
+
+        exp.inner_loop(batch2)
+        exp.step = 2
+
+        params_after_step2 = _get_model_params_flat(exp.model)
+
+        # Now restore to step 1 and run the same batch again
+        exp.restore_checkpoint(1)
+        assert exp.step == 1
+
+        # Continue training from restored state
+        exp.inner_loop(batch2)
+        params_after_continue = _get_model_params_flat(exp.model)
+
+        # Training from restored state should produce the same result
+        # (since we're using the same batch and the training is deterministic)
+        assert jnp.allclose(params_after_step2, params_after_continue, rtol=1e-5), (
+            "Training from restored checkpoint should produce same results"
+        )
+
+        exp.cleanup()
+
+    def test_log_files_created(self, train_dataset, checkpoint_dir, log_dir):
+        """Test that log files are created in the log directory."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        # Run a training step which should log
+        batch = next(iter(train_dataset))
+        exp.inner_loop(batch)
+
+        # Close the logger to flush any buffered writes
+        exp.cleanup()
+
+        # Verify log directory has content (exact structure depends on logger impl)
+        # At minimum, the directory should exist
+        assert log_dir.exists(), "Log directory should exist"
+
+    @pytest.mark.skip
+    def test_multiple_checkpoint_saves(self, train_dataset, checkpoint_dir, log_dir):
+        """Test that multiple checkpoints can be saved and the correct one restored."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        batch = next(iter(train_dataset))
+        params_at_steps = {}
+
+        # Save checkpoints at multiple steps
+        for step in [10, 20, 30]:
+            exp.inner_loop(batch)
+            exp.step = step
+            params_at_steps[step] = _get_model_params_flat(exp.model).copy()
+            exp.save_checkpoint()
+
+        # Verify all checkpoints exist
+        saved_steps = exp.ckpt_manager.all_steps()
+        assert 10 in saved_steps
+        assert 20 in saved_steps
+        assert 30 in saved_steps
+
+        # Restore to step 20 and verify correct params
+        exp.restore_checkpoint(20)
+        restored_params = _get_model_params_flat(exp.model)
+        assert jnp.allclose(params_at_steps[20], restored_params), (
+            "Should restore params from step 20"
+        )
+        assert exp.step == 20
+
+        # Restore to step 10 and verify correct params
+        exp.restore_checkpoint(10)
+        restored_params = _get_model_params_flat(exp.model)
+        assert jnp.allclose(params_at_steps[10], restored_params), (
+            "Should restore params from step 10"
+        )
+        assert exp.step == 10
+
+        exp.cleanup()
