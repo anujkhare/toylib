@@ -215,20 +215,19 @@ def loss_fn(
 
 def train_step(
     model: DecoderOnlyTransformer,
-    tokens: jt.Int[jt.Array, "batch_size seq_len"],
-    mask: jt.Int[jt.Array, "batch_size seq_len"],
-    targets: jt.Int[jt.Array, "batch_size seq_len"],
+    batch: jt.PyTree,
 ) -> jt.Float[jt.Array, ""]:
     """A single training step for the model.
 
     Args:
         model: The DecoderOnlyTransformer model.
-        batch: Input token ids of shape [batch_size, seq_len].
-        labels: Target token ids of shape [batch_size, seq_len].
+        batch: PyTree containing 'inputs', 'targets', and 'mask', each of shape
+            [batch_size, seq_len].
 
     Returns:
         Loss value for the batch.
     """
+    tokens, targets, mask = batch["inputs"], batch["targets"], batch["mask"]
     logits = model(tokens)  # doesn't use mask right now
     total_loss, per_token_loss = loss_fn(logits, targets, mask)
     return total_loss, {"logits": logits, "per_token_loss": per_token_loss}

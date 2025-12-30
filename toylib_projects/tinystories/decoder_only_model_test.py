@@ -3,7 +3,8 @@
 import pytest
 import jax
 import jax.numpy as jnp
-from unittest.mock import Mock, MagicMock, patch
+import jaxtyping as jt
+from unittest.mock import Mock, patch
 
 from toylib_projects.tinystories import decoder_only_model
 
@@ -37,11 +38,14 @@ class TestDecoderOnlyTransformer:
 
 class TestTrainStep:
     @pytest.mark.parametrize(
-        "input_tokens,target_tokens,model_config",
+        "batch,model_config",
         [
             (
-                jnp.array([[1, 2, 3, 0, 0], [4, 5, 6, 0, 0]]),
-                jnp.array([[2, 3, 4, 0, 0], [5, 6, 7, 0, 0]]),
+                {
+                    "inputs": jnp.array([[1, 2, 3, 0, 0], [4, 5, 6, 0, 0]]),
+                    "targets": jnp.array([[2, 3, 4, 0, 0], [5, 6, 7, 0, 0]]),
+                    "mask": jnp.array([[1, 1, 1, 1, 1], [1, 1, 1, 1, 1]]),
+                },
                 decoder_only_model.ModelConfig(
                     num_layers=2, num_heads=2, qkv_dim=16, vocab_size=10, seq_len=5
                 ),
@@ -50,8 +54,7 @@ class TestTrainStep:
     )
     def test_smoke(
         self,
-        input_tokens: jnp.ndarray,
-        target_tokens: jnp.ndarray,
+        batch: jt.PyTree,
         model_config: decoder_only_model.ModelConfig,
     ):
         """Test a simple training step."""
@@ -60,7 +63,7 @@ class TestTrainStep:
         )
         (loss, _), _ = jax.jit(
             jax.value_and_grad(decoder_only_model.train_step, has_aux=True)
-        )(model, input_tokens, target_tokens, jnp.ones_like(target_tokens))
+        )(model, batch)
 
         assert loss >= 0.0
 
