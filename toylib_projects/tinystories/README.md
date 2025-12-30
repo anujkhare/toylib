@@ -4,37 +4,37 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 
 
 ### TODOs
-* [ ] Baseline: Train a single-device model
-    * [ ] Metrics
-        * [*] Sampling / inference eval
-        * [ ] val bpb
-        * [ ] CORE metric
+* [*] Baseline: Train a single-device model
     * [*] Checkpointing
-    * [ ] Train a single-device model
+    * [*] Train a single-device model
 * [ ] Inference setup
-    * [ ]
+    * [ ] Efficient batched inference
+    * [ ] KV caching
 * [ ] Evaluations
+    * [*] Val split and loss
+    * [*] Sampling / inference eval
+    * [ ] val bpb
+    * [ ] CORE metric
 * [ ] Improvements
     * [*] Param counts
-    * [ ] Scale the batch size for stable gradients
-    * [ ] Chinchilla optimal total FLOPs
-    * [ ] Mixed-precision training
-    * [ ] bf16 inference
-    * [ ] CPU/TPU memory usage, profiling
+    * [*] Scale the batch size for stable gradients
     * [ ] LR/optimizers for different parts of the model
     * [ ] LR schedule
     * [ ] Modify optimizer
     * [ ] Gradient clipping
+    * [ ] Chinchilla optimal total FLOPs
+    * [ ] Mixed-precision training
+    * [ ] bf16 inference
+    * [ ] CPU/TPU memory usage, profiling
     * [ ] fix dep management
 * [ ] Scaling
     * [*] Memory and parameter analysis
-    * [ ] Training budget - # tokens
-    * [ ] Multi-core training?
+    * [*] Training budget - # tokens
+    * [*] Multi-core training?
+    * [*] Gradient accumulation / micro-batching
+    * [ ] TF Grain 
+    * [ ] Handle interrupts: restore checkpoints and dataset iterators
+    * [ ] Profile / improve resource usage
     * [ ] Multi-pod training?
-    * [ ] Gradient accumulation / micro-batching
 * [ ] Mid-training
 * [ ] Post-training
-* [ ] Nice-to-haves
-    * [ ] Scaling laws
-    * [ ] TF Grain
-    * [ ] ~~Handle interrupts: restore checkpoints and dataset iterators~~

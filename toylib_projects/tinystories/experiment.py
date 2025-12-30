@@ -178,9 +178,9 @@ class Experiment:
         )
 
         def _slice_tensors(
-            inputs: jt.PyTree, start: int = 0, end: int | None = None
+            batch: jt.PyTree, start: int = 0, end: int | None = None
         ) -> jt.PyTree:
-            return jax.tree_util.tree_map(lambda x: x[start:end], inputs)
+            return jax.tree_util.tree_map(lambda x: x[start:end], batch)
 
         # Train step
         def train_step(model, opt_state, batch):

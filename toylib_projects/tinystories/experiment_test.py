@@ -103,6 +103,7 @@ class TestExperiment:
         task.dataset.return_value = {
             "inputs": jnp.zeros((1, 10)),
             "targets": jnp.zeros((1, 10)),
+            "mask": jnp.ones((1, 10)),
         }
         exp = experiment.Experiment(
             model_config=decoder_only_model.ModelConfig(

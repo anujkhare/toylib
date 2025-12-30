@@ -1,4 +1,7 @@
+import jax
+
 # import local modules
+from toylib_projects.tinystories import analyze
 from toylib_projects.tinystories import data
 from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
@@ -30,8 +33,10 @@ def get_model_config(
 
 
 def create_experiment(
-    batch_size: int = 8,
+    batch_size_per_device: int = 18,
     seq_len: int = 2048,
+    max_steps: int = 12000,
+    num_microbatches: int = 2,
     depth: int = 12,
     vocab_size: int = 50257,
     checkpoint_dir: str = "/tmp/checkpoints",
@@ -39,6 +44,9 @@ def create_experiment(
     dataset_train_split: str = "train",
     dataset_val_split: str | None = "val",
 ) -> experiment.Experiment:
+    # The batch is sharded across devices and then split into microbatches
+    batch_size = batch_size_per_device * jax.local_device_count() * num_microbatches
+
     # Dataloader
     train_task = experiment.Task(
         name="train",
@@ -69,7 +77,8 @@ def create_experiment(
         ),
         training_config=experiment.TrainingConfig(
             learning_rate=1e-3,
-            max_steps=100_000,
+            max_steps=max_steps,
+            num_microbatches=num_microbatches,
         ),
         checkpoint_config=experiment.CheckpointConfig(
             save_interval_steps=2500,
@@ -80,6 +89,12 @@ def create_experiment(
         train_task=train_task,
         eval_task=val_task,
     )
+    # Initialize model and optimizer state
+    exp.init_state()
+    # Print stats
+    analyze.print_estimated_tokens(exp)
+    analyze.print_chinchilla_estimate(exp)
+    print(analyze.print_param_sizes(exp.model, depth=3)[0])
     return exp
 
 
