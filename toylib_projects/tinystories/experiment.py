@@ -150,6 +150,61 @@ class Experiment:
             f"Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}"
         )
 
+    def _train_step(self, model, opt_state, batch):
+        """Perform a single training step with microbatching."""
+
+        def _slice_tensors(
+            batch: jt.PyTree, start: int = 0, end: int | None = None
+        ) -> jt.PyTree:
+            return jax.tree_util.tree_map(lambda x: x[start:end], batch)
+
+        # train_step is run on each device with a shard of the batch
+        sharded_batch_size = batch["inputs"].shape[0]
+
+        # Microbatching related config
+        num_microbatches = self.training_config.num_microbatches
+        microbatch_size = sharded_batch_size // num_microbatches
+
+        total_grads = jax.tree.map(lambda x: jnp.zeros_like(x), model)
+        total_loss = 0.0
+        with jax.profiler.TraceAnnotation("microbatch_loop"):
+            for microbatch_idx in range(num_microbatches):
+                start_idx, end_idx = (
+                    microbatch_idx * microbatch_size,
+                    (microbatch_idx + 1) * microbatch_size,
+                )
+
+                # Run forward and backward pass on the microbatch
+                (loss_val, _), grads = jax.value_and_grad(
+                    self.forward_fn, has_aux=True
+                )(model, _slice_tensors(batch, start_idx, end_idx))
+
+                # Accumulate the gradients and loss over microbatches
+                total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
+                total_loss += loss_val
+
+            # The default reduce operation in jax is a sum across devices
+            # Average the grads by the number of devices and microbatches
+            total_grads = jax.tree.map(
+                lambda g: g / self.num_devices / num_microbatches, total_grads
+            )
+            total_loss /= num_microbatches
+
+        with jax.profiler.TraceAnnotation("optimizer_update"):
+            updates, opt_state = self.optimizer.update(total_grads, opt_state)
+
+            # Update the model and optimizer state
+            model = optax.apply_updates(model, updates)
+
+        return model, opt_state, total_loss
+
+    def _eval_step(self, model, batch):
+        """Perform a single evaluation step."""
+        with jax.profiler.TraceAnnotation("eval_forward"):
+            loss_val, _ = self.forward_fn(model, batch)
+
+        return loss_val
+
     def __post_init__(self):
         self._setup_sharding()
         self._validate_configs()
@@ -177,63 +232,10 @@ class Experiment:
             ),
         )
 
-        def _slice_tensors(
-            batch: jt.PyTree, start: int = 0, end: int | None = None
-        ) -> jt.PyTree:
-            return jax.tree_util.tree_map(lambda x: x[start:end], batch)
-
-        # Train step
-        def train_step(model, opt_state, batch):
-            # train_step is run on each device with a shard of the batch
-            sharded_batch_size = batch["inputs"].shape[0]
-
-            # Microbatching related config
-            num_microbatches = self.training_config.num_microbatches
-            microbatch_size = sharded_batch_size // num_microbatches
-
-            total_grads = jax.tree.map(lambda x: jnp.zeros_like(x), model)
-            total_loss = 0.0
-            with jax.profiler.TraceAnnotation("microbatch_loop"):
-                for microbatch_idx in range(num_microbatches):
-                    start_idx, end_idx = (
-                        microbatch_idx * microbatch_size,
-                        (microbatch_idx + 1) * microbatch_size,
-                    )
-
-                    # Run forward and backward pass on the microbatch
-                    (loss_val, _), grads = jax.value_and_grad(
-                        self.forward_fn, has_aux=True
-                    )(model, _slice_tensors(batch, start_idx, end_idx))
-
-                    # Accumulate the gradients and loss over microbatches
-                    total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
-                    total_loss += loss_val
-
-                # The default reduce operation in jax is a sum across devices
-                # Average the grads by the number of devices and microbatches
-                total_grads = jax.tree.map(
-                    lambda g: g / self.num_devices / num_microbatches, total_grads
-                )
-                total_loss /= num_microbatches
-
-            with jax.profiler.TraceAnnotation("optimizer_update"):
-                updates, opt_state = self.optimizer.update(total_grads, opt_state)
-
-                # Update the model and optimizer state
-                model = optax.apply_updates(model, updates)
-
-            return model, opt_state, total_loss
-
-        def eval_step(model, batch):
-            with jax.profiler.TraceAnnotation("eval_forward"):
-                loss_val, _ = self.forward_fn(model, batch)
-
-            return loss_val
-
         if self.jit_computations:
             # JIT with explicit sharding specifications
             self.train_step_fn = jax.jit(
-                train_step,
+                self._train_step,
                 in_shardings=(
                     self.replicated_sharding,  # model
                     self.replicated_sharding,  # opt_state
@@ -246,7 +248,7 @@ class Experiment:
                 ),
             )
             self.eval_step_fn = jax.jit(
-                eval_step,
+                self._eval_step,
                 in_shardings=(
                     self.replicated_sharding,
                     self.data_sharding,
@@ -254,8 +256,8 @@ class Experiment:
                 out_shardings=self.replicated_sharding,
             )
         else:
-            self.train_step_fn = train_step
-            self.eval_step_fn = eval_step
+            self.train_step_fn = self._train_step
+            self.eval_step_fn = self._eval_step
 
     def init_state(self):
         # Initialize model on CPU first
