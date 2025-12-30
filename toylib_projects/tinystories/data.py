@@ -6,6 +6,8 @@ import pathlib
 import pyarrow.parquet as pq
 import typing
 
+import grain.python as grain
+
 from transformers import AutoTokenizer
 
 
@@ -147,4 +149,94 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
         self._state.token_buffer = state["token_buffer"].copy()
 
         # Recreate the iterator starting from the restored position
+        self.dataset_iter = self._get_dataset_iterator()
+
+
+@dataclasses.dataclass
+class DatasetStateGrain(DatasetState):
+    """State for Grain-based dataset checkpointing."""
+
+    sampler_state: dict = dataclasses.field(default_factory=dict)
+    token_buffer: list[int] = dataclasses.field(default_factory=list)
+
+
+class BatchedTokenizedDatasetGrain(BatchedTokenizedDataset):
+    """Grain-based data loader that reads parquet files.
+
+    Uses Grain's efficient data loading pipeline for reading parquet files.
+    Path is constructed as dataset_path/split/*.parquet
+
+    Example:
+        >>> dataset = BatchedTokenizedDatasetGrain(
+        ...     dataset_path="/path/to/data",
+        ...     split="train",
+        ...     batch_size=128,
+        ...     seq_len=2048,
+        ... )
+        >>> for batch in dataset:
+        ...     train_step(batch)
+    """
+
+    seed: int = 42
+
+    def __post_init__(self):
+        # Initialize state tracking before calling parent
+        self._state = DatasetStateGrain()
+        super().__post_init__()
+
+    def list_files(self) -> list[pathlib.Path]:
+        """List parquet files for the split."""
+        base_path = pathlib.Path(self.dataset_path) / self.split
+        return sorted(base_path.glob("*.parquet"))
+
+    def _get_dataset_iterator(self) -> typing.Iterator:
+        """Create Grain-based iterator over parquet files."""
+        # Create a MapDataset from the file paths
+        dataset = grain.MapDataset.source([str(f) for f in self.list_files()])
+
+        # Map each filename to a ParquetIterDataset
+        dataset = dataset.map(grain.experimental.ParquetIterDataset)
+
+        # Interleave with cycle_length=1 to chain datasets sequentially
+        dataset = grain.experimental.InterleaveIterDataset(dataset, cycle_length=1)
+
+        # Batch records at the row level (groups individual text records together)
+        dataset = dataset.batch(self.tokenizer_batch_size, drop_remainder=False)
+
+        # Create iterator
+        iterator = iter(dataset)
+
+        # Restore state if available
+        if self._state.sampler_state:
+            iterator.set_state(self._state.sampler_state)
+
+        # Store iterator for state management
+        self._grain_iterator = iterator
+
+        # Yield batches in the format expected by parent class
+        for batch in iterator:
+            # batch is a dict with the key "text" containing an array of texts
+            yield {"text": list(batch["text"])}
+
+    def get_state(self) -> dict[str, typing.Any]:
+        """Get current state for checkpointing.
+
+        Returns:
+            Dictionary containing iterator state and token buffer.
+        """
+        # Save the current iterator state
+        self._state.sampler_state = self._grain_iterator.get_state()
+        self._state.token_buffer = self.token_buffer.copy()
+        return dataclasses.asdict(self._state)
+
+    def restore_state(self, state: dict[str, typing.Any]) -> None:
+        """Restore from a checkpoint state.
+
+        Args:
+            state: State dictionary containing sampler state and token buffer.
+        """
+        self._state = DatasetStateGrain(**state)
+        self._state.token_buffer = state["token_buffer"].copy()
+
+        # Recreate the iterator with the restored state
         self.dataset_iter = self._get_dataset_iterator()
