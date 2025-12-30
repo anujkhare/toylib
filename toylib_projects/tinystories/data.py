@@ -76,6 +76,7 @@ class BatchedTokenizedDataset(abc.ABC):
         return {
             "inputs": inputs,
             "targets": targets,
+            "mask": jnp.ones_like(inputs),
         }
 
     def get_state(self) -> dict[str, typing.Any]:
