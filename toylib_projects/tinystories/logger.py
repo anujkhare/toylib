@@ -1,6 +1,7 @@
 import abc
 import datetime
 import json
+import os
 
 
 class Logger(abc.ABC):
@@ -75,7 +76,7 @@ class FileLogger(Logger):
 
     def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
         self.config_dict = config_dict
-        self.file_ptr = open(output_path, "w")
+        self.file_ptr = open(os.path.join(output_path, "train_logs.txt"), "w")
         self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:

@@ -63,7 +63,7 @@ class Task:
 @dataclasses.dataclass(kw_only=True)
 class LoggerConfig:
     logger_cls: logger.Logger = logger.FileLogger
-    log_dir: str = "/tmp/train_logs.txt"
+    log_dir: str = "/tmp/"
 
     train_log_interval_steps: int = 1
 
