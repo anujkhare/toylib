@@ -37,15 +37,3 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 * [ ] Nice-to-haves
     * [ ] Scaling laws
     * [ ] Handle interrupts: restore checkpoints and dataset iterators
-
-
-### Notes
-Initial code up and running with basic training loop, validation, sampling, and checkpointing set up!
-
-Trained a d12 model (~117M parameters) with a single TPU on colab, using batch size of 16 for about 50k steps, which is roughly `16 * 2048 * 50k = ~1.64M` tokens. For a Chinchilla optimal compute training, we need to train this model for roughly `20 * 117M = ~2.34B` tokens.
-
-Further, the batch size we used is way too small, at just `32k` tokens per batch. GPT-2 used `~1M` tokens per optimization step. We target `~512k` tokens. To achieve this, we have two options:
-1. Micro-batching: run through multiple batches for each optimization step
-2. Use more devices or devices with more memory
-
-Here, we hit another issue with our implementation - our training is all single-device right now and does not scale to multiple devices.
