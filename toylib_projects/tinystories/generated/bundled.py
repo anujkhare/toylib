@@ -9,6 +9,7 @@ import abc
 import dataclasses
 import datetime
 import einops
+import grain.python as grain
 import jax
 import jaxtyping as jt
 import json
@@ -16,9 +17,112 @@ import math
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
+import os
+import pandas as pd
 import pathlib
 import pyarrow.parquet as pq
 import typing
+
+# ============================================================
+# toylib_projects.tinystories.analyze - /Users/anuj/Desktop/code/toylib/toylib_projects/tinystories/analyze.py
+# ============================================================
+
+
+def get_tree_stats(model: jt.PyTree) -> pd.DataFrame:
+    """
+    Groups parameter counts and MiB sizes at a specified depth.
+    """
+    results = []
+    leaf_stats = [
+        (k, v.shape, v.dtype) for k, v in jax.tree_util.tree_leaves_with_path(model)
+    ]
+    for path, shape, dtype in leaf_stats:
+        path = [str(p) for p in path]
+        count = math.prod(shape)
+        nbytes = count * dtype.itemsize
+        results.append({"params": count, "n_bytes": nbytes, "path": "/".join(path)})
+        for i, p in enumerate(path):
+            results[-1][f"level_{i}"] = p
+    return pd.DataFrame(results)
+
+
+def print_param_sizes(
+    model: jt.PyTree, depth: int = 1, size_denom: int = 1
+) -> tuple[pd.DataFrame, int, int]:
+    """
+    Analyzes parameters and the compiled XLA HLO for peak memory usage.
+    """
+    df_stats = get_tree_stats(model)
+    if len(df_stats) == 0:
+        print("Model has no parameters.")
+        return pd.DataFrame()
+    df_stats.loc[:, "n_bytes_divided"] = df_stats["n_bytes"] / size_denom
+    total_params = df_stats.params.sum()
+    total_bytes = df_stats.n_bytes_divided.sum()
+    print(f"Total Parameters: {total_params}. Bytes: ({total_bytes:.2f})")
+    return (
+        df_stats.fillna("")
+        .groupby([f"level_{i}" for i in range(depth)])
+        .sum()[["params", "n_bytes_divided"]]
+        .reset_index(),
+        total_params,
+        total_bytes,
+    )
+
+
+def print_xla_memory_analysis(
+    train_step_fn: typing.Callable,
+    params: jt.PyTree,
+    batch: typing.Mapping[str, jt.Array],
+):
+    lowered = jax.jit(train_step_fn).lower(params, batch)
+    compiled = lowered.compile()
+    analysis = compiled.memory_analysis()
+
+    def _to_mib(b: int) -> float:
+        return b / 1024**2
+
+    print("\n--- XLA Compilation Estimate ---")
+    print(
+        f"Arguments (Params + Batch):\t{_to_mib(analysis.argument_size_in_bytes):.2f} MiB"
+    )
+    print(f"Output (Grads + Loss):\t{_to_mib(analysis.output_size_in_bytes):.2f} MiB")
+    print(f"Temp/Activations (Peak):\t{_to_mib(analysis.temp_size_in_bytes):.2f} MiB")
+    print(
+        f"Total Peak Memory:\t{_to_mib(analysis.temp_size_in_bytes + analysis.argument_size_in_bytes):.2f} MiB"
+    )
+
+
+def print_estimated_tokens(exp) -> int:
+    """Estimate total number of tokens processed during training."""
+    total_tokens = (
+        exp.training_config.max_steps
+        * exp.train_task.dataset.batch_size
+        * exp.train_task.dataset.seq_len
+    )
+    print("------------------------------")
+    print("Token Analysis:")
+    print("------------------------------")
+    print("Batch size:", exp.train_task.dataset.batch_size)
+    print("Seq len:", exp.train_task.dataset.seq_len)
+    print("Max steps:", exp.training_config.max_steps)
+    print(
+        "Num microbatches (split from within batch_size):",
+        exp.training_config.num_microbatches,
+    )
+    print("Total training tokens:", total_tokens)
+    print("------------------------------")
+
+
+def print_chinchilla_estimate(model: jt.PyTree):
+    _, model_params, _ = print_param_sizes(model, depth=2, size_denom=1)
+    print("------------------------------")
+    print("Chinchilla Analysis:")
+    print("------------------------------")
+    print("Model parameters:", model_params)
+    print("Chinchilla estimate: (20 * model_params):", 20 * model_params, "tokens")
+    print("------------------------------")
+
 
 # ============================================================
 # toylib_projects.tinystories.data - /Users/anuj/Desktop/code/toylib/toylib_projects/tinystories/data.py
@@ -77,7 +181,7 @@ class BatchedTokenizedDataset(abc.ABC):
         targets = jnp.array(tokens[1:], dtype=jnp.uint16).reshape(
             self.batch_size, self.seq_len
         )
-        return {"inputs": inputs, "targets": targets}
+        return {"inputs": inputs, "targets": targets, "mask": jnp.ones_like(inputs)}
 
     def get_state(self) -> dict[str, typing.Any]:
         """Get current state for checkpointing. Override in subclasses."""
@@ -126,6 +230,76 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
     def restore_state(self, state: dict[str, typing.Any]) -> None:
         """Restore iterator position from checkpoint."""
         self._state = DatasetStateParquet(**state)
+        self._state.token_buffer = state["token_buffer"].copy()
+        self.dataset_iter = self._get_dataset_iterator()
+
+
+@dataclasses.dataclass
+class DatasetStateGrain(DatasetState):
+    """State for Grain-based dataset checkpointing."""
+
+    sampler_state: dict = dataclasses.field(default_factory=dict)
+    token_buffer: list[int] = dataclasses.field(default_factory=list)
+
+
+class BatchedTokenizedDatasetGrain(BatchedTokenizedDataset):
+    """Grain-based data loader that reads parquet files.
+
+    Uses Grain's efficient data loading pipeline for reading parquet files.
+    Path is constructed as dataset_path/split/*.parquet
+
+    Example:
+        >>> dataset = BatchedTokenizedDatasetGrain(
+        ...     dataset_path="/path/to/data",
+        ...     split="train",
+        ...     batch_size=128,
+        ...     seq_len=2048,
+        ... )
+        >>> for batch in dataset:
+        ...     train_step(batch)
+    """
+
+    seed: int = 42
+
+    def __post_init__(self):
+        self._state = DatasetStateGrain()
+        super().__post_init__()
+
+    def list_files(self) -> list[pathlib.Path]:
+        """List parquet files for the split."""
+        base_path = pathlib.Path(self.dataset_path) / self.split
+        return sorted(base_path.glob("*.parquet"))
+
+    def _get_dataset_iterator(self) -> typing.Iterator:
+        """Create Grain-based iterator over parquet files."""
+        dataset = grain.MapDataset.source([str(f) for f in self.list_files()])
+        dataset = dataset.map(grain.experimental.ParquetIterDataset)
+        dataset = grain.experimental.InterleaveIterDataset(dataset, cycle_length=1)
+        dataset = dataset.batch(self.tokenizer_batch_size, drop_remainder=False)
+        iterator = iter(dataset)
+        if self._state.sampler_state:
+            iterator.set_state(self._state.sampler_state)
+        self._grain_iterator = iterator
+        for batch in iterator:
+            yield {"text": list(batch["text"])}
+
+    def get_state(self) -> dict[str, typing.Any]:
+        """Get current state for checkpointing.
+
+        Returns:
+            Dictionary containing iterator state and token buffer.
+        """
+        self._state.sampler_state = self._grain_iterator.get_state()
+        self._state.token_buffer = self.token_buffer.copy()
+        return dataclasses.asdict(self._state)
+
+    def restore_state(self, state: dict[str, typing.Any]) -> None:
+        """Restore from a checkpoint state.
+
+        Args:
+            state: State dictionary containing sampler state and token buffer.
+        """
+        self._state = DatasetStateGrain(**state)
         self._state.token_buffer = state["token_buffer"].copy()
         self.dataset_iter = self._get_dataset_iterator()
 
@@ -447,7 +621,7 @@ class MultiHeadAttention(Module):
 # ============================================================
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class ModelConfig:
     """Configuration for the DecoderOnlyTransformer model."""
 
@@ -614,21 +788,19 @@ def loss_fn(
 
 
 def train_step(
-    model: DecoderOnlyTransformer,
-    tokens: jt.Int[jt.Array, "batch_size seq_len"],
-    mask: jt.Int[jt.Array, "batch_size seq_len"],
-    targets: jt.Int[jt.Array, "batch_size seq_len"],
+    model: DecoderOnlyTransformer, batch: jt.PyTree
 ) -> jt.Float[jt.Array, ""]:
     """A single training step for the model.
 
     Args:
         model: The DecoderOnlyTransformer model.
-        batch: Input token ids of shape [batch_size, seq_len].
-        labels: Target token ids of shape [batch_size, seq_len].
+        batch: PyTree containing 'inputs', 'targets', and 'mask', each of shape
+            [batch_size, seq_len].
 
     Returns:
         Loss value for the batch.
     """
+    tokens, targets, mask = (batch["inputs"], batch["targets"], batch["mask"])
     logits = model(tokens)
     total_loss, per_token_loss = loss_fn(logits, targets, mask)
     return (total_loss, {"logits": logits, "per_token_loss": per_token_loss})
@@ -707,7 +879,7 @@ class FileLogger(Logger):
 
     def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
         self.config_dict = config_dict
-        self.file_ptr = open(output_path, "w")
+        self.file_ptr = open(os.path.join(output_path, "train_logs.txt"), "w")
         self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:
@@ -763,6 +935,7 @@ class CheckpointConfig:
 class TrainingConfig:
     learning_rate: float = 0.001
     max_steps: int = 100000
+    num_microbatches: int = 1
 
 
 @dataclasses.dataclass
@@ -780,7 +953,7 @@ class Task:
 @dataclasses.dataclass(kw_only=True)
 class LoggerConfig:
     logger_cls: Logger = FileLogger
-    log_dir: str = "/tmp/train_logs.txt"
+    log_dir: str = "/tmp/"
     train_log_interval_steps: int = 1
 
 
@@ -808,12 +981,7 @@ class Experiment:
     forward_fn: ... = dataclasses.field(default_factory=lambda: train_step)
     jit_computations: bool = True
 
-    def __post_init__(self):
-        self.num_devices = jax.local_device_count()
-        devices = np.array(jax.local_devices())
-        self.mesh = Mesh(devices, axis_names=("data",))
-        self.replicated_sharding = NamedSharding(self.mesh, P())
-        self.data_sharding = NamedSharding(self.mesh, P("data"))
+    def _validate_configs(self) -> None:
         train_batch_size = self.train_task.dataset.batch_size
         eval_batch_size = (
             self.eval_task.dataset.batch_size if self.eval_task is not None else 0
@@ -826,9 +994,66 @@ class Experiment:
             raise ValueError(
                 f"Eval batch size {eval_batch_size} not divisible by number of devices {self.num_devices}"
             )
+        if (
+            train_batch_size / self.num_devices % self.training_config.num_microbatches
+            != 0
+        ):
+            raise ValueError(
+                f"Number of microbatches {self.training_config.num_microbatches} does not evenly divide per-device batch size {train_batch_size // self.num_devices}"
+            )
+
+    def _setup_sharding(self) -> None:
+        self.num_devices = jax.local_device_count()
+        devices = np.array(jax.local_devices())
+        self.mesh = Mesh(devices, axis_names=("data",))
+        self.replicated_sharding = NamedSharding(self.mesh, P())
+        self.data_sharding = NamedSharding(self.mesh, P("data"))
         print(
             f"Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}"
         )
+
+    def _train_step(self, model, opt_state, batch):
+        """Perform a single training step with microbatching."""
+
+        def _slice_tensors(
+            batch: jt.PyTree, start: int = 0, end: int | None = None
+        ) -> jt.PyTree:
+            return jax.tree_util.tree_map(lambda x: x[start:end], batch)
+
+        sharded_batch_size = batch["inputs"].shape[0]
+        num_microbatches = self.training_config.num_microbatches
+        microbatch_size = sharded_batch_size // num_microbatches
+        total_grads = jax.tree.map(lambda x: jnp.zeros_like(x), model)
+        total_loss = 0.0
+        with jax.profiler.TraceAnnotation("microbatch_loop"):
+            for microbatch_idx in range(num_microbatches):
+                start_idx, end_idx = (
+                    microbatch_idx * microbatch_size,
+                    (microbatch_idx + 1) * microbatch_size,
+                )
+                (loss_val, _), grads = jax.value_and_grad(
+                    self.forward_fn, has_aux=True
+                )(model, _slice_tensors(batch, start_idx, end_idx))
+                total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
+                total_loss += loss_val
+            total_grads = jax.tree.map(
+                lambda g: g / self.num_devices / num_microbatches, total_grads
+            )
+            total_loss /= num_microbatches
+        with jax.profiler.TraceAnnotation("optimizer_update"):
+            updates, opt_state = self.optimizer.update(total_grads, opt_state)
+            model = optax.apply_updates(model, updates)
+        return (model, opt_state, total_loss)
+
+    def _eval_step(self, model, batch):
+        """Perform a single evaluation step."""
+        with jax.profiler.TraceAnnotation("eval_forward"):
+            loss_val, _ = self.forward_fn(model, batch)
+        return loss_val
+
+    def __post_init__(self):
+        self._setup_sharding()
+        self._validate_configs()
         self.logger_obj = self.logger_config.logger_cls(
             config_dict=_serialize_dataclass_config(self),
             output_path=self.logger_config.log_dir,
@@ -846,30 +1071,9 @@ class Experiment:
                 max_to_keep=self.checkpoint_config.max_to_keep
             ),
         )
-
-        def train_step(model, opt_state, batch):
-            inputs, targets = (batch["inputs"], batch["targets"])
-            mask = jnp.ones_like(inputs)
-            with jax.profiler.TraceAnnotation("value_and_grad"):
-                (loss_val, _), grads = jax.value_and_grad(
-                    self.forward_fn, has_aux=True
-                )(model, inputs, mask, targets)
-                grads = jax.tree.map(lambda g: g / self.num_devices, grads)
-            with jax.profiler.TraceAnnotation("optimizer_update"):
-                updates, opt_state = self.optimizer.update(grads, opt_state)
-                model = optax.apply_updates(model, updates)
-            return (model, opt_state, loss_val)
-
-        def eval_step(model, batch):
-            inputs, targets = (batch["inputs"], batch["targets"])
-            mask = jnp.ones_like(inputs)
-            with jax.profiler.TraceAnnotation("eval_forward"):
-                loss_val, _ = self.forward_fn(model, inputs, mask, targets)
-            return loss_val
-
         if self.jit_computations:
             self.train_step_fn = jax.jit(
-                train_step,
+                self._train_step,
                 in_shardings=(
                     self.replicated_sharding,
                     self.replicated_sharding,
@@ -882,13 +1086,13 @@ class Experiment:
                 ),
             )
             self.eval_step_fn = jax.jit(
-                eval_step,
+                self._eval_step,
                 in_shardings=(self.replicated_sharding, self.data_sharding),
                 out_shardings=self.replicated_sharding,
             )
         else:
-            self.train_step_fn = train_step
-            self.eval_step_fn = eval_step
+            self.train_step_fn = self._train_step
+            self.eval_step_fn = self._eval_step
 
     def init_state(self):
         self.model = DecoderOnlyTransformer(
@@ -1060,8 +1264,10 @@ def get_model_config(
 
 
 def create_experiment(
-    batch_size: int = 8,
+    batch_size_per_device: int = 18,
     seq_len: int = 2048,
+    max_steps: int = 12000,
+    num_microbatches: int = 2,
     depth: int = 12,
     vocab_size: int = 50257,
     checkpoint_dir: str = "/tmp/checkpoints",
@@ -1069,9 +1275,10 @@ def create_experiment(
     dataset_train_split: str = "train",
     dataset_val_split: str | None = "val",
 ) -> Experiment:
+    batch_size = batch_size_per_device * jax.local_device_count() * num_microbatches
     train_task = Task(
         name="train",
-        dataset=BatchedTokenizedDatasetParquet(
+        dataset=BatchedTokenizedDatasetGrain(
             dataset_path=dataset_path,
             split=dataset_train_split,
             batch_size=batch_size,
@@ -1083,7 +1290,7 @@ def create_experiment(
     if dataset_val_split is not None:
         val_task = Task(
             name="val",
-            dataset=BatchedTokenizedDatasetParquet(
+            dataset=BatchedTokenizedDatasetGrain(
                 dataset_path=dataset_path,
                 split=dataset_val_split,
                 batch_size=batch_size,
@@ -1095,16 +1302,22 @@ def create_experiment(
         model_config=get_model_config(
             depth=depth, seq_len=seq_len, vocab_size=vocab_size
         ),
-        training_config=TrainingConfig(learning_rate=0.001, max_steps=100000),
+        training_config=TrainingConfig(
+            learning_rate=0.001, max_steps=max_steps, num_microbatches=num_microbatches
+        ),
         checkpoint_config=CheckpointConfig(
             save_interval_steps=2500,
             max_to_keep=10,
             checkpoint_dir=checkpoint_dir,
-            save_dataset_iterator=False,
+            checkpoint_dataset_iterator=False,
         ),
         train_task=train_task,
         eval_task=val_task,
     )
+    exp.init_state()
+    print_estimated_tokens(exp)
+    print_chinchilla_estimate(exp)
+    print(print_param_sizes(exp.model, depth=3)[0])
     return exp
 
 
