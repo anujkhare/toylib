@@ -70,7 +70,6 @@ def process_text_file(
         for example in examples
     ]
 
-
     # Concatenate all tokenized examples into a single array
     token_array = np.array(tokenized_examples, dtype=object)
 
@@ -139,7 +138,7 @@ def parse_command_line_args():
 
 def main():
     args = parse_command_line_args()
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
 
     process_text_file(
         input_path=args.input_path,
