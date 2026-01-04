@@ -293,7 +293,6 @@ class TestExperimentE2E:
 
         exp.cleanup()
 
-    @pytest.mark.skip
     def test_checkpoint_save(self, train_dataset, checkpoint_dir, log_dir):
         """Test that checkpoints are saved correctly to the filesystem."""
         exp = _create_test_experiment(
@@ -322,7 +321,6 @@ class TestExperimentE2E:
 
         exp.cleanup()
 
-    @pytest.mark.skip
     def test_checkpoint_restore(self, train_dataset, checkpoint_dir, log_dir):
         """Test that checkpoints restore correctly after resetting state."""
         exp = _create_test_experiment(
@@ -409,7 +407,6 @@ class TestExperimentE2E:
 
         exp.cleanup()
 
-    @pytest.mark.skip
     def test_checkpoint_roundtrip_preserves_training_state(
         self, train_dataset, checkpoint_dir, log_dir
     ):
@@ -449,7 +446,6 @@ class TestExperimentE2E:
 
         exp.cleanup()
 
-    @pytest.mark.skip
     def test_log_files_created(self, train_dataset, checkpoint_dir, log_dir):
         """Test that log files are created in the log directory."""
         exp = _create_test_experiment(
@@ -468,7 +464,6 @@ class TestExperimentE2E:
         # At minimum, the directory should exist
         assert log_dir.exists(), "Log directory should exist"
 
-    @pytest.mark.skip
     def test_multiple_checkpoint_saves(self, train_dataset, checkpoint_dir, log_dir):
         """Test that multiple checkpoints can be saved and the correct one restored."""
         exp = _create_test_experiment(

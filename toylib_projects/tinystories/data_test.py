@@ -31,28 +31,66 @@ class TestHFDataset:
 
 
 class TestParquetDataset:
-    base_path = "toylib_projects/tinystories/data/parquet/"
-    split = "test"
+    """Test Parquet-based dataset loader with temporary parquet files."""
 
-    def test_list_files(self):
+    # Test data for parquet files
+    SOME_TEXT = [
+        [
+            "This is the first file the first record",
+            "This is the first file the second record",
+            "This is the first file the third record",
+            "This is the first file the fourth record",
+        ],
+        [
+            "This is the second file the first record",
+            "This is the second file the second record",
+            "This is the second file the third record",
+            "This is the second file the fourth record",
+        ],
+    ]
+
+    @pytest.fixture
+    def temp_parquet_files(self):
+        """Create temporary parquet files for testing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = pathlib.Path(tmpdir)
+            split_dir = tmpdir_path / "test"
+            split_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create parquet files
+            filenames = []
+            for i in range(len(self.SOME_TEXT)):
+                filename = split_dir / f"shard_{i:05d}.parquet"
+                table = pa.table({"text": self.SOME_TEXT[i]})
+                # Use row_group_size=2 to test row group iteration
+                pq.write_table(table, str(filename), row_group_size=2)
+                filenames.append(filename)
+
+            yield tmpdir_path, "test", filenames
+
+    def test_list_files(self, temp_parquet_files):
         """Test listing parquet files in the dataset directory."""
+        base_path, split, expected_files = temp_parquet_files
+
         dataset = data.BatchedTokenizedDatasetParquet(
-            dataset_path=self.base_path,
-            split=self.split,
+            dataset_path=str(base_path),
+            split=split,
         )
 
         files = dataset.list_files()
-        assert len(files) == 1
+        assert len(files) == len(expected_files)
         for file in files:
             assert file.suffix == ".parquet"
 
-    def test_smoke(self):
-        """Test that we can load a local parquet file."""
+    def test_smoke(self, temp_parquet_files):
+        """Test that we can load temporary parquet files."""
+        base_path, split, _ = temp_parquet_files
+
         dataset = data.BatchedTokenizedDatasetParquet(
-            dataset_path=self.base_path,
-            split=self.split,
-            batch_size=4,
-            seq_len=1024,
+            dataset_path=str(base_path),
+            split=split,
+            batch_size=2,
+            seq_len=32,
             tokenizer_batch_size=2,
         )
 
@@ -61,46 +99,41 @@ class TestParquetDataset:
         inputs = batch["inputs"]
         targets = batch["targets"]
 
-        assert inputs.shape == (4, 1024)
-        assert targets.shape == (4, 1024)
+        assert inputs.shape == (2, 32)
+        assert targets.shape == (2, 32)
         assert (inputs[:, 1:] == targets[:, :-1]).all().tolist()
 
-    @pytest.mark.skip(reason="Not fully working yet")
-    def test_checkpointing(self):
+    def test_checkpointing(self, temp_parquet_files):
         """Test saving and restoring dataset state."""
+        base_path, split, _ = temp_parquet_files
+
         dataset = data.BatchedTokenizedDatasetParquet(
-            dataset_path=self.base_path,
-            split=self.split,
-            batch_size=2,
-            seq_len=16,
+            dataset_path=str(base_path),
+            split=split,
+            batch_size=1,
+            seq_len=8,
             tokenizer_batch_size=2,
         )
 
         # Fetch a few batches
-        print("batch 1")
-        batch1 = next(dataset)
-        print("batch 2")
+        _ = next(dataset)
         _ = next(dataset)
 
         # Save state
-        print("checkpoint")
         state = dataset.get_state()
 
         # Fetch another batch
-        print("batch 3")
         batch3 = next(dataset)
 
         # Restore state
-        print("restore")
         dataset.restore_state(state)
 
         # Fetch again, should match batch3
-        print("batch4")
         batch4 = next(dataset)
 
-        print(state["file_index"], state["row_group_index"], len(state["token_buffer"]))
-        assert (batch1["inputs"] == batch4["inputs"]).all().tolist()
-        assert (batch1["targets"] == batch4["targets"]).all().tolist()
+        # The restored batch should match the one we got after the checkpoint
+        assert (batch3["inputs"] == batch4["inputs"]).all().tolist()
+        assert (batch3["targets"] == batch4["targets"]).all().tolist()
 
 
 class TestGrainDataset:
