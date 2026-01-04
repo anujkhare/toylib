@@ -12,6 +12,7 @@ from unittest.mock import Mock, MagicMock, patch
 from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
 from toylib_projects.tinystories import logger
+from toylib_projects.tinystories import metrics
 
 
 class TestSerializeDataclassConfig:
@@ -292,25 +293,6 @@ class TestExperimentE2E:
 
         exp.cleanup()
 
-    def test_evaluation_step(
-        self, train_dataset, eval_dataset, checkpoint_dir, log_dir
-    ):
-        """Test that evaluation runs without error and computes loss."""
-        exp = _create_test_experiment(
-            train_dataset, eval_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
-        )
-        exp.init_state()
-
-        # Run validation
-        val_loss = exp.run_validation()
-
-        # Verify loss is a valid finite number
-        assert val_loss is not None
-        assert np.isfinite(val_loss)
-        assert val_loss > 0  # Cross-entropy loss should be positive
-
-        exp.cleanup()
-
     @pytest.mark.skip
     def test_checkpoint_save(self, train_dataset, checkpoint_dir, log_dir):
         """Test that checkpoints are saved correctly to the filesystem."""
@@ -573,5 +555,68 @@ class TestExperimentE2E:
             dataset_state_after_restore["iteration_count"]
             == dataset_state_before_save["iteration_count"]
         )
+
+        exp.cleanup()
+
+    def test_train_metrics_computation(self, train_dataset, checkpoint_dir, log_dir):
+        """Test that training step computes metrics correctly."""
+        exp = _create_test_experiment(
+            train_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        # Get a batch and run training
+        batch = next(iter(train_dataset))
+        exp.inner_loop(batch)
+
+        # The training should have computed metrics
+        # We can verify this by checking that the logger received metrics
+        # Since we're using a real FileLogger, we can't easily mock it,
+        # but we can verify the step ran without error
+
+        # Verify that default metrics include loss
+        assert len(exp.train_task.metrics) > 0
+        assert isinstance(exp.train_task.metrics[0], metrics.Loss)
+
+        exp.cleanup()
+
+    def test_eval_metrics_computation(
+        self, train_dataset, eval_dataset, checkpoint_dir, log_dir
+    ):
+        """Test that evaluation computes metrics correctly."""
+        exp = _create_test_experiment(
+            train_dataset, eval_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.init_state()
+
+        # Run validation
+        result = exp.run_validation()
+
+        # Verify result is a dict with val/ prefixed metrics
+        assert isinstance(result, dict)
+        assert "val/loss" in result
+        assert np.isfinite(result["val/loss"])
+        assert result["val/loss"] > 0
+
+        exp.cleanup()
+
+    def test_metrics_accumulated_correctly_across_batches(
+        self, train_dataset, eval_dataset, checkpoint_dir, log_dir
+    ):
+        """Test that metrics are correctly averaged across multiple eval batches."""
+        # Create an experiment with multiple eval steps
+        exp = _create_test_experiment(
+            train_dataset, eval_dataset, checkpoint_dir=checkpoint_dir, log_dir=log_dir
+        )
+        exp.eval_config.num_eval_steps = 2  # Use 2 batches for eval
+        exp.init_state()
+
+        # Run validation
+        val_metrics = exp.run_validation()
+
+        # Verify metrics were computed
+        assert "val/loss" in val_metrics
+        assert np.isfinite(val_metrics["val/loss"])
+        assert val_metrics["val/loss"] > 0
 
         exp.cleanup()

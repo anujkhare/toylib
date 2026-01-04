@@ -13,6 +13,7 @@ import typing
 from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import data
 from toylib_projects.tinystories import logger
+from toylib_projects.tinystories import metrics as metrics_module
 
 
 DEFAULT_PROMPTS = [
@@ -58,6 +59,9 @@ class EvalConfig:
 class Task:
     name: str
     dataset: data.BatchedTokenizedDataset
+    metrics: list[metrics_module.Metric] = dataclasses.field(
+        default_factory=lambda: [metrics_module.Loss()]
+    )
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -150,6 +154,26 @@ class Experiment:
             f"Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}"
         )
 
+    def _compute_metrics(
+        self, task: Task, loss: float, aux: jt.PyTree, batch: jt.PyTree
+    ) -> dict[str, jt.Array]:
+        """Compute all metrics for a task.
+
+        Args:
+            task: The task containing the metrics to compute
+            loss: The loss value
+            aux: The auxiliary PyTree from forward_fn
+            batch: The input batch
+
+        Returns:
+            Dictionary mapping metric names to values
+        """
+        all_metrics = {}
+        for metric in task.metrics:
+            metric_results = metric(loss=loss, aux=aux, batch=batch)
+            all_metrics.update(metric_results)
+        return all_metrics
+
     def _train_step(self, model, opt_state, batch):
         """Perform a single training step with microbatching."""
 
@@ -171,26 +195,39 @@ class Experiment:
         microbatch_size = sharded_batch_size // num_microbatches
 
         total_grads = jax.tree.map(lambda x: jnp.zeros_like(x), model)
-        total_loss = 0.0
+        accumulated_metrics = None
         with jax.profiler.TraceAnnotation("microbatch_loop"):
             for microbatch_idx in range(num_microbatches):
                 start_idx = microbatch_idx * microbatch_size
+                microbatch = _slice_tensors(batch, start_idx, microbatch_size)
 
                 # Run forward and backward pass on the microbatch
-                (loss_val, _), grads = jax.value_and_grad(
+                (loss_val, aux), grads = jax.value_and_grad(
                     self.forward_fn, has_aux=True
-                )(model, _slice_tensors(batch, start_idx, microbatch_size))
+                )(model, microbatch)
 
-                # Accumulate the gradients and loss over microbatches
+                # Compute metrics for this microbatch
+                microbatch_metrics = self._compute_metrics(
+                    task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
+                )
+
+                # Accumulate the gradients and metrics over microbatches
                 total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
-                total_loss += loss_val
+                if accumulated_metrics is None:
+                    accumulated_metrics = microbatch_metrics
+                else:
+                    accumulated_metrics = jax.tree.map(
+                        lambda x, y: x + y, accumulated_metrics, microbatch_metrics
+                    )
 
             # The default reduce operation in jax is a sum across devices
-            # Average the grads by the number of devices and microbatches
+            # Average the grads and metrics by the number of devices and microbatches
             total_grads = jax.tree.map(
                 lambda g: g / self.num_devices / num_microbatches, total_grads
             )
-            total_loss /= num_microbatches
+            averaged_metrics = jax.tree.map(
+                lambda x: x / num_microbatches, accumulated_metrics
+            )
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
             updates, opt_state = self.optimizer.update(total_grads, opt_state)
@@ -198,14 +235,19 @@ class Experiment:
             # Update the model and optimizer state
             model = optax.apply_updates(model, updates)
 
-        return model, opt_state, total_loss
+        return model, opt_state, averaged_metrics
 
     def _eval_step(self, model, batch):
-        """Perform a single evaluation step."""
+        """Perform a single evaluation step and compute metrics."""
         with jax.profiler.TraceAnnotation("eval_forward"):
-            loss_val, _ = self.forward_fn(model, batch)
+            loss_val, aux = self.forward_fn(model, batch)
 
-        return loss_val
+        # Compute metrics for this batch
+        eval_metrics = self._compute_metrics(
+            task=self.eval_task, loss=loss_val, aux=aux, batch=batch
+        )
+
+        return eval_metrics
 
     def __post_init__(self):
         self._setup_sharding()
@@ -246,7 +288,7 @@ class Experiment:
                 out_shardings=(
                     self.replicated_sharding,  # model
                     self.replicated_sharding,  # opt_state
-                    self.replicated_sharding,  # loss (scalar, replicated)
+                    self.replicated_sharding,  # metrics (replicated)
                 ),
             )
             self.eval_step_fn = jax.jit(
@@ -255,7 +297,7 @@ class Experiment:
                     self.replicated_sharding,
                     self.data_sharding,
                 ),
-                out_shardings=self.replicated_sharding,
+                out_shardings=self.replicated_sharding,  # metrics
             )
         else:
             self.train_step_fn = self._train_step
@@ -332,22 +374,44 @@ class Experiment:
             self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
 
-    def run_validation(self) -> float:
+    def run_validation(self) -> dict[str, float]:
+        """Run validation and compute all metrics for the eval task.
+
+        Returns:
+            Dictionary of averaged metrics
+        """
         self._assert_initialized()
         if self.eval_task is None:
-            print("No eval task defined, skipping validation loss.")
-            return
+            print("No eval task defined, skipping validation.")
+            return {}
 
-        total_val_loss = 0.0
+        # Accumulate metrics across batches
+        accumulated_metrics = None
+        num_batches = 0
+
         for ix, batch in enumerate(self.eval_task.dataset):
-            val_loss = self.eval_step_fn(self.model, batch)
-            total_val_loss += float(val_loss)
+            batch_metrics = self.eval_step_fn(self.model, batch)
+
+            # Accumulate metrics using tree_map
+            if accumulated_metrics is None:
+                accumulated_metrics = batch_metrics
+            else:
+                accumulated_metrics = jax.tree.map(
+                    lambda x, y: x + y, accumulated_metrics, batch_metrics
+                )
+
+            num_batches += 1
             if ix >= self.eval_config.num_eval_steps:
                 break
 
-        avg_val_loss = total_val_loss / (ix + 1)
-        self.logger_obj.log(self.step, metrics={"val/loss": avg_val_loss})
-        return avg_val_loss
+        # Average all metrics and add val/ prefix
+        avg_metrics = jax.tree.map(
+            lambda x: float(x) / num_batches, accumulated_metrics
+        )
+        avg_metrics = {f"val/{key}": value for key, value in avg_metrics.items()}
+
+        self.logger_obj.log(self.step, metrics=avg_metrics)
+        return avg_metrics
 
     def sampling_evaluation(
         self, prompts: list[str] | None = None, max_tokens: int = 10
@@ -402,14 +466,17 @@ class Experiment:
         self._assert_initialized()
 
         # Compute loss and gradients
-        self.model, self.opt_state, loss_val = self.train_step_fn(
+        self.model, self.opt_state, train_metrics = self.train_step_fn(
             self.model, self.opt_state, batch
         )
 
         # Log metrics
         if self.step % self.logger_config.train_log_interval_steps == 0:
-            # loss_val is already averaged across devices
-            self.logger_obj.log(self.step, metrics={"train/loss": float(loss_val)})
+            # Add train/ prefix and convert to float
+            train_metrics_with_prefix = {
+                f"train/{key}": float(value) for key, value in train_metrics.items()
+            }
+            self.logger_obj.log(self.step, metrics=train_metrics_with_prefix)
 
     def outer_loop(self):
         finished = self.step >= self.training_config.max_steps
