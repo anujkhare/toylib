@@ -1,4 +1,10 @@
-"""Dumps the tokens per byte statistics for the given tokenizer."""
+"""Dumps the tokens per byte statistics for the given tokenizer.
+
+Sample command:
+python toylib_projects/tinystories/tokenizer/tokens_per_byte.py \
+  --tokenizer gpt2 \
+  --output-path toylib_projects/tinystories/data/gpt2_bytes_per_token.npy
+"""
 
 import argparse
 from transformers import AutoTokenizer
