@@ -10,7 +10,7 @@ import pytest
 from toylib_projects.tinystories import data
 
 
-@pytest.mark.expensive
+@pytest.mark.skip(reason="removed the code for now")
 class TestHFDataset:
     def test_smoke(self):
         """Test that we can fetch data from the internet! Non-hermetic: requires internet access."""

@@ -70,12 +70,11 @@ class TestExperiment:
         "toylib_projects.tinystories.experiment.jax.device_put",
         side_effect=lambda x, *a, **kw: x,
     )
-    @patch("toylib_projects.tinystories.experiment.logger.TensorBoardLogger")
     @patch(
         "toylib_projects.tinystories.experiment.decoder_only_model.DecoderOnlyTransformer"
     )
     @patch("optax.adam")
-    def test_init_state(self, mock_opt, mock_model_class, mock_logger, mock_device_put):
+    def test_init_state(self, mock_opt, mock_model_class, mock_device_put):
         """Test that init_state initializes model and optimizer state."""
         mock_dataset = Mock()
         mock_dataset.batch_size = 4

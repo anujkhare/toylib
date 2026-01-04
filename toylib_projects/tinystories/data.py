@@ -90,14 +90,14 @@ class BatchedTokenizedDataset(abc.ABC):
         raise NotImplementedError("Checkpointing not supported for this dataset type")
 
 
-class BatchedTokenizedDatasetHF(BatchedTokenizedDataset):
-    def _get_dataset_iterator(self):
-        # Load the dataset and fetch in batches
-        return iter(
-            hf_datasets.load_dataset(
-                self.dataset_path, streaming=True, split=self.split
-            ).batch(self.tokenizer_batch_size)
-        )
+# class BatchedTokenizedDatasetHF(BatchedTokenizedDataset):
+#     def _get_dataset_iterator(self):
+#         # Load the dataset and fetch in batches
+#         return iter(
+#             hf_datasets.load_dataset(
+#                 self.dataset_path, streaming=True, split=self.split
+#             ).batch(self.tokenizer_batch_size)
+#         )
 
 
 @dataclasses.dataclass
