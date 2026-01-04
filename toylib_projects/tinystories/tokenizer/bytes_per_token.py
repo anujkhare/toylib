@@ -1,9 +1,9 @@
 """Dumps the tokens per byte statistics for the given tokenizer.
 
 Sample command:
-python toylib_projects/tinystories/tokenizer/tokens_per_byte.py \
+python toylib_projects/tinystories/tokenizer/bytes_per_token.py \
   --tokenizer gpt2 \
-  --output-path toylib_projects/tinystories/data/gpt2_bytes_per_token.npy
+  --output-path toylib_projects/tinystories/data/bpt_gpt2.npy
 """
 
 import argparse
@@ -35,12 +35,21 @@ def parse_command_line_args():
 def main():
     args = parse_command_line_args()
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    special_token_ids = [
+        tokenizer.bos_token_id,
+        tokenizer.eos_token_id,
+        tokenizer.unk_token_id,
+    ]
 
     bytes_per_token = []
     for token_id in range(len(tokenizer)):
-        # Decode the token to its actual string representation
-        decoded = tokenizer.decode([token_id])
-        bytes_per_token.append(len(decoded.encode("utf-8")))
+        if token_id in special_token_ids:
+            # for special tokens, use -1 to mark as invalid
+            bytes_per_token.append(-1)
+        else:
+            # Decode the token to its actual string representation
+            decoded = tokenizer.decode([token_id])
+            bytes_per_token.append(len(decoded.encode("utf-8")))
     np.save(args.output_path, np.array(bytes_per_token))
     print("Average bytes per token:", np.mean(bytes_per_token))
     print("Total number of tokens:", len(bytes_per_token))
