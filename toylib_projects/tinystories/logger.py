@@ -27,48 +27,48 @@ class Logger(abc.ABC):
         self.close()
 
 
-class WandBLogger(Logger):
-    """Logger implementation using Weights and Biases (wandb)."""
+# class WandBLogger(Logger):
+#     """Logger implementation using Weights and Biases (wandb)."""
 
-    def __init__(
-        self, config_dict: dict, project_name: str, user_name: str, *args, **kwargs
-    ) -> None:
-        import wandb
+#     def __init__(
+#         self, config_dict: dict, project_name: str, user_name: str, *args, **kwargs
+#     ) -> None:
+#         import wandb
 
-        self.config_dict = config_dict
-        self.run = wandb.init(
-            entity=user_name,
-            project=project_name,
-            config=self.config_dict,
-        )
-        self.run.define_metric("*", step_metric="global_step")
+#         self.config_dict = config_dict
+#         self.run = wandb.init(
+#             entity=user_name,
+#             project=project_name,
+#             config=self.config_dict,
+#         )
+#         self.run.define_metric("*", step_metric="global_step")
 
-    def log(self, step: int, metrics: dict) -> None:
-        metrics["global_step"] = step
-        self.run.log(metrics)
+#     def log(self, step: int, metrics: dict) -> None:
+#         metrics["global_step"] = step
+#         self.run.log(metrics
 
-    def close(self) -> None:
-        self.run.finish()
+#     def close(self) -> None:
+#         self.run.finish()
 
 
-class TensorBoardLogger(Logger):
-    """Logger implementation that logs metrics to tensorboard locally."""
+# class TensorBoardLogger(Logger):
+#     """Logger implementation that logs metrics to tensorboard locally."""
 
-    def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
-        import os
-        from tensorboardX import SummaryWriter
-        import time
+#     def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
+#         import os
+#         from tensorboardX import SummaryWriter
+#         import time
 
-        self.config_dict = config_dict
-        self.writer = SummaryWriter(
-            logdir=os.path.join(output_path, time.strftime("%Y%m%d-%H%M%S"))
-        )
+#         self.config_dict = config_dict
+#         self.writer = SummaryWriter(
+#             logdir=os.path.join(output_path, time.strftime("%Y%m%d-%H%M%S"))
+#         )
 
-    def log(self, step: int, metrics: dict, tag: str = "train") -> None:
-        self.writer.add_scalars(tag, metrics, step)
+#     def log(self, step: int, metrics: dict, tag: str = "train") -> None:
+#         self.writer.add_scalars(tag, metrics, step)
 
-    def close(self) -> None:
-        self.writer.close()
+#     def close(self) -> None:
+#         self.writer.close()
 
 
 class FileLogger(Logger):

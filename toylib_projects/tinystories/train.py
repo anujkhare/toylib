@@ -86,6 +86,9 @@ def create_experiment(
             checkpoint_dir=checkpoint_dir,
             checkpoint_dataset_iterator=False,
         ),
+        logger_config=experiment.LoggerConfig(
+            log_dir=checkpoint_dir,
+        ),
         train_task=train_task,
         eval_task=val_task,
     )
