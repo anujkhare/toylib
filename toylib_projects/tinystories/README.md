@@ -15,7 +15,7 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 * [ ] Evaluations
   * [*] Val split and loss
   * [*] Sampling / inference eval
-  * [ ] val bpb
+  * [*] val bpb
   * [ ] CORE metric
 * [ ] Improvements
   * [*] Param counts
