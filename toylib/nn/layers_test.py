@@ -13,7 +13,7 @@ from toylib.nn.layers import Linear, Embedding
 class TestLinear:
     @pytest.fixture
     def key(self):
-        return jax.random.PRNGKey(0)
+        return jax.random.key(0)
 
     @pytest.mark.parametrize(
         "in_features,out_features",
@@ -67,7 +67,7 @@ class TestLinear:
 class TestEmbedding:
     @pytest.fixture
     def key(self):
-        return jax.random.PRNGKey(42)
+        return jax.random.key(42)
 
     @pytest.mark.parametrize(
         "vocab_size,embedding_dim",

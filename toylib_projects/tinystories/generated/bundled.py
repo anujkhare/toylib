@@ -1096,7 +1096,7 @@ class Experiment:
 
     def init_state(self):
         self.model = DecoderOnlyTransformer(
-            config=self.model_config, key=jax.random.PRNGKey(0)
+            config=self.model_config, key=jax.random.key(0)
         )
         self.model = jax.device_put(self.model, self.replicated_sharding)
         self.opt_state = self.optimizer.init(self.model)
@@ -1186,7 +1186,7 @@ class Experiment:
                 sample(
                     model=model_single,
                     input_tokens=tokenized_prompts[ix],
-                    key=jax.random.PRNGKey(0),
+                    key=jax.random.key(0),
                     max_output_tokens=max_tokens,
                     temperature=1.0,
                     top_k=5,

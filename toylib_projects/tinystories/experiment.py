@@ -306,7 +306,7 @@ class Experiment:
     def init_state(self):
         # Initialize model on CPU first
         self.model = decoder_only_model.DecoderOnlyTransformer(
-            config=self.model_config, key=jax.random.PRNGKey(0)
+            config=self.model_config, key=jax.random.key(0)
         )
         # Replicate model across all devices
         self.model = jax.device_put(self.model, self.replicated_sharding)
@@ -443,7 +443,7 @@ class Experiment:
                 decoder_only_model.sample(
                     model=model_single,
                     input_tokens=tokenized_prompts[ix],
-                    key=jax.random.PRNGKey(0),
+                    key=jax.random.key(0),
                     max_output_tokens=max_tokens,
                     temperature=1.0,
                     top_k=5,

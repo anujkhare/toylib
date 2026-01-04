@@ -26,7 +26,7 @@ class TestDecoderOnlyTransformer:
     ):
         """Test a simple forward pass of the model."""
         model = decoder_only_model.DecoderOnlyTransformer(
-            config=model_config, key=jax.random.PRNGKey(42)
+            config=model_config, key=jax.random.key(42)
         )
         actual = model(input_tokens)
         assert actual.shape == (
@@ -59,7 +59,7 @@ class TestTrainStep:
     ):
         """Test a simple training step."""
         model = decoder_only_model.DecoderOnlyTransformer(
-            config=model_config, key=jax.random.PRNGKey(42)
+            config=model_config, key=jax.random.key(42)
         )
         (loss, _), _ = jax.jit(
             jax.value_and_grad(decoder_only_model.train_step, has_aux=True)
@@ -89,13 +89,13 @@ class TestSampling:
     ):
         """Test that sampling runs with a random small model."""
         model = decoder_only_model.DecoderOnlyTransformer(
-            config=model_config, key=jax.random.PRNGKey(42)
+            config=model_config, key=jax.random.key(42)
         )
         sampled = list(
             decoder_only_model.sample(
                 model=model,
                 input_tokens=context,
-                key=jax.random.PRNGKey(0),
+                key=jax.random.key(0),
                 max_output_tokens=max_length,
                 temperature=1.0,
                 top_k=5,
@@ -122,7 +122,7 @@ class TestSampling:
                 decoder_only_model.sample(
                     model=mock_model,
                     input_tokens=[1],
-                    key=jax.random.PRNGKey(0),
+                    key=jax.random.key(0),
                     max_output_tokens=1,
                     temperature=1.0,
                     top_k=top_k,
@@ -158,7 +158,7 @@ class TestSampling:
                 decoder_only_model.sample(
                     model=mock_model,
                     input_tokens=[1],
-                    key=jax.random.PRNGKey(0),
+                    key=jax.random.key(0),
                     max_output_tokens=1,
                     temperature=temperature,
                     top_k=None,
@@ -189,7 +189,7 @@ class TestSampling:
                 decoder_only_model.sample(
                     model=mock_model,
                     input_tokens=[1],
-                    key=jax.random.PRNGKey(0),
+                    key=jax.random.key(0),
                     max_output_tokens=1,
                     temperature=1.0,
                     top_k=None,
@@ -218,7 +218,7 @@ class TestSampling:
                 decoder_only_model.sample(
                     model=mock_model,
                     input_tokens=[1],
-                    key=jax.random.PRNGKey(0),
+                    key=jax.random.key(0),
                     max_output_tokens=1,
                     temperature=1.0,
                     top_k=1,

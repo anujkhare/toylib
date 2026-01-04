@@ -116,7 +116,7 @@ class MockDataset:
         self._iteration_count += 1
 
         # Generate random input tokens (deterministic based on iteration)
-        key = jax.random.PRNGKey(self._iteration_count)
+        key = jax.random.key(self._iteration_count)
         inputs = jax.random.randint(
             key, (self.batch_size, self.seq_len), 0, self.vocab_size
         )

@@ -11,7 +11,7 @@ import time
 class TrainerConfig:
     model_fn: Callable[[Any, jnp.ndarray], jnp.ndarray]
     loss_fn: Callable[[Any, tuple], jnp.ndarray]
-    init_params_fn: Callable[[jax.random.PRNGKey], Any]
+    init_params_fn: Callable[[jax.dtypes.prng_key], Any]
     optimizer_fn: Callable[[int], optax.GradientTransformation]  # receives num_steps
     train_batch_fn: Callable[[], tuple]
     val_batch_fn: Optional[Callable[[], tuple]] = None
@@ -19,7 +19,7 @@ class TrainerConfig:
     log_every: int = 100
     validate_every: int = 500
     log_dir: str = "./runs"
-    rng: jax.random.PRNGKey = jax.random.PRNGKey(0)
+    rng: jax.dtypes.prng_key = jax.random.key(0)
 
 
 class Trainer:
