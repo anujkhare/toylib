@@ -154,9 +154,14 @@ class Experiment:
         """Perform a single training step with microbatching."""
 
         def _slice_tensors(
-            batch: jt.PyTree, start: int = 0, end: int | None = None
+            batch: jt.PyTree, start: int, microbatch_size: int
         ) -> jt.PyTree:
-            return jax.tree_util.tree_map(lambda x: x[start:end], batch)
+            return jax.tree_util.tree_map(
+                lambda x: jax.lax.dynamic_slice_in_dim(
+                    x, start, microbatch_size, axis=0
+                ),
+                batch,
+            )
 
         # train_step is run on each device with a shard of the batch
         sharded_batch_size = batch["inputs"].shape[0]
@@ -169,15 +174,12 @@ class Experiment:
         total_loss = 0.0
         with jax.profiler.TraceAnnotation("microbatch_loop"):
             for microbatch_idx in range(num_microbatches):
-                start_idx, end_idx = (
-                    microbatch_idx * microbatch_size,
-                    (microbatch_idx + 1) * microbatch_size,
-                )
+                start_idx = microbatch_idx * microbatch_size
 
                 # Run forward and backward pass on the microbatch
                 (loss_val, _), grads = jax.value_and_grad(
                     self.forward_fn, has_aux=True
-                )(model, _slice_tensors(batch, start_idx, end_idx))
+                )(model, _slice_tensors(batch, start_idx, microbatch_size))
 
                 # Accumulate the gradients and loss over microbatches
                 total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
