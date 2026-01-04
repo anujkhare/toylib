@@ -5,6 +5,7 @@ from toylib_projects.tinystories import analyze
 from toylib_projects.tinystories import data
 from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
+from toylib_projects.tinystories import metrics as metrics_module
 
 
 def get_model_config(
@@ -43,6 +44,7 @@ def create_experiment(
     dataset_path: str = "/tmp/",
     dataset_train_split: str = "train",
     dataset_val_split: str | None = "val",
+    bpt_path: str = "/tmp/bpt_gpt2.npy",
 ) -> experiment.Experiment:
     # The batch is sharded across devices and then split into microbatches
     batch_size = batch_size_per_device * jax.local_device_count() * num_microbatches
@@ -69,6 +71,7 @@ def create_experiment(
                 seq_len=seq_len,
                 tokenizer_batch_size=8,
             ),
+            metrics=[metrics_module.Loss(), metrics_module.BitsPerByte(bpt_path)],
         )
     # Experiment
     exp = experiment.Experiment(
@@ -79,6 +82,7 @@ def create_experiment(
             learning_rate=1e-3,
             max_steps=max_steps,
             num_microbatches=num_microbatches,
+            max_grad_norm=1.0,
         ),
         checkpoint_config=experiment.CheckpointConfig(
             save_interval_steps=2500,

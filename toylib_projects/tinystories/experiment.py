@@ -45,6 +45,8 @@ class TrainingConfig:
     # between the available devices.
     # Only applied to the training config.
     num_microbatches: int = 1
+    # A value > 0.0 enables gradient clipping
+    max_grad_norm: float = 0.0
 
 
 @dataclasses.dataclass
@@ -260,7 +262,15 @@ class Experiment:
         )
 
         # Optimizer
-        self.optimizer = optax.adam(learning_rate=self.training_config.learning_rate)
+        optimizer_chain = []
+        if self.training_config.max_grad_norm > 0.0:
+            optimizer_chain.append(
+                optax.clip_by_global_norm(self.training_config.max_grad_norm)
+            )
+        optimizer_chain.append(
+            optax.adam(learning_rate=self.training_config.learning_rate)
+        )
+        self.optimizer = optax.chain(*optimizer_chain)
         self.opt_state = None
         self.model = None
 
