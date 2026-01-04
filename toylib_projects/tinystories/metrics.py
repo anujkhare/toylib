@@ -82,9 +82,12 @@ class BitsPerByte:
         Returns:
             Dictionary with 'bits_per_byte' metric
         """
+        del loss
+
         # Get per-token loss (in nats) and token ids
         per_token_loss = aux["per_token_loss"]  # [batch_size, seq_len]
         token_ids = batch["inputs"]  # [batch_size, seq_len]
+        mask = batch["mask"]  # [batch_size, seq_len]
 
         # Look up bytes per token for each token in the batch
         bytes_per_token = self._bytes_per_token[token_ids]  # [batch_size, seq_len]
@@ -93,8 +96,11 @@ class BitsPerByte:
         # Then divide by bytes per token to get bits per byte
         bits_per_token = per_token_loss * jnp.log2(jnp.e)
         bits_per_byte = bits_per_token / bytes_per_token  # [batch_size, seq_len]
+        token_valid = jnp.where(bytes_per_token == -1, 0, 1) * mask
 
         # Average over all positions
-        mean_bits_per_byte = jnp.mean(bits_per_byte)
+        mean_bits_per_byte = (bits_per_byte * token_valid).sum() / (
+            token_valid.sum() + 1e-19
+        )
 
         return {"bits_per_byte": mean_bits_per_byte}
