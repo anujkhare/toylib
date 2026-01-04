@@ -24,16 +24,19 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
   * [ ] LR schedule
   * [ ] Modify optimizer
   * [ ] Gradient clipping
-  * [ ] Chinchilla optimal total FLOPs
   * [ ] Mixed-precision training
   * [ ] bf16 inference
+  * [ ] Chinchilla optimal total FLOPs
   * [ ] CPU/TPU memory usage, profiling
   * [ ] fix dep management
 * [ ] Scaling
   * [*] Memory and parameter analysis
   * [*] Training budget - # tokens
   * [*] Multi-core training?
-  * [*] Gradient accumulation / micro-batching
+  * [ ] Gradient accumulation / micro-batching -- memory usage is still pretty high
+    * [ ] work out memory analysis
+    * [ ] how to make sure that we use the minimal amount of memory in the loop
+    * [ ] Do we need to remat?
   * [*] TF Grain
   * [ ] Handle interrupts: restore checkpoints and dataset iterators
   * [ ] Profile / improve resource usage
