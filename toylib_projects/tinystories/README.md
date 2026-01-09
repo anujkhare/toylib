@@ -23,7 +23,7 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
   * [ ] LR/optimizers for different parts of the model
   * [ ] LR schedule
   * [ ] Modify optimizer
-  * [ ] Gradient clipping
+  * [*] Gradient clipping
   * [ ] Mixed-precision training
   * [ ] bf16 inference
   * [ ] Chinchilla optimal total FLOPs
