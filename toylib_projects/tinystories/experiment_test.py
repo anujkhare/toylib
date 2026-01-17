@@ -13,6 +13,7 @@ from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
 from toylib_projects.tinystories import logger
 from toylib_projects.tinystories import metrics
+import optax
 
 
 class TestSerializeDataclassConfig:
@@ -63,7 +64,8 @@ class TestExperiment:
 
         assert exp.train_task == train_task
         assert exp.eval_task is None
-        assert exp.optimizer is not None
+        # Optimizer is created during init_state(), not during __post_init__()
+        assert exp.optimizer is None
         assert exp.opt_state is None
         assert exp.model is None
 
@@ -88,6 +90,7 @@ class TestExperiment:
         exp.init_state()
 
         assert exp.model == mock_model
+        assert exp.optimizer is not None
         assert exp.opt_state == "mock_opt_state"
         assert exp.step == 0
         assert exp.train_step_fn is not None
@@ -613,5 +616,195 @@ class TestExperimentE2E:
         assert "val/loss" in val_metrics
         assert np.isfinite(val_metrics["val/loss"])
         assert val_metrics["val/loss"] > 0
+
+        exp.cleanup()
+
+
+class TestMultiOptimizer:
+    """Tests for multi-optimizer functionality."""
+
+    @patch("toylib_projects.tinystories.experiment.optax.multi_transform")
+    def test_default_single_optimizer(self, mock_multi_transform):
+        """Test that default behavior uses a single optimizer for all parameters."""
+        mock_dataset = Mock()
+        mock_dataset.batch_size = 4
+        train_task = experiment.Task(name="train", dataset=mock_dataset)
+
+        exp = experiment.Experiment(train_task=train_task)
+        exp.init_state()
+
+        mock_multi_transform.assert_not_called()
+
+        exp.cleanup()
+
+    def test_custom_optimizer_mapping(self):
+        """Test custom optimizer mapping for different model parts."""
+        mock_dataset = Mock()
+        mock_dataset.batch_size = 4
+        train_task = experiment.Task(name="train", dataset=mock_dataset)
+
+        def optimizer_for_param(key_path: tuple) -> str:
+            # Extract the keys - some entries have .key attribute (GetAttrKey), others don't
+            path_strs = []
+            for k in key_path:
+                if hasattr(k, "key"):
+                    path_strs.append(k.key if isinstance(k.key, str) else str(k.key))
+                else:
+                    path_strs.append(str(k))
+
+            if ".embedding_layer" in path_strs:
+                return "embedding_opt"
+            if ".causal_attn" in path_strs:
+                return "attention_opt"
+            return "default"
+
+        optimizer_configs = [
+            experiment.OptimizerConfig(
+                name="embedding_opt",
+                optimizer=optax.adam(learning_rate=1e-4),
+                learning_rate=1e-4,
+            ),
+            experiment.OptimizerConfig(
+                name="attention_opt",
+                optimizer=optax.adam(learning_rate=5e-4),
+                learning_rate=5e-4,
+            ),
+            experiment.OptimizerConfig(
+                name="default",
+                optimizer=optax.adam(learning_rate=1e-3),
+                learning_rate=1e-3,
+            ),
+        ]
+
+        exp = experiment.Experiment(
+            train_task=train_task,
+            training_config=experiment.TrainingConfig(
+                optimizer_config=experiment.MultiOptimizerConfig(
+                    optimizer_configs=optimizer_configs,
+                    optimizer_for_param=optimizer_for_param,
+                )
+            ),
+        )
+        exp.init_state()
+
+        # Collect all optimizer names used
+        optimizer_names = set()
+        all_paths = []
+
+        def collect_names(key_path, _):
+            all_paths.append(key_path)
+            optimizer_names.add(optimizer_for_param(key_path))
+
+        jax.tree_util.tree_map_with_path(collect_names, exp.model)
+
+        # Should have multiple optimizer names
+        assert "embedding_opt" in optimizer_names
+        assert "attention_opt" in optimizer_names or "default" in optimizer_names
+
+        exp.cleanup()
+
+    def test_configured_optimizer_mapping(self):
+        """Test optimizer mapping supplied via TrainingConfig."""
+        mock_dataset = Mock()
+        mock_dataset.batch_size = 4
+        train_task = experiment.Task(name="train", dataset=mock_dataset)
+
+        def optimizer_for_param(_key_path: tuple) -> str:
+            return "custom"
+
+        optimizer_configs = [
+            experiment.OptimizerConfig(
+                name="custom",
+                optimizer=optax.adam(learning_rate=1e-3),
+                learning_rate=1e-3,
+            )
+        ]
+
+        multi_optimizer_config = experiment.MultiOptimizerConfig(
+            optimizer_configs=optimizer_configs,
+            optimizer_for_param=optimizer_for_param,
+        )
+
+        exp = experiment.Experiment(
+            train_task=train_task,
+            training_config=experiment.TrainingConfig(
+                optimizer_config=multi_optimizer_config,
+            ),
+        )
+        exp.init_state()
+
+        optimizer_names = set()
+
+        def collect_names(key_path, _):
+            optimizer_names.add(optimizer_for_param(key_path))
+
+        jax.tree_util.tree_map_with_path(collect_names, exp.model)
+
+        assert optimizer_names == {"custom"}, (
+            f"Configured mapping should use only 'custom', got: {optimizer_names}"
+        )
+
+        exp.cleanup()
+
+    def test_multi_optimizer_training_step(self):
+        """Test that training works correctly with multi-optimizer setup."""
+
+        # Create a small test dataset
+        train_dataset = MockDataset(
+            batch_size=2, seq_len=8, vocab_size=32, num_batches=2
+        )
+        train_task = experiment.Task(name="train", dataset=train_dataset)
+
+        # Small model config for testing
+        model_config = decoder_only_model.ModelConfig(
+            vocab_size=32, num_layers=1, qkv_dim=8, num_heads=1
+        )
+
+        def optimizer_for_param(key_path: tuple) -> str:
+            path_strs = [str(k.key) for k in key_path if hasattr(k, "key")]
+            if ".embedding_layer" in path_strs:
+                return "embedding_opt"
+            return "default"
+
+        optimizer_configs = [
+            experiment.OptimizerConfig(
+                name="embedding_opt",
+                optimizer=optax.sgd(learning_rate=1e-3),
+                learning_rate=1e-3,
+            ),
+            experiment.OptimizerConfig(
+                name="default",
+                optimizer=optax.adam(learning_rate=1e-2),
+                learning_rate=1e-2,
+            ),
+        ]
+
+        exp = experiment.Experiment(
+            train_task=train_task,
+            model_config=model_config,
+            training_config=experiment.TrainingConfig(
+                learning_rate=1e-2,
+                max_steps=2,
+                optimizer_config=experiment.MultiOptimizerConfig(
+                    optimizer_configs=optimizer_configs,
+                    optimizer_for_param=optimizer_for_param,
+                ),
+            ),
+            jit_computations=False,
+        )
+        exp.init_state()
+
+        # Store initial parameters
+        initial_params = _get_model_params_flat(exp.model)
+
+        # Run a training step
+        batch = next(iter(train_dataset))
+        exp.inner_loop(batch)
+
+        # Verify parameters were updated
+        updated_params = _get_model_params_flat(exp.model)
+        assert not jnp.allclose(initial_params, updated_params), (
+            "Parameters should be updated after training step"
+        )
 
         exp.cleanup()

@@ -22,7 +22,6 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
   * [*] Scale the batch size for stable gradients
   * [ ] LR/optimizers for different parts of the model
   * [ ] LR schedule
-  * [ ] Modify optimizer
   * [*] Gradient clipping
   * [ ] Mixed-precision training
   * [ ] bf16 inference

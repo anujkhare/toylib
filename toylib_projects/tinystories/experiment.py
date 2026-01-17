@@ -36,8 +36,33 @@ class CheckpointConfig:
 
 
 @dataclasses.dataclass
+class OptimizerConfig:
+    """Configuration for a single optimizer."""
+
+    name: str
+    optimizer: optax.GradientTransformation
+    learning_rate: float = 0.0  # Default value for backward compatibility
+
+
+@dataclasses.dataclass
+class MultiOptimizerConfig:
+    """Configuration for multi-optimizer training."""
+
+    optimizer_configs: list[OptimizerConfig]
+    optimizer_for_param: typing.Callable[[tuple], str]
+
+    def build_optimizer_map(self) -> dict[str, optax.GradientTransformation]:
+        if not self.optimizer_configs:
+            raise ValueError("multi_optimizer_config.optimizer_configs cannot be empty")
+        optimizer_map = {
+            config.name: config.optimizer for config in self.optimizer_configs
+        }
+        assert len(optimizer_map) == len(self.optimizer_configs)
+        return optimizer_map
+
+
+@dataclasses.dataclass
 class TrainingConfig:
-    learning_rate: float = 1e-3
     max_steps: int = 100_000
     # The total batch size is effectively `batch_size * num_microbatches`.
     # This leads to an effective total number of tokens of
@@ -47,6 +72,9 @@ class TrainingConfig:
     num_microbatches: int = 1
     # A value > 0.0 enables gradient clipping
     max_grad_norm: float = 0.0
+    # Configuration for applying different optimizers to different model parts.
+    # If None, uses a single Adam optimizer for all parameters.
+    optimizer_config: MultiOptimizerConfig | None = None
 
 
 @dataclasses.dataclass
@@ -176,6 +204,59 @@ class Experiment:
             all_metrics.update(metric_results)
         return all_metrics
 
+    def _create_optimizer(self, model: jt.PyTree) -> optax.GradientTransformation:
+        """Create the optimizer with optional per-parameter optimization.
+
+        This is called after model initialization to create an optimizer that
+        can apply different optimizers to different parts of the model. The
+        gradient clipping is applied globally before the multi-optimizer.
+
+        Args:
+            model: The initialized model PyTree
+
+        Returns:
+            Optax optimizer chain with gradient clipping and multi-optimizer
+        """
+
+        # Build optimizer chain with gradient clipping
+        optimizer_chain = []
+        if self.training_config.max_grad_norm > 0.0:
+            optimizer_chain.append(
+                optax.clip_by_global_norm(self.training_config.max_grad_norm)
+            )
+
+        # Use multi-optimizer if multi_optimizer_config is provided
+        if self.training_config.optimizer_config is not None:
+            optimizer_map = self.training_config.optimizer_config.build_optimizer_map()
+
+            # Create a function that maps the params PyTree to a PyTree of labels
+            optimizer_for_param = (
+                self.training_config.optimizer_config.optimizer_for_param
+            )
+
+            def label_fn(params):
+                """Map params PyTree to labels PyTree using optimizer_for_param."""
+                return jax.tree_util.tree_map_with_path(
+                    lambda path, _: optimizer_for_param(path), params
+                )
+
+            optimizer_chain.append(
+                optax.multi_transform(
+                    transforms=optimizer_map,
+                    param_labels=label_fn,
+                )
+            )
+        else:
+            # Default: single optimizer for all parameters
+            optimizer_chain.append(
+                optax.adam(learning_rate=self.training_config.learning_rate)
+            )
+
+        # If there's only one transform, return it directly to avoid wrapping
+        if len(optimizer_chain) == 1:
+            return optimizer_chain[0]
+        return optax.chain(*optimizer_chain)
+
     def _train_step(self, model, opt_state, batch):
         """Perform a single training step with microbatching."""
 
@@ -261,16 +342,8 @@ class Experiment:
             output_path=self.logger_config.log_dir,
         )
 
-        # Optimizer
-        optimizer_chain = []
-        if self.training_config.max_grad_norm > 0.0:
-            optimizer_chain.append(
-                optax.clip_by_global_norm(self.training_config.max_grad_norm)
-            )
-        optimizer_chain.append(
-            optax.adam(learning_rate=self.training_config.learning_rate)
-        )
-        self.optimizer = optax.chain(*optimizer_chain)
+        # Optimizer will be created in init_state() after model is initialized
+        self.optimizer = None
         self.opt_state = None
         self.model = None
 
@@ -320,6 +393,10 @@ class Experiment:
         )
         # Replicate model across all devices
         self.model = jax.device_put(self.model, self.replicated_sharding)
+
+        # Create the optimizer based on the model structure
+        # This allows different optimizers for different parts of the model
+        self.optimizer = self._create_optimizer(self.model)
 
         # Initialize and replicate optimizer state
         self.opt_state = self.optimizer.init(self.model)
