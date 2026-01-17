@@ -1,29 +1,26 @@
 [project]
-name = "toylib-tinystories"
+name = "toylib-dotsandboxes"
 version = "0.0.1"
 authors = [
   { name="Anuj Khare", email="khareanuj18@gmail.com" },
 ]
-description = "TinyStories GPT-2 implementation using toylib"
+description = "Dots and Boxes game with MCTS player using toylib"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "jax>=0.4.0",
-    "jaxtyping>=0.2.0",
-    "einops>=0.6.0",
     "numpy>=1.24.0",
-    "transformers>=4.30.0",  # for AutoTokenizer
-    "optax>=0.1.7",
-    "orbax-checkpoint>=0.4.0",
-    "grain>=0.0.4",
-    "pyarrow>=12.0.0",
-    "pandas>=2.0.0",
+    "matplotlib>=3.7.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "jupyter>=1.0.0",
+    "ipython>=8.0.0",
+]
+web = [
+    "flask>=2.3.0",
+    "flask-cors>=4.0.0",
 ]
 
 [build-system]
@@ -34,6 +31,7 @@ build-backend = "hatchling.build"
 dev = [
     "pytest>=7.0.0",
     "jupyter>=1.0.0",
+    "ipython>=8.0.0",
 ]
 
 [tool.uv.sources]
