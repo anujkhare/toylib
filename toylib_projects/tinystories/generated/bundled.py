@@ -439,7 +439,7 @@ class Embedding(Module):
         )
 
     def __call__(
-        self, tokens: jt.Int[jt.Array, "... seq_len"]
+        self, tokens: jt.Integer[jt.Array, "... seq_len"]
     ) -> jt.Float[jt.Array, "... seq_len embedding_dim"]:
         return jax.numpy.take(self.weights, tokens, axis=0)
 
@@ -743,7 +743,7 @@ class DecoderOnlyTransformer(Module):
         )
 
     def __call__(
-        self, x: jt.Float[jt.Array, "... seq_len"]
+        self, x: jt.Integer[jt.Array, "... seq_len"]
     ) -> jt.Float[jt.Array, "... seq_len vocab_size"]:
         """Forward pass for the decoder-only transformer model.
 
@@ -908,6 +908,93 @@ class StdoutLogger(Logger):
 
 
 # ============================================================
+# toylib_projects.tinystories.metrics - /Users/anuj/Desktop/code/toylib/toylib_projects/tinystories/metrics.py
+# ============================================================
+
+
+class Metric(typing.Protocol):
+    """Protocol for computing and accumulating metrics."""
+
+    def __call__(
+        self, loss: float, aux: jt.PyTree, batch: jt.PyTree
+    ) -> dict[str, jt.Array]:
+        """Compute final metric value(s) for the given inputs.
+
+        Args:
+            loss: The loss value returned by forward_fn
+            aux: The auxiliary jt.PyTree returned by forward_fn
+            batch: The input batch
+        """
+        pass
+
+
+@dataclasses.dataclass
+class Loss:
+    """Pass-through metric that returns the loss value."""
+
+    def __call__(
+        self, loss: float, aux: jt.PyTree, batch: jt.PyTree
+    ) -> dict[str, jt.Array]:
+        """Return the loss value.
+
+        Args:
+            loss: The loss value returned by forward_fn
+            aux: The auxiliary PyTree (unused)
+            batch: The input batch (unused)
+
+        Returns:
+            Dictionary with 'loss' metric
+        """
+        del aux, batch
+        return {"loss": loss}
+
+
+@dataclasses.dataclass
+class BitsPerByte:
+    """Metric that computes bits per byte from per-token loss.
+
+    This metric converts the per-token loss (in nats) to bits per byte by:
+    1. Converting nats to bits (multiply by log2(e))
+    2. Dividing by the number of bytes per token for each token
+
+    The bytes per token mapping is loaded from an .npy file at initialization.
+    """
+
+    bytes_per_token_path: str
+    _bytes_per_token: jt.Array = dataclasses.field(init=False, repr=False)
+
+    def __post_init__(self):
+        """Load the bytes per token array from disk."""
+        self._bytes_per_token = jnp.array(np.load(self.bytes_per_token_path))
+
+    def __call__(
+        self, loss: float, aux: jt.PyTree, batch: jt.PyTree
+    ) -> dict[str, jt.Array]:
+        """Compute bits per byte metric.
+
+        Args:
+            loss: The loss value (unused)
+            aux: Must contain 'per_token_loss' with shape [batch_size, seq_len]
+            batch: Must contain 'inputs' with token ids of shape [batch_size, seq_len]
+
+        Returns:
+            Dictionary with 'bits_per_byte' metric
+        """
+        del loss
+        per_token_loss = aux["per_token_loss"]
+        token_ids = batch["inputs"]
+        mask = batch["mask"]
+        bytes_per_token = self._bytes_per_token[token_ids]
+        bits_per_token = per_token_loss * jnp.log2(jnp.e)
+        bits_per_byte = bits_per_token / bytes_per_token
+        token_valid = jnp.where(bytes_per_token == -1, 0, 1) * mask
+        mean_bits_per_byte = (bits_per_byte * token_valid).sum() / (
+            token_valid.sum() + 1e-19
+        )
+        return {"bits_per_byte": mean_bits_per_byte}
+
+
+# ============================================================
 # toylib_projects.tinystories.experiment - /Users/anuj/Desktop/code/toylib/toylib_projects/tinystories/experiment.py
 # ============================================================
 
@@ -932,10 +1019,36 @@ class CheckpointConfig:
 
 
 @dataclasses.dataclass
+class OptimizerConfig:
+    """Configuration for a single optimizer."""
+
+    name: str
+    optimizer: optax.GradientTransformation
+
+
+@dataclasses.dataclass
+class MultiOptimizerConfig:
+    """Configuration for multi-optimizer training."""
+
+    optimizer_configs: list[OptimizerConfig]
+    optimizer_for_param: typing.Callable[[tuple], str]
+
+    def build_optimizer_map(self) -> dict[str, optax.GradientTransformation]:
+        if not self.optimizer_configs:
+            raise ValueError("multi_optimizer_config.optimizer_configs cannot be empty")
+        optimizer_map = {
+            config.name: config.optimizer for config in self.optimizer_configs
+        }
+        assert len(optimizer_map) == len(self.optimizer_configs)
+        return optimizer_map
+
+
+@dataclasses.dataclass
 class TrainingConfig:
-    learning_rate: float = 0.001
+    optimizer_config: MultiOptimizerConfig | None = None
     max_steps: int = 100000
     num_microbatches: int = 1
+    max_grad_norm: float = 0.0
 
 
 @dataclasses.dataclass
@@ -948,6 +1061,7 @@ class EvalConfig:
 class Task:
     name: str
     dataset: BatchedTokenizedDataset
+    metrics: list[Metric] = dataclasses.field(default_factory=lambda: [Loss()])
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -1012,44 +1126,120 @@ class Experiment:
             f"Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}"
         )
 
+    def _compute_metrics(
+        self, task: Task, loss: float, aux: jt.PyTree, batch: jt.PyTree
+    ) -> dict[str, jt.Array]:
+        """Compute all metrics for a task.
+
+        Args:
+            task: The task containing the metrics to compute
+            loss: The loss value
+            aux: The auxiliary PyTree from forward_fn
+            batch: The input batch
+
+        Returns:
+            Dictionary mapping metric names to values
+        """
+        all_metrics = {}
+        for metric in task.metrics:
+            metric_results = metric(loss=loss, aux=aux, batch=batch)
+            all_metrics.update(metric_results)
+        return all_metrics
+
+    def _create_optimizer(self, model: jt.PyTree) -> optax.GradientTransformation:
+        """Create the optimizer with optional per-parameter optimization.
+
+        This is called after model initialization to create an optimizer that
+        can apply different optimizers to different parts of the model. The
+        gradient clipping is applied globally before the multi-optimizer.
+
+        Args:
+            model: The initialized model PyTree
+
+        Returns:
+            Optax optimizer chain with gradient clipping and multi-optimizer
+        """
+        optimizer_chain = []
+        if self.training_config.max_grad_norm > 0.0:
+            optimizer_chain.append(
+                optax.clip_by_global_norm(self.training_config.max_grad_norm)
+            )
+        if self.training_config.optimizer_config is None:
+            print("Using default optimizer: Adam, 1e-3")
+            optimizer_chain.append(optax.adam(learning_rate=0.001))
+        else:
+            optimizer_map = self.training_config.optimizer_config.build_optimizer_map()
+            optimizer_for_param = (
+                self.training_config.optimizer_config.optimizer_for_param
+            )
+
+            def label_fn(params):
+                """Map params PyTree to labels PyTree using optimizer_for_param."""
+                return jax.tree_util.tree_map_with_path(
+                    lambda path, _: optimizer_for_param(path), params
+                )
+
+            optimizer_chain.append(
+                optax.multi_transform(transforms=optimizer_map, param_labels=label_fn)
+            )
+        if len(optimizer_chain) == 1:
+            return optimizer_chain[0]
+        return optax.chain(*optimizer_chain)
+
     def _train_step(self, model, opt_state, batch):
         """Perform a single training step with microbatching."""
 
         def _slice_tensors(
-            batch: jt.PyTree, start: int = 0, end: int | None = None
+            batch: jt.PyTree, start: int, microbatch_size: int
         ) -> jt.PyTree:
-            return jax.tree_util.tree_map(lambda x: x[start:end], batch)
+            return jax.tree_util.tree_map(
+                lambda x: jax.lax.dynamic_slice_in_dim(
+                    x, start, microbatch_size, axis=0
+                ),
+                batch,
+            )
 
         sharded_batch_size = batch["inputs"].shape[0]
         num_microbatches = self.training_config.num_microbatches
         microbatch_size = sharded_batch_size // num_microbatches
         total_grads = jax.tree.map(lambda x: jnp.zeros_like(x), model)
-        total_loss = 0.0
+        accumulated_metrics = None
         with jax.profiler.TraceAnnotation("microbatch_loop"):
             for microbatch_idx in range(num_microbatches):
-                start_idx, end_idx = (
-                    microbatch_idx * microbatch_size,
-                    (microbatch_idx + 1) * microbatch_size,
-                )
-                (loss_val, _), grads = jax.value_and_grad(
+                start_idx = microbatch_idx * microbatch_size
+                microbatch = _slice_tensors(batch, start_idx, microbatch_size)
+                (loss_val, aux), grads = jax.value_and_grad(
                     self.forward_fn, has_aux=True
-                )(model, _slice_tensors(batch, start_idx, end_idx))
+                )(model, microbatch)
+                microbatch_metrics = self._compute_metrics(
+                    task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
+                )
                 total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
-                total_loss += loss_val
+                if accumulated_metrics is None:
+                    accumulated_metrics = microbatch_metrics
+                else:
+                    accumulated_metrics = jax.tree.map(
+                        lambda x, y: x + y, accumulated_metrics, microbatch_metrics
+                    )
             total_grads = jax.tree.map(
                 lambda g: g / self.num_devices / num_microbatches, total_grads
             )
-            total_loss /= num_microbatches
+            averaged_metrics = jax.tree.map(
+                lambda x: x / num_microbatches, accumulated_metrics
+            )
         with jax.profiler.TraceAnnotation("optimizer_update"):
-            updates, opt_state = self.optimizer.update(total_grads, opt_state)
+            updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
             model = optax.apply_updates(model, updates)
-        return (model, opt_state, total_loss)
+        return (model, opt_state, averaged_metrics)
 
     def _eval_step(self, model, batch):
-        """Perform a single evaluation step."""
+        """Perform a single evaluation step and compute metrics."""
         with jax.profiler.TraceAnnotation("eval_forward"):
-            loss_val, _ = self.forward_fn(model, batch)
-        return loss_val
+            loss_val, aux = self.forward_fn(model, batch)
+        eval_metrics = self._compute_metrics(
+            task=self.eval_task, loss=loss_val, aux=aux, batch=batch
+        )
+        return eval_metrics
 
     def __post_init__(self):
         self._setup_sharding()
@@ -1058,7 +1248,7 @@ class Experiment:
             config_dict=_serialize_dataclass_config(self),
             output_path=self.logger_config.log_dir,
         )
-        self.optimizer = optax.adam(learning_rate=self.training_config.learning_rate)
+        self.optimizer = None
         self.opt_state = None
         self.model = None
         self.ckpt_manager = ocp.CheckpointManager(
@@ -1099,6 +1289,7 @@ class Experiment:
             config=self.model_config, key=jax.random.key(0)
         )
         self.model = jax.device_put(self.model, self.replicated_sharding)
+        self.optimizer = self._create_optimizer(self.model)
         self.opt_state = self.optimizer.init(self.model)
         self.opt_state = jax.device_put(self.opt_state, self.replicated_sharding)
         self.step = 0
@@ -1146,20 +1337,35 @@ class Experiment:
             self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
 
-    def run_validation(self) -> float:
+    def run_validation(self) -> dict[str, float]:
+        """Run validation and compute all metrics for the eval task.
+
+        Returns:
+            Dictionary of averaged metrics
+        """
         self._assert_initialized()
         if self.eval_task is None:
-            print("No eval task defined, skipping validation loss.")
-            return
-        total_val_loss = 0.0
+            print("No eval task defined, skipping validation.")
+            return {}
+        accumulated_metrics = None
+        num_batches = 0
         for ix, batch in enumerate(self.eval_task.dataset):
-            val_loss = self.eval_step_fn(self.model, batch)
-            total_val_loss += float(val_loss)
+            batch_metrics = self.eval_step_fn(self.model, batch)
+            if accumulated_metrics is None:
+                accumulated_metrics = batch_metrics
+            else:
+                accumulated_metrics = jax.tree.map(
+                    lambda x, y: x + y, accumulated_metrics, batch_metrics
+                )
+            num_batches += 1
             if ix >= self.eval_config.num_eval_steps:
                 break
-        avg_val_loss = total_val_loss / (ix + 1)
-        self.logger_obj.log(self.step, metrics={"val/loss": avg_val_loss})
-        return avg_val_loss
+        avg_metrics = jax.tree.map(
+            lambda x: float(x) / num_batches, accumulated_metrics
+        )
+        avg_metrics = {f"val/{key}": value for key, value in avg_metrics.items()}
+        self.logger_obj.log(self.step, metrics=avg_metrics)
+        return avg_metrics
 
     def sampling_evaluation(
         self, prompts: list[str] | None = None, max_tokens: int = 10
@@ -1207,11 +1413,14 @@ class Experiment:
 
     def inner_loop(self, batch: dict):
         self._assert_initialized()
-        self.model, self.opt_state, loss_val = self.train_step_fn(
+        self.model, self.opt_state, train_metrics = self.train_step_fn(
             self.model, self.opt_state, batch
         )
         if self.step % self.logger_config.train_log_interval_steps == 0:
-            self.logger_obj.log(self.step, metrics={"train/loss": float(loss_val)})
+            train_metrics_with_prefix = {
+                f"train/{key}": float(value) for key, value in train_metrics.items()
+            }
+            self.logger_obj.log(self.step, metrics=train_metrics_with_prefix)
 
     def outer_loop(self):
         finished = self.step >= self.training_config.max_steps
@@ -1241,6 +1450,72 @@ class Experiment:
 # ============================================================
 # None - ../tinystories/train.py
 # ============================================================
+
+
+def create_muon_adam_multi_optimizer_config(
+    muon_lr: float = 0.0001,
+    adamw_embed_lr: float = 0.0001,
+    adamw_output_lr: float = 0.0001,
+    weight_decay: float = 0.0,
+) -> MultiOptimizerConfig:
+    """Create multi-optimizer config with Muon for blocks, Adam for embeddings/output.
+
+    Optimizer routing:
+    - embedding_layer -> Adam (embeddings typically need different treatment)
+    - output_layer -> Adam (output projection)
+    - everything else (blocks with causal_attn and mlp) -> Muon
+
+    Args:
+        muon_lr: Learning rate for Muon optimizer
+        adamw_embed_lr: Learning rate for Adam optimizer (embeddings)
+        adamw_output_lr: Learning rate for Adam optimizer (output)
+
+    Returns:
+        MultiOptimizerConfig ready for TrainingConfig
+    """
+
+    def optimizer_for_param(key_path: tuple) -> str:
+        """Route parameters to optimizers based on their path in the model tree."""
+        path_strs = []
+        for k in key_path:
+            if hasattr(k, "key"):
+                path_strs.append(k.key if isinstance(k.key, str) else str(k.key))
+            else:
+                path_strs.append(str(k))
+        if "embedding_layer" in path_strs:
+            return "adamw_embed"
+        if "output_layer" in path_strs:
+            return "adamw_output"
+        return "muon"
+
+    optimizer_configs = [
+        OptimizerConfig(
+            name="muon", optimizer=optax.contrib.muon(learning_rate=muon_lr)
+        ),
+        OptimizerConfig(
+            name="adamw_embed",
+            optimizer=optax.adamw(
+                learning_rate=adamw_embed_lr,
+                b1=0.8,
+                b2=0.95,
+                eps=1e-10,
+                weight_decay=weight_decay,
+            ),
+        ),
+        OptimizerConfig(
+            name="adamw_output",
+            optimizer=optax.adamw(
+                learning_rate=adamw_output_lr,
+                b1=0.8,
+                b2=0.95,
+                eps=1e-10,
+                weight_decay=weight_decay,
+            ),
+        ),
+    ]
+    return MultiOptimizerConfig(
+        optimizer_configs=optimizer_configs, optimizer_for_param=optimizer_for_param
+    )
 
 
 def get_model_config(
@@ -1274,6 +1549,10 @@ def create_experiment(
     dataset_path: str = "/tmp/",
     dataset_train_split: str = "train",
     dataset_val_split: str | None = "val",
+    bpt_path: str = "/tmp/bpt_gpt2.npy",
+    muon_lr: float = 0.02,
+    adamw_embed_lr: float = 0.2,
+    adamw_output_lr: float = 0.004,
 ) -> Experiment:
     batch_size = batch_size_per_device * jax.local_device_count() * num_microbatches
     train_task = Task(
@@ -1297,13 +1576,27 @@ def create_experiment(
                 seq_len=seq_len,
                 tokenizer_batch_size=8,
             ),
+            metrics=[Loss(), BitsPerByte(bpt_path)],
         )
+    model_config = get_model_config(depth=depth, seq_len=seq_len, vocab_size=vocab_size)
+    optimizer_config = None
+    model_dim = model_config.qkv_dim
+    dmodel_lr_scale = (model_dim / 768) ** (-0.5)
+    print(
+        f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}"
+    )
+    optimizer_config = create_muon_adam_multi_optimizer_config(
+        muon_lr=muon_lr,
+        adamw_embed_lr=adamw_embed_lr * dmodel_lr_scale,
+        adamw_output_lr=adamw_output_lr * dmodel_lr_scale,
+    )
     exp = Experiment(
-        model_config=get_model_config(
-            depth=depth, seq_len=seq_len, vocab_size=vocab_size
-        ),
+        model_config=model_config,
         training_config=TrainingConfig(
-            learning_rate=0.001, max_steps=max_steps, num_microbatches=num_microbatches
+            max_steps=max_steps,
+            num_microbatches=num_microbatches,
+            max_grad_norm=1.0,
+            optimizer_config=optimizer_config,
         ),
         checkpoint_config=CheckpointConfig(
             save_interval_steps=2500,
@@ -1311,17 +1604,29 @@ def create_experiment(
             checkpoint_dir=checkpoint_dir,
             checkpoint_dataset_iterator=False,
         ),
+        logger_config=LoggerConfig(log_dir=checkpoint_dir),
         train_task=train_task,
         eval_task=val_task,
     )
     exp.init_state()
     print_estimated_tokens(exp)
-    print_chinchilla_estimate(exp)
+    print_chinchilla_estimate(exp.model)
     print(print_param_sizes(exp.model, depth=3)[0])
     return exp
 
 
 if __name__ == "__main__":
-    exp = create_experiment(batch_size=48)
-    exp.init_state()
+    exp = create_experiment(
+        batch_size_per_device=18,
+        seq_len=2048,
+        max_steps=12000,
+        num_microbatches=2,
+        depth=12,
+        vocab_size=50257,
+        checkpoint_dir="/tmp/checkpoints",
+        use_multi_optimizer=True,
+        muon_lr=0.0001,
+        adamw_embed_lr=0.0001,
+        adamw_output_lr=0.0001,
+    )
     exp.outer_loop()
