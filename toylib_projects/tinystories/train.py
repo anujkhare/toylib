@@ -10,7 +10,9 @@ from toylib_projects.tinystories import metrics as metrics_module
 
 def create_muon_adam_multi_optimizer_config(
     muon_lr: float = 1e-4,
-    adam_lr: float = 1e-4,
+    adamw_embed_lr: float = 1e-4,
+    adamw_output_lr: float = 1e-4,
+    weight_decay: float = 0.0,
 ) -> experiment.MultiOptimizerConfig:
     """Create multi-optimizer config with Muon for blocks, Adam for embeddings/output.
 
@@ -21,7 +23,8 @@ def create_muon_adam_multi_optimizer_config(
 
     Args:
         muon_lr: Learning rate for Muon optimizer
-        adam_lr: Learning rate for Adam optimizer (embeddings/output)
+        adamw_embed_lr: Learning rate for Adam optimizer (embeddings)
+        adamw_output_lr: Learning rate for Adam optimizer (output)
 
     Returns:
         MultiOptimizerConfig ready for TrainingConfig
@@ -39,22 +42,37 @@ def create_muon_adam_multi_optimizer_config(
                 path_strs.append(str(k))
 
         # Use Adam for embedding and output layers
-        if "embedding_layer" in path_strs or "output_layer" in path_strs:
-            return "adam_opt"
+        if "embedding_layer" in path_strs:
+            return "adamw_embed"
+        if "output_layer" in path_strs:
+            return "adamw_output"
         # Use Muon for transformer blocks (attention and MLP)
-        else:
-            return "muon_opt"
+        return "muon"
 
     optimizer_configs = [
         experiment.OptimizerConfig(
-            name="muon_opt",
+            name="muon",
             optimizer=optax.contrib.muon(learning_rate=muon_lr),
-            learning_rate=muon_lr,
         ),
         experiment.OptimizerConfig(
-            name="adam_opt",
-            optimizer=optax.adam(learning_rate=adam_lr),
-            learning_rate=adam_lr,
+            name="adamw_embed",
+            optimizer=optax.adamw(
+                learning_rate=adamw_embed_lr,
+                b1=0.8,
+                b2=0.95,
+                eps=1e-10,
+                weight_decay=weight_decay,
+            ),
+        ),
+        experiment.OptimizerConfig(
+            name="adamw_output",
+            optimizer=optax.adamw(
+                learning_rate=adamw_output_lr,
+                b1=0.8,
+                b2=0.95,
+                eps=1e-10,
+                weight_decay=weight_decay,
+            ),
         ),
     ]
 
@@ -101,11 +119,9 @@ def create_experiment(
     dataset_train_split: str = "train",
     dataset_val_split: str | None = "val",
     bpt_path: str = "/tmp/bpt_gpt2.npy",
-    # Multi-optimizer parameters
-    use_multi_optimizer: bool = True,
-    muon_lr: float = 1e-4,
-    adam_lr: float = 1e-4,
-    single_lr: float = 1e-3,
+    muon_lr: float = 2e-2,
+    adamw_embed_lr: float = 2e-1,
+    adamw_output_lr: float = 4e-3,
 ) -> experiment.Experiment:
     # The batch is sharded across devices and then split into microbatches
     batch_size = batch_size_per_device * jax.local_device_count() * num_microbatches
@@ -135,28 +151,33 @@ def create_experiment(
             metrics=[metrics_module.Loss(), metrics_module.BitsPerByte(bpt_path)],
         )
 
-    # Configure optimizer based on mode
-    multi_optimizer_config = None
-    learning_rate = single_lr
+    model_config = get_model_config(depth=depth, seq_len=seq_len, vocab_size=vocab_size)
 
-    if use_multi_optimizer:
-        multi_optimizer_config = create_muon_adam_multi_optimizer_config(
-            muon_lr=muon_lr,
-            adam_lr=adam_lr,
-        )
-        learning_rate = muon_lr  # Set for consistency/logging
+    # Configure optimizer based on mode
+    optimizer_config = None
+
+    # TODO: why is this the case?
+    # Scale the LR for the AdamW parameters by ∝1/√dmodel (having tuned the LRs for 768 dim model)
+    model_dim = model_config.qkv_dim
+    dmodel_lr_scale = (model_dim / 768) ** -0.5
+    print(
+        f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}"
+    )
+
+    optimizer_config = create_muon_adam_multi_optimizer_config(
+        muon_lr=muon_lr,
+        adamw_embed_lr=adamw_embed_lr * dmodel_lr_scale,
+        adamw_output_lr=adamw_output_lr * dmodel_lr_scale,
+    )
 
     # Experiment
     exp = experiment.Experiment(
-        model_config=get_model_config(
-            depth=depth, seq_len=seq_len, vocab_size=vocab_size
-        ),
+        model_config=model_config,
         training_config=experiment.TrainingConfig(
-            learning_rate=learning_rate,
             max_steps=max_steps,
             num_microbatches=num_microbatches,
             max_grad_norm=1.0,
-            optimizer_config=multi_optimizer_config,
+            optimizer_config=optimizer_config,
         ),
         checkpoint_config=experiment.CheckpointConfig(
             save_interval_steps=2500,
@@ -170,11 +191,13 @@ def create_experiment(
         train_task=train_task,
         eval_task=val_task,
     )
+
     # Initialize model and optimizer state
     exp.init_state()
+
     # Print stats
     analyze.print_estimated_tokens(exp)
-    analyze.print_chinchilla_estimate(exp)
+    analyze.print_chinchilla_estimate(exp.model)
     print(analyze.print_param_sizes(exp.model, depth=3)[0])
     return exp
 
@@ -191,6 +214,7 @@ if __name__ == "__main__":
         # Multi-optimizer configuration
         use_multi_optimizer=True,
         muon_lr=1e-4,
-        adam_lr=1e-4,
+        adamw_embed_lr=1e-4,
+        adamw_output_lr=1e-4,
     )
     exp.outer_loop()

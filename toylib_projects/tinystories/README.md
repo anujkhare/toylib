@@ -20,7 +20,7 @@ I started this a little bit before [nanochat](https://github.com/karpathy/nanoch
 * [ ] Improvements
   * [*] Param counts
   * [*] Scale the batch size for stable gradients
-  * [ ] LR/optimizers for different parts of the model
+  * [*] LR/optimizers for different parts of the model
   * [ ] LR schedule
   * [*] Gradient clipping
   * [ ] Mixed-precision training

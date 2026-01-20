@@ -41,7 +41,6 @@ class OptimizerConfig:
 
     name: str
     optimizer: optax.GradientTransformation
-    learning_rate: float = 0.0  # Default value for backward compatibility
 
 
 @dataclasses.dataclass
@@ -63,18 +62,21 @@ class MultiOptimizerConfig:
 
 @dataclasses.dataclass
 class TrainingConfig:
+    # Configuration for applying different optimizers to different model parts.
+    # If None, uses a single Adam optimizer for all parameters.
+    optimizer_config: MultiOptimizerConfig | None = None
+
     max_steps: int = 100_000
+
     # The total batch size is effectively `batch_size * num_microbatches`.
     # This leads to an effective total number of tokens of
     # `batch_size * seq_len * num_microbatches`. The batch is sharded
     # between the available devices.
     # Only applied to the training config.
     num_microbatches: int = 1
+
     # A value > 0.0 enables gradient clipping
     max_grad_norm: float = 0.0
-    # Configuration for applying different optimizers to different model parts.
-    # If None, uses a single Adam optimizer for all parameters.
-    optimizer_config: MultiOptimizerConfig | None = None
 
 
 @dataclasses.dataclass
@@ -226,7 +228,11 @@ class Experiment:
             )
 
         # Use multi-optimizer if multi_optimizer_config is provided
-        if self.training_config.optimizer_config is not None:
+        if self.training_config.optimizer_config is None:
+            print("Using default optimizer: Adam, 1e-3")
+            optimizer_chain.append(optax.adam(learning_rate=1e-3))
+
+        else:
             optimizer_map = self.training_config.optimizer_config.build_optimizer_map()
 
             # Create a function that maps the params PyTree to a PyTree of labels
@@ -245,11 +251,6 @@ class Experiment:
                     transforms=optimizer_map,
                     param_labels=label_fn,
                 )
-            )
-        else:
-            # Default: single optimizer for all parameters
-            optimizer_chain.append(
-                optax.adam(learning_rate=self.training_config.learning_rate)
             )
 
         # If there's only one transform, return it directly to avoid wrapping

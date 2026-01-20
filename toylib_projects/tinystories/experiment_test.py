@@ -166,7 +166,6 @@ def _create_test_experiment(
     )
 
     training_config = experiment.TrainingConfig(
-        learning_rate=1e-2,  # Higher LR to see parameter changes
         max_steps=10,
     )
 
@@ -662,17 +661,14 @@ class TestMultiOptimizer:
             experiment.OptimizerConfig(
                 name="embedding_opt",
                 optimizer=optax.adam(learning_rate=1e-4),
-                learning_rate=1e-4,
             ),
             experiment.OptimizerConfig(
                 name="attention_opt",
                 optimizer=optax.adam(learning_rate=5e-4),
-                learning_rate=5e-4,
             ),
             experiment.OptimizerConfig(
                 name="default",
                 optimizer=optax.adam(learning_rate=1e-3),
-                learning_rate=1e-3,
             ),
         ]
 
@@ -716,7 +712,6 @@ class TestMultiOptimizer:
             experiment.OptimizerConfig(
                 name="custom",
                 optimizer=optax.adam(learning_rate=1e-3),
-                learning_rate=1e-3,
             )
         ]
 
@@ -770,12 +765,10 @@ class TestMultiOptimizer:
             experiment.OptimizerConfig(
                 name="embedding_opt",
                 optimizer=optax.sgd(learning_rate=1e-3),
-                learning_rate=1e-3,
             ),
             experiment.OptimizerConfig(
                 name="default",
                 optimizer=optax.adam(learning_rate=1e-2),
-                learning_rate=1e-2,
             ),
         ]
 
@@ -783,7 +776,6 @@ class TestMultiOptimizer:
             train_task=train_task,
             model_config=model_config,
             training_config=experiment.TrainingConfig(
-                learning_rate=1e-2,
                 max_steps=2,
                 optimizer_config=experiment.MultiOptimizerConfig(
                     optimizer_configs=optimizer_configs,
