@@ -314,7 +314,7 @@ class Experiment:
             )
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
-            updates, opt_state = self.optimizer.update(total_grads, opt_state)
+            updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
 
             # Update the model and optimizer state
             model = optax.apply_updates(model, updates)

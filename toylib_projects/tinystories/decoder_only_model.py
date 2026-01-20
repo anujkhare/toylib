@@ -155,7 +155,7 @@ class DecoderOnlyTransformer(module.Module):
         )
 
     def __call__(
-        self, x: jt.Float[jt.Array, "... seq_len"]
+        self, x: jt.Integer[jt.Array, "... seq_len"]
     ) -> jt.Float[jt.Array, "... seq_len vocab_size"]:
         """Forward pass for the decoder-only transformer model.
 

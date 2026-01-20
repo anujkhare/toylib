@@ -58,7 +58,7 @@ class Embedding(module.Module):
         )
 
     def __call__(
-        self, tokens: jt.Int[jt.Array, "... seq_len"]
+        self, tokens: jt.Integer[jt.Array, "... seq_len"]
     ) -> jt.Float[jt.Array, "... seq_len embedding_dim"]:
         return jax.numpy.take(self.weights, tokens, axis=0)
 
