@@ -2,6 +2,7 @@ import einops
 from jax import numpy as jnp
 import jax
 import jaxtyping as jt
+import math
 import typing
 
 from toylib.nn import layers
@@ -114,7 +115,7 @@ class MultiHeadAttention(module.Module):
         # init_std for the q, k, v projections is set to 1/sqrt(qkv_dim) to ensure that the initial variance
         # of the projected queries, keys, and values is around 1. This helps stabilize training at the start
         # by preventing excessively large or small values in the attention computations.
-        init_std = 1 / jnp.sqrt(qkv_dim)
+        init_std = 1 / math.sqrt(qkv_dim)
         # Input projections - different "heads" will be split out from the same tensor
         self.q_projection = layers.Linear(
             in_features=qkv_dim,

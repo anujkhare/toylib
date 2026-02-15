@@ -561,7 +561,7 @@ class MultiHeadAttention(Module):
     def init(self) -> None:
         qkv_dim = self.qkv_dim
         keys = jax.random.split(self.key, 4)
-        init_std = 1 / jnp.sqrt(qkv_dim)
+        init_std = 1 / math.sqrt(qkv_dim)
         self.q_projection = Linear(
             in_features=qkv_dim,
             out_features=qkv_dim,
@@ -669,13 +669,11 @@ class MLP(Module):
     def init(self) -> None:
         qkv_dim = self.qkv_dim
         keys = jax.random.split(self.key, 2)
-        self.fc1 = (
-            Linear(
-                in_features=qkv_dim,
-                out_features=4 * qkv_dim,
-                key=keys[0],
-                init_std=1 / jnp.sqrt(qkv_dim),
-            ),
+        self.fc1 = Linear(
+            in_features=qkv_dim,
+            out_features=4 * qkv_dim,
+            key=keys[0],
+            init_std=1 / math.sqrt(qkv_dim),
         )
         self.fc2 = Linear(
             in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1], init_std=0.0
@@ -761,10 +759,7 @@ class DecoderOnlyTransformer(Module):
         config = self.config
         keys = jax.random.split(self.key, config.num_layers + 2)
         self.embedding_layer = Embedding(
-            vocab_size=config.vocab_size,
-            embedding_dim=config.qkv_dim,
-            key=keys[0],
-            init_std=1.0,
+            vocab_size=config.vocab_size, embedding_dim=config.qkv_dim, key=keys[0]
         )
         self.blocks = []
         for ix in range(config.num_layers):

@@ -2,6 +2,7 @@ import dataclasses
 import jax
 import jaxtyping as jt
 import jax.numpy as jnp
+import math
 from toylib.nn import attention
 from toylib.nn import layers
 from toylib.nn import module
@@ -35,13 +36,11 @@ class MLP(module.Module):
         # with an inner dimension of 4 times the model dimension.
         # See "Attention is All You Need" paper for more details.
         # https://arxiv.org/abs/1706.03762
-        self.fc1 = (
-            layers.Linear(
-                in_features=qkv_dim,
-                out_features=4 * qkv_dim,
-                key=keys[0],
-                init_std=1 / jnp.sqrt(qkv_dim),
-            ),
+        self.fc1 = layers.Linear(
+            in_features=qkv_dim,
+            out_features=4 * qkv_dim,
+            key=keys[0],
+            init_std=1 / math.sqrt(qkv_dim),
         )
         self.fc2 = layers.Linear(
             in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1], init_std=0.0
@@ -139,7 +138,6 @@ class DecoderOnlyTransformer(module.Module):
             vocab_size=config.vocab_size,
             embedding_dim=config.qkv_dim,
             key=keys[0],
-            init_std=1.0,
         )
 
         # Self-attention layers
