@@ -879,7 +879,8 @@ class FileLogger(Logger):
 
     def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
         self.config_dict = config_dict
-        self.file_ptr = open(os.path.join(output_path, "train_logs.txt"), "w")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.file_ptr = open(os.path.join(output_path, f"logs_{timestamp}.txt"), "w")
         self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:
@@ -1318,8 +1319,13 @@ class Experiment:
         self.ckpt_manager.save(self.step, args=ocp.args.Composite(**args))
         self.ckpt_manager.wait_until_finished()
 
-    def restore_checkpoint(self, step: int):
+    def _resolve_latest_saved_checkpoint_step(self) -> int:
+        raise NotImplementedError("provide a step explicitly!")
+
+    def restore_checkpoint(self, step: int | None = None):
         self._assert_initialized()
+        if step is None:
+            step = self._resolve_latest_saved_checkpoint_step()
         model_template = self._unreplicate_for_checkpoint(self.model)
         opt_state_template = self._unreplicate_for_checkpoint(self.opt_state)
         args = {
