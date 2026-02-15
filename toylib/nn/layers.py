@@ -16,6 +16,8 @@ class Linear(module.Module):
     use_bias: bool = False
     key: jt.PRNGKeyArray
 
+    init_std: float | None = None
+
     # Trainable parameters
     weights: jt.Float[jt.Array, "in_features out_features"] | None = None
     bias: typing.Optional[jt.Float[jt.Array, " out_features"]] | None = None
@@ -25,9 +27,23 @@ class Linear(module.Module):
         in_features = self.in_features
         out_features = self.out_features
 
-        # https://arxiv.org/pdf/2310.17813
-        std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(in_features)
-        self.weights = jax.random.normal(w_key, (in_features, out_features)) * std
+        if self.init_std is not None:
+            std = self.init_std
+            # Initialize weights with a uniform distribution in the range [-std * sqrt(3), std * sqrt(3)]
+            # For uniform distribution betweeen [-a, a], the variance is a^2 / 3.
+            # a^2 / 3 = std^2 => a = std * sqrt(3)
+            s = std * math.sqrt(3)
+            self.weights = jax.random.uniform(
+                key=w_key, shape=(in_features, out_features), minval=-s, maxval=s
+            )
+        else:
+            # https://arxiv.org/pdf/2310.17813
+            std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(
+                in_features
+            )
+            self.weights = (
+                jax.random.normal(key=w_key, shape=(in_features, out_features)) * std
+            )
         self.bias = jax.numpy.zeros((out_features,)) if self.use_bias else None
 
     def __call__(

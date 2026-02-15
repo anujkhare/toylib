@@ -111,29 +111,40 @@ class MultiHeadAttention(module.Module):
         qkv_dim = self.qkv_dim
         keys = jax.random.split(self.key, 4)
 
+        # init_std for the q, k, v projections is set to 1/sqrt(qkv_dim) to ensure that the initial variance
+        # of the projected queries, keys, and values is around 1. This helps stabilize training at the start
+        # by preventing excessively large or small values in the attention computations.
+        init_std = 1 / jnp.sqrt(qkv_dim)
         # Input projections - different "heads" will be split out from the same tensor
         self.q_projection = layers.Linear(
             in_features=qkv_dim,
             out_features=qkv_dim,
             use_bias=False,
             key=keys[0],
+            init_std=init_std,
         )
         self.k_projection = layers.Linear(
             in_features=qkv_dim,
             out_features=qkv_dim,
             use_bias=False,
             key=keys[1],
+            init_std=init_std,
         )
         self.v_projection = layers.Linear(
             in_features=qkv_dim,
             out_features=qkv_dim,
             use_bias=False,
             key=keys[2],
+            init_std=init_std,
         )
 
         # Output linear layer
         self.linear = layers.Linear(
-            in_features=qkv_dim, out_features=qkv_dim, key=keys[3]
+            in_features=qkv_dim,
+            out_features=qkv_dim,
+            key=keys[3],
+            # Initialize weights to zero to stabilize training at the start
+            init_std=0.0,
         )
 
     def __call__(

@@ -35,21 +35,24 @@ class MLP(module.Module):
         # with an inner dimension of 4 times the model dimension.
         # See "Attention is All You Need" paper for more details.
         # https://arxiv.org/abs/1706.03762
-        self.fc1 = layers.Linear(
-            in_features=qkv_dim, out_features=4 * qkv_dim, key=keys[0]
+        self.fc1 = (
+            layers.Linear(
+                in_features=qkv_dim,
+                out_features=4 * qkv_dim,
+                key=keys[0],
+                init_std=1 / jnp.sqrt(qkv_dim),
+            ),
         )
         self.fc2 = layers.Linear(
-            in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1]
+            in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1], init_std=0.0
         )
-        # Initialize weights to zero to stabilize training at the start
-        self.fc2.weights = jnp.zeros_like(self.fc2.weights)
 
     def __call__(
         self, x: jt.Float[jt.Array, "... qkv_dim"]
     ) -> jt.Float[jt.Array, "... qkv_dim"]:
         x = self.fc1(x)
-        # TODO: relu squared (https://arxiv.org/abs/2002.05202) or SwiGLU (https://arxiv.org/pdf/2204.02311)
-        x = jax.nn.gelu(x)
+        # ReLU squared (https://arxiv.org/abs/2002.05202) or SwiGLU (https://arxiv.org/pdf/2204.02311)
+        x = jax.nn.relu(x) ** 2
         x = self.fc2(x)
         return x
 
@@ -69,11 +72,10 @@ class CausalSelfAttention(module.Module):
             key=self.key,
             use_qk_norm=True,
         )
-        # Initialize weights to zero to stabilize training at the start
         self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
 
         self.rope = attention.RotaryPositionalEmbedding(
-            qkv_dim=self.qkv_dim // self.num_heads, seq_len=self.seq_len
+            qkv_dim=self.qkv_dim // self.num_heads, seq_len=self.seq_len, base=10_000
         )
 
     def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
@@ -134,7 +136,10 @@ class DecoderOnlyTransformer(module.Module):
 
         # Embedding layer
         self.embedding_layer = layers.Embedding(
-            vocab_size=config.vocab_size, embedding_dim=config.qkv_dim, key=keys[0]
+            vocab_size=config.vocab_size,
+            embedding_dim=config.qkv_dim,
+            key=keys[0],
+            init_std=1.0,
         )
 
         # Self-attention layers
@@ -151,7 +156,10 @@ class DecoderOnlyTransformer(module.Module):
 
         # Output projection
         self.output_layer = layers.Linear(
-            in_features=config.qkv_dim, out_features=config.vocab_size, key=keys[-1]
+            in_features=config.qkv_dim,
+            out_features=config.vocab_size,
+            key=keys[-1],
+            init_std=0.001,  # small std to prevent large initial logit values which can destabilize training
         )
 
     def __call__(
