@@ -405,6 +405,7 @@ class Linear(Module):
     out_features: int
     use_bias: bool = False
     key: jt.PRNGKeyArray
+    init_std: float | None = None
     weights: jt.Float[jt.Array, "in_features out_features"] | None = None
     bias: typing.Optional[jt.Float[jt.Array, " out_features"]] | None = None
 
@@ -412,8 +413,19 @@ class Linear(Module):
         w_key = self.key
         in_features = self.in_features
         out_features = self.out_features
-        std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(in_features)
-        self.weights = jax.random.normal(w_key, (in_features, out_features)) * std
+        if self.init_std is not None:
+            std = self.init_std
+            s = std * math.sqrt(3)
+            self.weights = jax.random.uniform(
+                key=w_key, shape=(in_features, out_features), minval=-s, maxval=s
+            )
+        else:
+            std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(
+                in_features
+            )
+            self.weights = (
+                jax.random.normal(key=w_key, shape=(in_features, out_features)) * std
+            )
         self.bias = jax.numpy.zeros((out_features,)) if self.use_bias else None
 
     def __call__(
@@ -549,16 +561,31 @@ class MultiHeadAttention(Module):
     def init(self) -> None:
         qkv_dim = self.qkv_dim
         keys = jax.random.split(self.key, 4)
+        init_std = 1 / jnp.sqrt(qkv_dim)
         self.q_projection = Linear(
-            in_features=qkv_dim, out_features=qkv_dim, use_bias=False, key=keys[0]
+            in_features=qkv_dim,
+            out_features=qkv_dim,
+            use_bias=False,
+            key=keys[0],
+            init_std=init_std,
         )
         self.k_projection = Linear(
-            in_features=qkv_dim, out_features=qkv_dim, use_bias=False, key=keys[1]
+            in_features=qkv_dim,
+            out_features=qkv_dim,
+            use_bias=False,
+            key=keys[1],
+            init_std=init_std,
         )
         self.v_projection = Linear(
-            in_features=qkv_dim, out_features=qkv_dim, use_bias=False, key=keys[2]
+            in_features=qkv_dim,
+            out_features=qkv_dim,
+            use_bias=False,
+            key=keys[2],
+            init_std=init_std,
         )
-        self.linear = Linear(in_features=qkv_dim, out_features=qkv_dim, key=keys[3])
+        self.linear = Linear(
+            in_features=qkv_dim, out_features=qkv_dim, key=keys[3], init_std=0.0
+        )
 
     def __call__(
         self,
@@ -642,15 +669,23 @@ class MLP(Module):
     def init(self) -> None:
         qkv_dim = self.qkv_dim
         keys = jax.random.split(self.key, 2)
-        self.fc1 = Linear(in_features=qkv_dim, out_features=4 * qkv_dim, key=keys[0])
-        self.fc2 = Linear(in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1])
-        self.fc2.weights = jnp.zeros_like(self.fc2.weights)
+        self.fc1 = (
+            Linear(
+                in_features=qkv_dim,
+                out_features=4 * qkv_dim,
+                key=keys[0],
+                init_std=1 / jnp.sqrt(qkv_dim),
+            ),
+        )
+        self.fc2 = Linear(
+            in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1], init_std=0.0
+        )
 
     def __call__(
         self, x: jt.Float[jt.Array, "... qkv_dim"]
     ) -> jt.Float[jt.Array, "... qkv_dim"]:
         x = self.fc1(x)
-        x = jax.nn.gelu(x)
+        x = jax.nn.relu(x) ** 2
         x = self.fc2(x)
         return x
 
@@ -672,7 +707,7 @@ class CausalSelfAttention(Module):
         )
         self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
         self.rope = RotaryPositionalEmbedding(
-            qkv_dim=self.qkv_dim // self.num_heads, seq_len=self.seq_len
+            qkv_dim=self.qkv_dim // self.num_heads, seq_len=self.seq_len, base=10000
         )
 
     def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
@@ -726,7 +761,10 @@ class DecoderOnlyTransformer(Module):
         config = self.config
         keys = jax.random.split(self.key, config.num_layers + 2)
         self.embedding_layer = Embedding(
-            vocab_size=config.vocab_size, embedding_dim=config.qkv_dim, key=keys[0]
+            vocab_size=config.vocab_size,
+            embedding_dim=config.qkv_dim,
+            key=keys[0],
+            init_std=1.0,
         )
         self.blocks = []
         for ix in range(config.num_layers):
@@ -739,7 +777,10 @@ class DecoderOnlyTransformer(Module):
                 )
             )
         self.output_layer = Linear(
-            in_features=config.qkv_dim, out_features=config.vocab_size, key=keys[-1]
+            in_features=config.qkv_dim,
+            out_features=config.vocab_size,
+            key=keys[-1],
+            init_std=0.001,
         )
 
     def __call__(
@@ -1601,7 +1642,7 @@ def create_experiment(
         training_config=TrainingConfig(
             max_steps=max_steps,
             num_microbatches=num_microbatches,
-            max_grad_norm=1.0,
+            max_grad_norm=0.0,
             optimizer_config=optimizer_config,
         ),
         checkpoint_config=CheckpointConfig(
