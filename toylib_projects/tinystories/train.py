@@ -176,7 +176,7 @@ def create_experiment(
         training_config=experiment.TrainingConfig(
             max_steps=max_steps,
             num_microbatches=num_microbatches,
-            max_grad_norm=1.0,
+            max_grad_norm=0.0,  # no gradient clipping enabled
             optimizer_config=optimizer_config,
         ),
         checkpoint_config=experiment.CheckpointConfig(
