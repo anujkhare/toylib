@@ -436,8 +436,13 @@ class Experiment:
         self.ckpt_manager.save(self.step, args=ocp.args.Composite(**args))
         self.ckpt_manager.wait_until_finished()
 
-    def restore_checkpoint(self, step: int):
+    def _resolve_latest_saved_checkpoint_step(self) -> int:
+        raise NotImplementedError("provide a step explicitly!")
+
+    def restore_checkpoint(self, step: int | None = None):
         self._assert_initialized()
+        if step is None:
+            step = self._resolve_latest_saved_checkpoint_step()
 
         # Restore to numpy first
         model_template = self._unreplicate_for_checkpoint(self.model)

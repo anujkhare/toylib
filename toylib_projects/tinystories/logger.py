@@ -76,7 +76,8 @@ class FileLogger(Logger):
 
     def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
         self.config_dict = config_dict
-        self.file_ptr = open(os.path.join(output_path, "train_logs.txt"), "w")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.file_ptr = open(os.path.join(output_path, f"logs_{timestamp}.txt"), "w")
         self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:
