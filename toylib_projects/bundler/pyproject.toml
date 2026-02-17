@@ -5,9 +5,10 @@ authors = [
   { name="Anuj Khare", email="khareanuj18@gmail.com" },
 ]
 description = "Code bundler utility using toylib"
-readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "toylib",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -18,10 +19,13 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
 [dependency-groups]
 dev = [
     "pytest>=7.0.0",
 ]
 
 [tool.uv.sources]
-toylib = { path = "../..", editable = true }
+toylib = { workspace = true }
