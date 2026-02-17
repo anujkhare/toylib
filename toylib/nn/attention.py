@@ -143,6 +143,7 @@ class MultiHeadAttention(module.Module):
         self.linear = layers.Linear(
             in_features=qkv_dim,
             out_features=qkv_dim,
+            use_bias=False,
             key=keys[3],
             # Initialize weights to zero to stabilize training at the start
             init_std=0.0,
