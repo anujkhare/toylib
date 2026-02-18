@@ -43,36 +43,32 @@ class TestDotsAndBoxesGame:
 
         result = game.to_dict()
 
-        assert result["state"]["rows"] == 3
-        assert result["state"]["cols"] == 3
-        assert result["state"]["next_player"] == 1
-        assert result["state"]["filled_vertical"][0][0]
-        assert result["state"]["filled_horizontal"][1][1]
-        assert result["state"]["boxes_by_player"][0][0][1]
-        assert result["game_info"]["scores"]["player2"] == 2
+        assert result["rows"] == 3
+        assert result["cols"] == 3
+        assert result["next_player"] == 1
+        assert result["filled_vertical"][0][0]
+        assert result["filled_horizontal"][1][1]
+        assert result["boxes_by_player"][0][0][1]
 
     def test_load_from_dict(self):
         """Test loading DotsAndBoxesGame from dictionary"""
         game = DotsAndBoxesGame(rows=3, cols=3)
 
         data = {
-            "state": {
-                "rows": 3,
-                "cols": 3,
-                "next_player": 1,
-                "filled_vertical": [[True, False, False], [False, True, False]],
-                "filled_horizontal": [[False, True], [True, False], [False, False]],
-                "boxes_by_player": [
-                    [[True, False], [False, True]],
-                    [[False, True], [True, False]],
-                ],
-                "line_owners": {
-                    "vertical": [[0, -1, -1], [-1, 1, -1]],
-                    "horizontal": [[-1, 0], [1, -1], [-1, -1]],
-                },
-                "scores": [0, 0],
+            "rows": 3,
+            "cols": 3,
+            "next_player": 1,
+            "filled_vertical": [[True, False, False], [False, True, False]],
+            "filled_horizontal": [[False, True], [True, False], [False, False]],
+            "boxes_by_player": [
+                [[True, False], [False, True]],
+                [[False, True], [True, False]],
+            ],
+            "line_owners": {
+                "vertical": [[0, -1, -1], [-1, 1, -1]],
+                "horizontal": [[-1, 0], [1, -1], [-1, -1]],
             },
-            "game_info": {},
+            "scores": [0, 0],
         }
 
         game.load_from_dict(data)
@@ -90,16 +86,14 @@ class TestDotsAndBoxesGame:
         game = DotsAndBoxesGame(rows=3, cols=3)
 
         data = {
-            "state": {
-                "rows": 4,  # Different dimension
-                "cols": 3,
-                "next_player": 0,
-                "filled_vertical": [],
-                "filled_horizontal": [],
-                "boxes_by_player": [],
-                "line_owners": {"vertical": [], "horizontal": []},
-                "scores": [],
-            }
+            "rows": 4,  # Different dimension
+            "cols": 3,
+            "next_player": 0,
+            "filled_vertical": [],
+            "filled_horizontal": [],
+            "boxes_by_player": [],
+            "line_owners": {"vertical": [], "horizontal": []},
+            "scores": [],
         }
 
         with pytest.raises(AssertionError, match="Loaded dimensions do not match"):
