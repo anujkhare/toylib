@@ -1,8 +1,11 @@
 """Tests for bundler."""
 
 import ast
+import os
 
 from . import bundler as bundler
+
+_TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class TestImportRemover:
@@ -116,6 +119,6 @@ class TestBundlerV2:
         obj = bundler.Bundler(
             packages_to_bundle=["internal1", "internal2"],
         )
-        bundled = obj.process_file(file_path="./test_data/entrypoint.py")
+        bundled = obj.process_file(file_path=os.path.join(_TEST_DIR, "test_data/entrypoint.py"))
         print(bundled)
         assert bundled is not None
