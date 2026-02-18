@@ -584,7 +584,11 @@ class MultiHeadAttention(Module):
             init_std=init_std,
         )
         self.linear = Linear(
-            in_features=qkv_dim, out_features=qkv_dim, key=keys[3], init_std=0.0
+            in_features=qkv_dim,
+            out_features=qkv_dim,
+            use_bias=False,
+            key=keys[3],
+            init_std=0.0,
         )
 
     def __call__(

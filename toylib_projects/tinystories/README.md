@@ -63,6 +63,6 @@ Things to investigate:
   * [ ] KV caching
 * [ ] Post-training
 * [ ] Code health improvements
-  * [ ] fix dep management
+  * [x] fix dep management
   * [ ] How to make everything more configurable?
   * [ ] Refactor out the experiment and train loop
