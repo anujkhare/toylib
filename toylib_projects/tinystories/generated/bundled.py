@@ -1670,7 +1670,6 @@ if __name__ == "__main__":
         depth=12,
         vocab_size=50257,
         checkpoint_dir="/tmp/checkpoints",
-        use_multi_optimizer=True,
         muon_lr=0.0001,
         adamw_embed_lr=0.0001,
         adamw_output_lr=0.0001,
