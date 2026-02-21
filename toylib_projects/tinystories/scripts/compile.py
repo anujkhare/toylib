@@ -8,57 +8,100 @@ This script:
 5. Generates Perfetto traces for visualization
 6. Supports fake device mesh for simulating data parallel setups
 
-Usage:
+Usage (CLI):
     python -m toylib_projects.tinystories.scripts.compile \
         --num_devices 8 \
         --output_dir /tmp/compile_analysis \
         --trace_steps 3
+
+Usage (Colab/Interactive):
+    # Modify the config values below, then run main()
+    config = CompileConfig(
+        num_devices=1,
+        batch_size_per_device=4,
+        depth=4,
+    )
+    main(config)
 
 View traces:
     - Perfetto: Open https://ui.perfetto.dev and load the .json.gz trace file
     - xprof/TensorBoard: tensorboard --logdir /tmp/compile_analysis
 """
 
-# IMPORTANT: Setup fake devices BEFORE importing JAX
-# JAX reads XLA_FLAGS at import time, so we must set it first
-import argparse
-import os
-import sys
-
-
-def _setup_fake_devices_from_args():
-    """Parse --num_devices from sys.argv and configure XLA before JAX import."""
-    # Quick parse just for --num_devices
-    for i, arg in enumerate(sys.argv):
-        if arg == "--num_devices" and i + 1 < len(sys.argv):
-            num_devices = int(sys.argv[i + 1])
-            if num_devices > 1:
-                os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + (
-                    f" --xla_force_host_platform_device_count={num_devices}"
-                )
-            return
-        elif arg.startswith("--num_devices="):
-            num_devices = int(arg.split("=")[1])
-            if num_devices > 1:
-                os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + (
-                    f" --xla_force_host_platform_device_count={num_devices}"
-                )
-            return
-
-
-# Set up fake devices before importing JAX
-_setup_fake_devices_from_args()
-
-# Now we can import JAX and other modules
 import dataclasses
 import json
+import os
 from pathlib import Path
+from typing import Literal
 
+
+@dataclasses.dataclass
+class CompileConfig:
+    """Configuration for compilation analysis.
+
+    Modify these values directly when using in Colab/notebooks.
+    """
+
+    # Number of (fake) devices to simulate for data parallelism
+    num_devices: int = 1
+    # Directory to save analysis outputs (HLO, traces, etc.)
+    output_dir: str = "/tmp/compile_analysis"
+    # Number of steps to trace for profiling
+    trace_steps: int = 3
+    # Batch size per device
+    batch_size_per_device: int = 4
+    # Sequence length
+    seq_len: int = 512
+    # Model depth (number of transformer layers)
+    depth: int = 4
+    # Number of microbatches for gradient accumulation
+    num_microbatches: int = 1
+    # Vocabulary size
+    vocab_size: int = 50257
+    # Skip generating Perfetto traces
+    skip_trace: bool = False
+    # Format for HLO output
+    hlo_format: Literal["text", "dot", "html", "proto"] = "text"
+
+
+def setup_fake_devices(num_devices: int):
+    """Configure XLA to use fake devices. Must be called BEFORE importing JAX."""
+    if num_devices > 1:
+        os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + (
+            f" --xla_force_host_platform_device_count={num_devices}"
+        )
+
+
+# For CLI usage: parse args and setup devices before JAX import
+def _setup_from_cli():
+    """Parse --num_devices from sys.argv and configure XLA before JAX import."""
+    import sys
+
+    for i, arg in enumerate(sys.argv):
+        if arg == "--num_devices" and i + 1 < len(sys.argv):
+            setup_fake_devices(int(sys.argv[i + 1]))
+            return
+        elif arg.startswith("--num_devices="):
+            setup_fake_devices(int(arg.split("=")[1]))
+            return
+
+
+# Only run CLI setup when executed as a script
+if __name__ == "__main__":
+    _setup_from_cli()
+
+
+# Now we can import JAX and other modules
 import jax
 import jax.numpy as jnp
+from toylib_projects.tinystories import experiment
+from toylib_projects.tinystories import train
 
 
-def parse_args():
+def _parse_args() -> CompileConfig:
+    """Parse command line arguments into CompileConfig."""
+    import argparse
+
     parser = argparse.ArgumentParser(
         description="Compile and analyze JAX training functions"
     )
@@ -122,7 +165,8 @@ def parse_args():
         default="text",
         help="Format for HLO output",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    return CompileConfig(**vars(args))
 
 
 def to_mib(bytes_val: int) -> float:
@@ -301,13 +345,12 @@ def create_experiment(
     vocab_size: int,
     num_devices: int,
 ):
-    """Create an experiment for compilation analysis using the base Experiment class."""
-    from toylib_projects.tinystories import experiment
-    from toylib_projects.tinystories.train import (
-        create_muon_adam_multi_optimizer_config,
-        get_model_config,
-    )
+    """Create an experiment for compilation analysis.
 
+    Uses train.py's functions to build the same model/optimizer configuration
+    that will be used in actual training, but with DummyDataset to avoid
+    requiring real data files.
+    """
     # Calculate total batch size
     batch_size = batch_size_per_device * num_devices * num_microbatches
 
@@ -321,17 +364,26 @@ def create_experiment(
     print(f"  Sequence length:        {seq_len}")
     print(f"  Tokens per step:        {batch_size * seq_len}")
 
-    # Model config
-    model_config = get_model_config(depth=depth, seq_len=seq_len, vocab_size=vocab_size)
-
-    # Create optimizer config
-    optimizer_config = create_muon_adam_multi_optimizer_config(
-        muon_lr=1e-4,
-        adamw_embed_lr=1e-4,
-        adamw_output_lr=1e-4,
+    # Use train.py's model config function - same as actual training
+    model_config = train.get_model_config(
+        depth=depth, seq_len=seq_len, vocab_size=vocab_size
     )
 
-    # Create dummy dataset for train task
+    # Use train.py's optimizer config function with LR scaling - same as actual training
+    # Apply the same dmodel LR scaling that train.py uses
+    model_dim = model_config.qkv_dim
+    dmodel_lr_scale = (model_dim / 768) ** -0.5
+    print(
+        f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}"
+    )
+
+    optimizer_config = train.create_muon_adam_multi_optimizer_config(
+        muon_lr=1e-4,
+        adamw_embed_lr=1e-4 * dmodel_lr_scale,
+        adamw_output_lr=1e-4 * dmodel_lr_scale,
+    )
+
+    # Create dummy dataset for compilation (doesn't need real data)
     dummy_dataset = DummyDataset(
         batch_size=batch_size,
         seq_len=seq_len,
@@ -343,22 +395,22 @@ def create_experiment(
         dataset=dummy_dataset,
     )
 
-    # Create temp directory for logs/checkpoints
-    temp_dir = Path("/tmp/compile_dummy")
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create eval task (needed for eval_step_fn to work)
     eval_task = experiment.Task(
         name="eval",
         dataset=dummy_dataset,
     )
 
-    # Create experiment (this sets up sharding, JIT functions, etc.)
+    # Create temp directory for logs/checkpoints
+    temp_dir = Path("/tmp/compile_dummy")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create experiment with same config structure as train.py
     exp = experiment.Experiment(
         model_config=model_config,
         training_config=experiment.TrainingConfig(
             max_steps=1,
             num_microbatches=num_microbatches,
+            max_grad_norm=0.0,  # no gradient clipping - same as train.py
             optimizer_config=optimizer_config,
         ),
         checkpoint_config=experiment.CheckpointConfig(
@@ -377,11 +429,18 @@ def create_experiment(
     return exp
 
 
-def main():
-    args = parse_args()
+def main(config: CompileConfig | None = None):
+    """Run compilation analysis.
+
+    Args:
+        config: Configuration for the analysis. If None, parses from command line args.
+                For Colab/notebook usage, pass a CompileConfig instance directly.
+    """
+    if config is None:
+        config = _parse_args()
 
     # Create output directory
-    output_dir = Path(args.output_dir)
+    output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "#" * 60)
@@ -392,22 +451,22 @@ def main():
 
     # Create experiment using base Experiment class
     exp = create_experiment(
-        batch_size_per_device=args.batch_size_per_device,
-        seq_len=args.seq_len,
-        depth=args.depth,
-        num_microbatches=args.num_microbatches,
-        vocab_size=args.vocab_size,
-        num_devices=args.num_devices,
+        batch_size_per_device=config.batch_size_per_device,
+        seq_len=config.seq_len,
+        depth=config.depth,
+        num_microbatches=config.num_microbatches,
+        vocab_size=config.vocab_size,
+        num_devices=config.num_devices,
     )
 
     # Create dummy batch for compilation (with sharding applied)
     total_batch_size = (
-        args.batch_size_per_device * args.num_devices * args.num_microbatches
+        config.batch_size_per_device * config.num_devices * config.num_microbatches
     )
     dummy_dataset = DummyDataset(
         batch_size=total_batch_size,
-        seq_len=args.seq_len,
-        vocab_size=args.vocab_size,
+        seq_len=config.seq_len,
+        vocab_size=config.vocab_size,
         sharding=exp.data_sharding,
     )
     batch = dummy_dataset.get_batch()
@@ -423,7 +482,7 @@ def main():
     # Analyze train step
     train_memory = analyze_memory(train_compiled, "train_step_fn")
     train_hlo_path = extract_hlo(
-        train_compiled, "train_step", output_dir, args.hlo_format
+        train_compiled, "train_step", output_dir, config.hlo_format
     )
     train_hlo_text = train_compiled.as_text()
     train_hlo_stats = analyze_hlo_stats(train_hlo_text, "train_step_fn")
@@ -438,20 +497,22 @@ def main():
 
     # Analyze eval step
     eval_memory = analyze_memory(eval_compiled, "eval_step_fn")
-    eval_hlo_path = extract_hlo(eval_compiled, "eval_step", output_dir, args.hlo_format)
+    eval_hlo_path = extract_hlo(
+        eval_compiled, "eval_step", output_dir, config.hlo_format
+    )
     eval_hlo_text = eval_compiled.as_text()
     eval_hlo_stats = analyze_hlo_stats(eval_hlo_text, "eval_step_fn")
 
     # Save summary JSON
     summary = {
         "config": {
-            "num_devices": args.num_devices,
-            "batch_size_per_device": args.batch_size_per_device,
+            "num_devices": config.num_devices,
+            "batch_size_per_device": config.batch_size_per_device,
             "total_batch_size": total_batch_size,
-            "seq_len": args.seq_len,
-            "depth": args.depth,
-            "num_microbatches": args.num_microbatches,
-            "vocab_size": args.vocab_size,
+            "seq_len": config.seq_len,
+            "depth": config.depth,
+            "num_microbatches": config.num_microbatches,
+            "vocab_size": config.vocab_size,
         },
         "train_step": {
             "memory": train_memory,
@@ -471,8 +532,8 @@ def main():
     print(f"\nSaved analysis summary to: {summary_path}")
 
     # Run profiled steps if not skipped
-    if not args.skip_trace:
-        run_profiled_steps(exp, batch, args.trace_steps, output_dir)
+    if not config.skip_trace:
+        run_profiled_steps(exp, batch, config.trace_steps, output_dir)
 
     # Final summary
     print("\n" + "#" * 60)
@@ -482,7 +543,7 @@ def main():
     print(f"  Summary:      {summary_path}")
     print(f"  Train HLO:    {train_hlo_path}")
     print(f"  Eval HLO:     {eval_hlo_path}")
-    if not args.skip_trace:
+    if not config.skip_trace:
         print(f"  Traces:       {output_dir / 'traces'}")
 
     print("\n" + "=" * 60)

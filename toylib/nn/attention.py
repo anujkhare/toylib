@@ -1,6 +1,6 @@
 import einops
-from jax import numpy as jnp
 import jax
+import jax.numpy as jnp
 import jaxtyping as jt
 import math
 import typing
