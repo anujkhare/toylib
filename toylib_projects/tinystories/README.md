@@ -66,3 +66,42 @@ Things to investigate:
   * [x] fix dep management
   * [ ] How to make everything more configurable?
   * [ ] Refactor out the experiment and train loop
+
+## Compilation Analysis
+
+The `compile.py` script analyzes JAX compilation, memory usage, and generates profiling traces.
+
+### CLI Usage
+
+```bash
+python -m toylib_projects.tinystories.scripts.compile \
+    --num_devices 8 \
+    --output_dir /tmp/compile_analysis \
+    --trace_steps 3 \
+    --batch_size_per_device 4 \
+    --depth 4
+```
+
+### Colab/Notebook Usage
+
+```python
+# IMPORTANT: Setup fake devices BEFORE any JAX imports
+from toylib_projects.tinystories.scripts.compile import setup_fake_devices
+setup_fake_devices(num_devices=1)
+
+# Now import and run
+from toylib_projects.tinystories.scripts.compile import CompileConfig, main
+
+config = CompileConfig(
+    num_devices=1,
+    batch_size_per_device=4,
+    depth=4,
+    skip_trace=True,  # Often useful in Colab
+)
+main(config)
+```
+
+### View Traces
+
+* **Perfetto**: Open <https://ui.perfetto.dev> and load the `.json.gz` trace file
+* **TensorBoard**: `tensorboard --logdir /tmp/compile_analysis/traces`
