@@ -2,15 +2,17 @@
 # External Imports
 # ============================================================
 
-from jax import numpy as jnp
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
+from pathlib import Path
 from transformers import AutoTokenizer
 import abc
+import argparse
 import dataclasses
 import datetime
 import einops
 import grain.python as grain
 import jax
+import jax.numpy as jnp
 import jaxtyping as jt
 import json
 import math
@@ -1494,8 +1496,295 @@ class Experiment:
 
 
 # ============================================================
+# toylib_projects.tinystories.scripts.compile - /Users/anuj/Desktop/code/toylib/toylib_projects/tinystories/scripts/compile.py
+# ============================================================
+
+"""Utilities for JAX compilation analysis.
+
+This module provides:
+- DummyDataset: A fake dataset for compilation without real data
+- Memory analysis utilities
+- HLO extraction and analysis
+- Profiled step execution
+
+Usage:
+    from toylib_projects.tinystories.scripts.compile import (
+        DummyDataset,
+        analyze_memory,
+        extract_hlo,
+        analyze_hlo_stats,
+        run_profiled_steps,
+        run_compilation_analysis,
+    )
+"""
+
+
+def to_mib(bytes_val: int) -> float:
+    """Convert bytes to MiB."""
+    return bytes_val / 1024**2
+
+
+def to_gib(bytes_val: int) -> float:
+    """Convert bytes to GiB."""
+    return bytes_val / 1024**3
+
+
+def analyze_memory(compiled, name: str) -> dict:
+    """Analyze memory usage of a compiled function."""
+    analysis = compiled.memory_analysis()
+    print("\n" + "=" * 60)
+    print(f"Memory Analysis: {name}")
+    print("=" * 60)
+    print(f"  Argument size:      {to_mib(analysis.argument_size_in_bytes):>10.2f} MiB")
+    print(f"  Output size:        {to_mib(analysis.output_size_in_bytes):>10.2f} MiB")
+    print(f"  Temp/Activations:   {to_mib(analysis.temp_size_in_bytes):>10.2f} MiB")
+    print(f"  Alias size:         {to_mib(analysis.alias_size_in_bytes):>10.2f} MiB")
+    peak = analysis.argument_size_in_bytes + analysis.temp_size_in_bytes
+    print(f"  Peak Memory:        {to_mib(peak):>10.2f} MiB ({to_gib(peak):.2f} GiB)")
+    return {
+        "argument_size_bytes": analysis.argument_size_in_bytes,
+        "output_size_bytes": analysis.output_size_in_bytes,
+        "temp_size_bytes": analysis.temp_size_in_bytes,
+        "alias_size_bytes": analysis.alias_size_in_bytes,
+        "peak_memory_bytes": peak,
+    }
+
+
+def extract_hlo(compiled, name: str, output_dir: Path, fmt: str = "text") -> str:
+    """Extract and save HLO from a compiled function."""
+    hlo_text = compiled.as_text()
+    hlo_path = output_dir / f"{name}_hlo.txt"
+    with open(hlo_path, "w") as f:
+        f.write(hlo_text)
+    print(f"Saved HLO text to: {hlo_path}")
+    cost_path = output_dir / f"{name}_cost.txt"
+    try:
+        cost_analysis = compiled.cost_analysis()
+        if cost_analysis:
+            with open(cost_path, "w") as f:
+                for item in cost_analysis:
+                    if item:
+                        f.write(str(item) + "\n")
+            print(f"Saved cost analysis to: {cost_path}")
+    except Exception as e:
+        print(f"Cost analysis not available: {e}")
+    return str(hlo_path)
+
+
+def analyze_hlo_stats(hlo_text: str, name: str) -> dict:
+    """Extract statistics from HLO text."""
+    stats = {
+        "num_instructions": 0,
+        "num_computations": 0,
+        "has_custom_calls": False,
+        "has_all_reduce": False,
+        "has_all_gather": False,
+        "has_reduce_scatter": False,
+    }
+    lines = hlo_text.split("\n")
+    for line in lines:
+        if line.strip().startswith("ROOT") or "=" in line:
+            stats["num_instructions"] += 1
+        if line.strip().startswith("ENTRY") or line.strip().startswith("%"):
+            stats["num_computations"] += 1
+        if "custom-call" in line.lower():
+            stats["has_custom_calls"] = True
+        if "all-reduce" in line.lower():
+            stats["has_all_reduce"] = True
+        if "all-gather" in line.lower():
+            stats["has_all_gather"] = True
+        if "reduce-scatter" in line.lower():
+            stats["has_reduce_scatter"] = True
+    print("\n" + "=" * 60)
+    print(f"HLO Statistics: {name}")
+    print("=" * 60)
+    print(f"  Total instructions:   {stats['num_instructions']}")
+    print(f"  Computations:         {stats['num_computations']}")
+    print(f"  Has custom calls:     {stats['has_custom_calls']}")
+    print(f"  Has all-reduce:       {stats['has_all_reduce']}")
+    print(f"  Has all-gather:       {stats['has_all_gather']}")
+    print(f"  Has reduce-scatter:   {stats['has_reduce_scatter']}")
+    return stats
+
+
+def run_profiled_steps(exp, batch: dict, num_steps: int, output_dir: Path) -> None:
+    """Run profiled steps and generate trace."""
+    print("\n" + "=" * 60)
+    print(f"Running {num_steps} profiled steps...")
+    print("=" * 60)
+    trace_dir = output_dir / "traces"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    with jax.profiler.trace(str(trace_dir)):
+        for step in range(num_steps):
+            with jax.profiler.StepTraceAnnotation("train_step", step_num=step):
+                exp.model, exp.opt_state, metrics = exp.train_step_fn(
+                    exp.model, exp.opt_state, batch
+                )
+                jax.block_until_ready(metrics)
+            print(
+                f"  Step {step + 1}/{num_steps} - loss: {float(metrics.get('loss', 0)):.4f}"
+            )
+    print(f"\nTrace saved to: {trace_dir}")
+    print("  -> Open https://ui.perfetto.dev and load the trace file")
+    print(f"  -> Or use: tensorboard --logdir {trace_dir}")
+
+
+@dataclasses.dataclass
+class DummyDataset:
+    """A minimal dataset that yields random batches for compilation analysis."""
+
+    batch_size: int
+    seq_len: int
+    vocab_size: int = 50257
+    sharding: object = None
+
+    def __post_init__(self):
+        self.tokenizer = None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> dict:
+        return self.get_batch()
+
+    def get_batch(self) -> dict:
+        """Generate a dummy batch, optionally sharded across devices."""
+        key = jax.random.PRNGKey(0)
+        inputs = jax.random.randint(
+            key, (self.batch_size, self.seq_len), 0, self.vocab_size
+        )
+        targets = jax.random.randint(
+            key, (self.batch_size, self.seq_len), 0, self.vocab_size
+        )
+        mask = jnp.ones((self.batch_size, self.seq_len), dtype=jnp.bool_)
+        batch = {"inputs": inputs, "targets": targets, "mask": mask}
+        if self.sharding is not None:
+            batch = {k: jax.device_put(v, self.sharding) for k, v in batch.items()}
+        return batch
+
+
+def run_compilation_analysis(
+    exp,
+    output_dir: str | Path,
+    trace_steps: int = 3,
+    skip_trace: bool = False,
+    hlo_format: str = "text",
+) -> dict:
+    """Run full compilation analysis on an experiment.
+
+    Args:
+        exp: Initialized Experiment with model and optimizer state
+        output_dir: Directory to save analysis outputs
+        trace_steps: Number of steps to trace for profiling
+        skip_trace: Skip generating Perfetto traces
+        hlo_format: Format for HLO output
+
+    Returns:
+        Summary dictionary with memory and HLO statistics
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    num_devices = jax.local_device_count()
+    batch_size = exp.train_task.dataset.batch_size
+    seq_len = exp.train_task.dataset.seq_len
+    vocab_size = exp.train_task.dataset.vocab_size
+    print("\n" + "#" * 60)
+    print("JAX Compilation Analysis")
+    print("#" * 60)
+    print(f"Output directory: {output_dir}")
+    print(f"JAX devices: {num_devices} x {jax.devices()[0].platform}")
+    dummy_dataset = DummyDataset(
+        batch_size=batch_size,
+        seq_len=seq_len,
+        vocab_size=vocab_size,
+        sharding=exp.data_sharding,
+    )
+    batch = dummy_dataset.get_batch()
+    print("\n" + "#" * 60)
+    print("Compiling train_step_fn...")
+    print("#" * 60)
+    train_lowered = exp.train_step_fn.lower(exp.model, exp.opt_state, batch)
+    train_compiled = train_lowered.compile()
+    train_memory = analyze_memory(train_compiled, "train_step_fn")
+    train_hlo_path = extract_hlo(train_compiled, "train_step", output_dir, hlo_format)
+    train_hlo_text = train_compiled.as_text()
+    train_hlo_stats = analyze_hlo_stats(train_hlo_text, "train_step_fn")
+    print("\n" + "#" * 60)
+    print("Compiling eval_step_fn...")
+    print("#" * 60)
+    eval_lowered = exp.eval_step_fn.lower(exp.model, batch)
+    eval_compiled = eval_lowered.compile()
+    eval_memory = analyze_memory(eval_compiled, "eval_step_fn")
+    eval_hlo_path = extract_hlo(eval_compiled, "eval_step", output_dir, hlo_format)
+    eval_hlo_text = eval_compiled.as_text()
+    eval_hlo_stats = analyze_hlo_stats(eval_hlo_text, "eval_step_fn")
+    summary = {
+        "config": {
+            "platform": jax.devices()[0].platform,
+            "num_devices": num_devices,
+            "batch_size": batch_size,
+            "seq_len": seq_len,
+            "vocab_size": vocab_size,
+        },
+        "train_step": {
+            "memory": train_memory,
+            "hlo_stats": train_hlo_stats,
+            "hlo_path": train_hlo_path,
+        },
+        "eval_step": {
+            "memory": eval_memory,
+            "hlo_stats": eval_hlo_stats,
+            "hlo_path": eval_hlo_path,
+        },
+    }
+    summary_path = output_dir / "analysis_summary.json"
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"\nSaved analysis summary to: {summary_path}")
+    if not skip_trace:
+        run_profiled_steps(exp, batch, trace_steps, output_dir)
+    print("\n" + "#" * 60)
+    print("Analysis Complete")
+    print("#" * 60)
+    print("\nOutput files:")
+    print(f"  Summary:      {summary_path}")
+    print(f"  Train HLO:    {train_hlo_path}")
+    print(f"  Eval HLO:     {eval_hlo_path}")
+    if not skip_trace:
+        print(f"  Traces:       {output_dir / 'traces'}")
+    print("\n" + "=" * 60)
+    print("Peak Memory Summary")
+    print("=" * 60)
+    print(f"  Train step:   {to_gib(train_memory['peak_memory_bytes']):.2f} GiB")
+    print(f"  Eval step:    {to_gib(eval_memory['peak_memory_bytes']):.2f} GiB")
+    print("\nVisualization:")
+    print(
+        f"  Perfetto:     Open https://ui.perfetto.dev and load trace files from {output_dir / 'traces'}"
+    )
+    print(f"  TensorBoard:  tensorboard --logdir {output_dir / 'traces'}")
+    return summary
+
+
+# ============================================================
 # None - ../tinystories/train.py
 # ============================================================
+
+"""Training script for TinyStories transformer model.
+
+Usage (Colab/Interactive):
+    from toylib_projects.tinystories import train
+
+    # For training:
+    exp = train.create_experiment(
+        dataset_path="/path/to/data",
+        checkpoint_dir="/path/to/checkpoints",
+    )
+    exp.outer_loop()
+
+    # For compilation analysis:
+    exp = train.create_experiment(use_dummy_data=True, depth=4)
+    compile_utils.run_compilation_analysis(exp, output_dir="/tmp/compile_analysis")
+"""
 
 
 def create_muon_adam_multi_optimizer_config(
@@ -1584,6 +1873,42 @@ def get_model_config(
     )
 
 
+def make_dataset(
+    dataset_path: str,
+    split: str,
+    batch_size: int,
+    seq_len: int,
+    vocab_size: int = 50257,
+    tokenizer_batch_size: int = 8,
+    use_dummy: bool = False,
+) -> BatchedTokenizedDataset | DummyDataset:
+    """Create a dataset for training or compilation analysis.
+
+    Args:
+        dataset_path: Path to the dataset
+        split: Dataset split (e.g., "train", "val")
+        batch_size: Total batch size
+        seq_len: Sequence length
+        vocab_size: Vocabulary size
+        tokenizer_batch_size: Batch size for tokenizer
+        use_dummy: If True, return a DummyDataset for compilation analysis
+
+    Returns:
+        Dataset instance
+    """
+    if use_dummy:
+        return DummyDataset(
+            batch_size=batch_size, seq_len=seq_len, vocab_size=vocab_size
+        )
+    return BatchedTokenizedDatasetGrain(
+        dataset_path=dataset_path,
+        split=split,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        tokenizer_batch_size=tokenizer_batch_size,
+    )
+
+
 def create_experiment(
     batch_size_per_device: int = 18,
     seq_len: int = 2048,
@@ -1599,33 +1924,64 @@ def create_experiment(
     muon_lr: float = 0.02,
     adamw_embed_lr: float = 0.2,
     adamw_output_lr: float = 0.004,
+    use_dummy_data: bool = False,
 ) -> Experiment:
+    """Create an experiment for training or compilation analysis.
+
+    Args:
+        batch_size_per_device: Batch size per device
+        seq_len: Sequence length
+        max_steps: Maximum training steps
+        num_microbatches: Number of microbatches for gradient accumulation
+        depth: Model depth (number of transformer layers)
+        vocab_size: Vocabulary size
+        checkpoint_dir: Directory for checkpoints
+        dataset_path: Path to the dataset
+        dataset_train_split: Training split name
+        dataset_val_split: Validation split name (None to skip)
+        bpt_path: Path to bytes-per-token file for BitsPerByte metric
+        muon_lr: Learning rate for Muon optimizer
+        adamw_embed_lr: Learning rate for Adam optimizer (embeddings)
+        adamw_output_lr: Learning rate for Adam optimizer (output)
+        use_dummy_data: If True, use DummyDataset for compilation analysis
+
+    Returns:
+        Initialized Experiment
+    """
     batch_size = batch_size_per_device * jax.local_device_count() * num_microbatches
-    train_task = Task(
-        name="train",
-        dataset=BatchedTokenizedDatasetGrain(
+    train_dataset = make_dataset(
+        dataset_path=dataset_path,
+        split=dataset_train_split,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        vocab_size=vocab_size,
+        use_dummy=use_dummy_data,
+    )
+    train_task = Task(name="train", dataset=train_dataset)
+    val_task = None
+    if dataset_val_split is not None and (not use_dummy_data):
+        val_dataset = make_dataset(
             dataset_path=dataset_path,
-            split=dataset_train_split,
+            split=dataset_val_split,
             batch_size=batch_size,
             seq_len=seq_len,
-            tokenizer_batch_size=8,
-        ),
-    )
-    val_task = None
-    if dataset_val_split is not None:
-        val_task = Task(
-            name="val",
-            dataset=BatchedTokenizedDatasetGrain(
-                dataset_path=dataset_path,
-                split=dataset_val_split,
-                batch_size=batch_size,
-                seq_len=seq_len,
-                tokenizer_batch_size=8,
-            ),
-            metrics=[Loss(), BitsPerByte(bpt_path)],
+            vocab_size=vocab_size,
+            use_dummy=False,
         )
+        val_task = Task(
+            name="val", dataset=val_dataset, metrics=[Loss(), BitsPerByte(bpt_path)]
+        )
+    elif use_dummy_data:
+        val_dataset = make_dataset(
+            dataset_path=dataset_path,
+            split="val",
+            batch_size=batch_size,
+            seq_len=seq_len,
+            vocab_size=vocab_size,
+            use_dummy=True,
+        )
+        val_task = Task(name="val", dataset=val_dataset)
     model_config = get_model_config(depth=depth, seq_len=seq_len, vocab_size=vocab_size)
-    optimizer_config = None
     model_dim = model_config.qkv_dim
     dmodel_lr_scale = (model_dim / 768) ** (-0.5)
     print(
@@ -1661,7 +2017,15 @@ def create_experiment(
     return exp
 
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description="Train or compile TinyStories model")
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Run compilation analysis instead of training",
+    )
+    args = parser.parse_args()
+    use_dummy_data = args.compile
     exp = create_experiment(
         batch_size_per_device=18,
         seq_len=2048,
@@ -1673,5 +2037,14 @@ if __name__ == "__main__":
         muon_lr=0.0001,
         adamw_embed_lr=0.0001,
         adamw_output_lr=0.0001,
+        use_dummy_data=use_dummy_data,
     )
-    exp.outer_loop()
+    if args.compile:
+        run_compilation_analysis(exp, output_dir="/tmp/compile_analysis")
+    else:
+        exp.outer_loop()
+    exp.cleanup()
+
+
+if __name__ == "__main__":
+    main()
