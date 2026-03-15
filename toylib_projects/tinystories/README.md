@@ -34,16 +34,19 @@ Things to investigate:
   * [*] Scale the batch size for stable gradients
   * [*] LR/optimizers for different parts of the model
   * [*] Gradient clipping
+  * [ ] Train batch size at ~512k tokens, per device batch size ~32, 8 devices (`32 * 8 * 2048 = 512k`)
+    * [ ] Smaller vocab size of the tokenizer (~25% HBM lowering)
+    * [ ] bf16 training (~50% HBM lowering)
+    * [ ] fp8 training (~50% HBM lowering)
+    * [ ] 4 microbatches (4x effective batch size)
+    * [ ] remat all the attention layers (??)
   * [ ] GQA
   * [ ] Weight init
   * [ ] Per-layer scalers
   * [ ] SSSL attention
   * [ ] Value embeddings
   * [ ] LR schedule
-  * [ ] Optimal batch sizes
-  * [ ] Optimal totoal tokens
-  * [ ] Mixed-precision training
-  * [ ] Chinchilla optimal total FLOPs
+  * [*] Chinchilla optimal total FLOPs
 * [ ] Scaling
   * [*] Memory and parameter analysis
   * [*] Training budget - # tokens
@@ -56,7 +59,6 @@ Things to investigate:
     * [ ] Do we need to remat?
   * [*] TF Grain
   * [ ] Handle interrupts: restore checkpoints and dataset iterators
-  * [ ] Profile / improve resource usage
 * [ ] Inference setup
   * [ ] Efficient batched inference
   * [ ] bf16 inference
