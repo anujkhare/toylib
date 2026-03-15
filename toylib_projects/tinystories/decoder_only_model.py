@@ -222,6 +222,7 @@ def loss_fn(
 def train_step(
     model: DecoderOnlyTransformer,
     batch: jt.PyTree,
+    return_aux: bool = False,
 ) -> jt.Float[jt.Array, ""]:
     """A single training step for the model.
 
@@ -229,14 +230,18 @@ def train_step(
         model: The DecoderOnlyTransformer model.
         batch: PyTree containing 'inputs', 'targets', and 'mask', each of shape
             [batch_size, seq_len].
+        return_aux: If True, also return auxiliary information like per-token loss.
 
     Returns:
-        Loss value for the batch.
+        Loss value for the batch. If `return_aux` is True, also returns a dictionary
+        with auxiliary information.
     """
     tokens, targets, mask = batch["inputs"], batch["targets"], batch["mask"]
     logits = model(tokens)  # doesn't use mask right now
     total_loss, per_token_loss = loss_fn(logits, targets, mask)
-    return total_loss, {"logits": logits, "per_token_loss": per_token_loss}
+    if not return_aux:
+        return total_loss, {}
+    return total_loss, {"per_token_loss": per_token_loss}
 
 
 # TODO: jitted version??

@@ -1,4 +1,5 @@
 import abc
+import collections
 import dataclasses
 
 # import datasets as hf_datasets
@@ -37,7 +38,7 @@ class BatchedTokenizedDataset(abc.ABC):
     def __post_init__(self):
         self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
         self.bos_token = self.tokenizer.bos_token_id
-        self.token_buffer = []
+        self.token_buffer = collections.deque()  # buffer to hold tokens across batches
 
         self.dataset_iter = self._get_dataset_iterator()
 
@@ -66,8 +67,7 @@ class BatchedTokenizedDataset(abc.ABC):
                 self.token_buffer.extend(tokens)
 
         # Extract needed tokens from the buffer
-        tokens = self.token_buffer[:token_needed]
-        self.token_buffer = self.token_buffer[token_needed:]
+        tokens = [self.token_buffer.popleft() for _ in range(token_needed)]
 
         # Create jax arrays for inputs and targets
         inputs = jnp.array(tokens[:-1], dtype=jnp.uint16).reshape(
@@ -141,13 +141,13 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
 
     def get_state(self) -> dict[str, typing.Any]:
         """Get current state for checkpointing."""
-        self._state.token_buffer = self.token_buffer.copy()
+        self._state.token_buffer = list(self.token_buffer)
         return dataclasses.asdict(self._state)
 
     def restore_state(self, state: dict[str, typing.Any]) -> None:
         """Restore iterator position from checkpoint."""
         self._state = DatasetStateParquet(**state)
-        self._state.token_buffer = state["token_buffer"].copy()
+        self._state.token_buffer = collections.deque(state["token_buffer"])
 
         # Recreate the iterator starting from the restored position
         self.dataset_iter = self._get_dataset_iterator()
