@@ -518,11 +518,6 @@ class Experiment:
         if prompts is None:
             prompts = DEFAULT_PROMPTS
 
-        # For sampling, we use a single-device copy of the model
-        # This is simpler and sampling is not the bottleneck
-        model_single = jax.tree.map(lambda x: np.asarray(x), self.model)
-
-        results = []
         tokenized_prompts = self.train_task.dataset.tokenizer(
             prompts,
             return_tensors=None,
@@ -531,21 +526,28 @@ class Experiment:
             max_length=None,
         )["input_ids"]
 
-        for ix in range(len(tokenized_prompts)):
-            generated = list(
-                decoder_only_model.sample(
-                    model=model_single,
-                    input_tokens=tokenized_prompts[ix],
-                    key=jax.random.key(0),
-                    max_output_tokens=max_tokens,
-                    temperature=1.0,
-                    top_k=5,
-                )
+        seq_len = self.model_config.seq_len
+        results = []
+        for ix, prompt_tokens in enumerate(tokenized_prompts):
+            padded = jnp.zeros(seq_len, dtype=jnp.uint16)
+            padded = padded.at[: len(prompt_tokens)].set(
+                jnp.array(prompt_tokens, dtype=jnp.uint16)
+            )
+            generated = decoder_only_model.sample(
+                model=self.model,
+                input_tokens=padded,
+                prompt_len=len(prompt_tokens),
+                key=jax.random.key(0),
+                max_output_tokens=max_tokens,
+                temperature=1.0,
+                top_k=5,
             )
             results.append(
                 {
                     "prompt": prompts[ix],
-                    "output": self.train_task.dataset.tokenizer.decode(generated),
+                    "output": self.train_task.dataset.tokenizer.decode(
+                        generated.tolist()
+                    ),
                 }
             )
         self.logger_obj.log(self.step, metrics={"step": self.step, "samples": results})

@@ -247,50 +247,54 @@ def train_step(
 # TODO: jitted version??
 def sample(
     model: DecoderOnlyTransformer,
-    input_tokens: list[int],
+    input_tokens: jax.Array,
+    prompt_len: int,
     key: jt.PRNGKeyArray,
     *,
     max_output_tokens: int = 100,
     temperature: float = 1.0,
     top_k: int | None = None,
-) -> jt.Int[jt.Array, "batch_size seq_len"]:
+) -> jax.Array:
     """Generates samples from the model given input tokens.
 
-    This is a simple implementation with no optimizations or batching support.
+    JIT-compatible: uses lax.scan over a fixed-size pre-padded token buffer.
+    input_tokens must be pre-padded to the model's seq_len with zeros.
+    prompt_len is the number of real (non-padding) tokens in input_tokens.
 
     Args:
         model: The DecoderOnlyTransformer model.
-        input_tokens: Input token ids of shape [seq_len].
+        input_tokens: Token ids pre-padded to model seq_len, shape [seq_len].
+        prompt_len: Number of real tokens in input_tokens.
         key: JAX PRNG key for sampling.
         max_output_tokens: Maximum number of tokens to generate.
         temperature: Sampling temperature. Higher values increase randomness.
         top_k: If specified, only consider the top_k logits for sampling. Set
             to 1 for greedy sampling.
 
-    Yields:
-        Generated token ids one at a time.
+    Returns:
+        Generated token ids of shape [max_output_tokens].
     """
-    if temperature < 0:
-        raise ValueError("Temperature must be non-negative.")
-    tokens = input_tokens.copy()
+    def step(carry, _):
+        tokens, pos, key = carry
 
-    # Generate up-to the max_output_tokens, no early stopping / stopping token
-    for _ in range(max_output_tokens):
-        # forward pass
-        outputs = model(jnp.array(tokens))  # [seq_len, vocab_size]
+        logits = model(tokens)  # [seq_len, vocab_size]
+        # Read logits at the last valid position
+        logit = jax.lax.dynamic_index_in_dim(logits, pos - 1, axis=0, keepdims=False)
+        logit = logit / temperature
 
-        # Get the logits for the last token
-        logits = outputs[-1, :]  # [vocab_size]
-        logits /= temperature
-
-        # Filter out to only top-k logits if specified
-        # This is a method to reduce the sampling noise
         if top_k:
-            top_k_logits, _ = jax.lax.top_k(logits, top_k)
-            logits = jnp.where(logits < top_k_logits[-1], -jnp.inf, logits)
+            top_k_logits, _ = jax.lax.top_k(logit, top_k)
+            logit = jnp.where(logit < top_k_logits[-1], -jnp.inf, logit)
 
-        # Sample the next token and update the inputs
-        next_token = jax.random.categorical(key=key, logits=logits)
-        tokens.append(next_token)
+        key, subkey = jax.random.split(key)
+        next_token = jax.random.categorical(subkey, logits=logit)
+        tokens = jax.lax.dynamic_update_slice(tokens, next_token[None], (pos,))
+        return (tokens, pos + 1, key), next_token
 
-        yield next_token
+    _, generated = jax.lax.scan(
+        step,
+        (input_tokens, jnp.array(prompt_len), key),
+        None,
+        length=max_output_tokens,
+    )
+    return generated
