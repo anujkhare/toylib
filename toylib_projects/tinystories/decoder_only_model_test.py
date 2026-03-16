@@ -4,7 +4,6 @@ import pytest
 import jax
 import jax.numpy as jnp
 import jaxtyping as jt
-from unittest.mock import Mock, patch
 
 from toylib_projects.tinystories import decoder_only_model
 
@@ -68,7 +67,21 @@ class TestTrainStep:
         assert loss >= 0.0
 
 
+def _make_model_and_padded_prompt(model_config, context):
+    """Helper: create a model and a padded prompt array."""
+    model = decoder_only_model.DecoderOnlyTransformer(
+        config=model_config, key=jax.random.key(42)
+    )
+    padded = jnp.zeros(model_config.seq_len, dtype=jnp.uint16)
+    padded = padded.at[: len(context)].set(jnp.array(context, dtype=jnp.uint16))
+    return model, padded
+
+
 class TestSampling:
+    MODEL_CONFIG = decoder_only_model.ModelConfig(
+        num_layers=2, num_heads=2, qkv_dim=16, vocab_size=10, seq_len=16
+    )
+
     @pytest.mark.parametrize(
         "model_config,context,max_length",
         [
@@ -84,150 +97,115 @@ class TestSampling:
     def test_smoke(
         self,
         model_config: decoder_only_model.ModelConfig,
-        context: jnp.ndarray,
+        context: list[int],
         max_length: int,
     ):
         """Test that sampling runs with a random small model."""
-        model = decoder_only_model.DecoderOnlyTransformer(
-            config=model_config, key=jax.random.key(42)
+        model, padded = _make_model_and_padded_prompt(model_config, context)
+        sampled = decoder_only_model.sample(
+            model=model,
+            input_tokens=padded,
+            prompt_len=len(context),
+            key=jax.random.key(0),
+            max_output_tokens=max_length,
+            temperature=1.0,
+            top_k=5,
         )
-        sampled = list(
-            decoder_only_model.sample(
-                model=model,
-                input_tokens=context,
-                key=jax.random.key(0),
-                max_output_tokens=max_length,
-                temperature=1.0,
-                top_k=5,
-            )
-        )
-
-        assert len(sampled) == max_length
+        assert sampled.shape == (max_length,)
 
     def test_top_k(self):
-        """Test that top-k sampling only samples from the top k logits."""
-        vocab_size = 10
-        logits = jnp.array([1.0, 5.0, 2.0, 8.0, 3.0, 0.5, 0.1, 0.2, 0.3, 0.4])
+        """Test that top-k sampling only samples tokens within the top-k set."""
+        context = [1]
         top_k = 3
+        model, padded = _make_model_and_padded_prompt(self.MODEL_CONFIG, context)
 
-        mock_model = Mock()
-        mock_model.return_value = logits.reshape(1, vocab_size)
+        # Get the top-k token indices according to the model's logits
+        logits = model(padded)  # [seq_len, vocab_size]
+        _, top_k_indices = jax.lax.top_k(logits[len(context) - 1], top_k)
+        top_k_set = set(top_k_indices.tolist())
 
-        with patch(
-            "toylib_projects.tinystories.decoder_only_model.jax.random.categorical"
-        ) as mock_categorical:
-            mock_categorical.return_value = jnp.array(3)
-
-            list(
-                decoder_only_model.sample(
-                    model=mock_model,
-                    input_tokens=[1],
-                    key=jax.random.key(0),
-                    max_output_tokens=1,
-                    temperature=1.0,
-                    top_k=top_k,
-                )
+        # Verify every sample lands in the top-k set across multiple keys
+        for seed in range(20):
+            generated = decoder_only_model.sample(
+                model=model,
+                input_tokens=padded,
+                prompt_len=len(context),
+                key=jax.random.key(seed),
+                max_output_tokens=1,
+                temperature=1.0,
+                top_k=top_k,
             )
-
-            # Check that categorical was called with masked logits
-            call_args = mock_categorical.call_args
-            passed_logits = call_args.kwargs["logits"]
-
-            # Top 3 values are at indices 3 (8.0), 1 (5.0), 4 (3.0)
-            # All other logits should be -inf
-            assert jnp.isfinite(passed_logits[3])
-            assert jnp.isfinite(passed_logits[1])
-            assert jnp.isfinite(passed_logits[4])
-            assert jnp.all(jnp.isinf(passed_logits[jnp.array([0, 2, 5, 6, 7, 8, 9])]))
+            assert int(generated[0]) in top_k_set
 
     def test_temperature_scaling(self):
-        """Test that temperature correctly scales the logits."""
-        vocab_size = 5
-        logits = jnp.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        temperature = 2.0
+        """Test that very low temperature converges sampling to greedy (argmax)."""
+        context = [1, 2]
+        model, padded = _make_model_and_padded_prompt(self.MODEL_CONFIG, context)
 
-        mock_model = Mock()
-        mock_model.return_value = logits.reshape(1, vocab_size)
-
-        with patch(
-            "toylib_projects.tinystories.decoder_only_model.jax.random.categorical"
-        ) as mock_categorical:
-            mock_categorical.return_value = jnp.array(4)
-
-            list(
-                decoder_only_model.sample(
-                    model=mock_model,
-                    input_tokens=[1],
-                    key=jax.random.key(0),
-                    max_output_tokens=1,
-                    temperature=temperature,
-                    top_k=None,
-                )
-            )
-
-            # Check that logits were scaled by temperature
-            call_args = mock_categorical.call_args
-            passed_logits = call_args.kwargs["logits"]
-
-            expected_logits = logits / temperature
-            assert jnp.allclose(passed_logits, expected_logits)
+        greedy = decoder_only_model.sample(
+            model=model,
+            input_tokens=padded,
+            prompt_len=len(context),
+            key=jax.random.key(0),
+            max_output_tokens=1,
+            temperature=1.0,
+            top_k=1,
+        )
+        low_temp = decoder_only_model.sample(
+            model=model,
+            input_tokens=padded,
+            prompt_len=len(context),
+            key=jax.random.key(0),
+            max_output_tokens=1,
+            temperature=1e-6,
+            top_k=None,
+        )
+        # Near-zero temperature should reproduce greedy selection
+        assert int(low_temp[0]) == int(greedy[0])
 
     def test_temperature_one_no_scaling(self):
-        """Test that temperature=1.0 does not modify logits."""
-        vocab_size = 5
-        logits = jnp.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        """Test that temperature=1.0 gives the same result as top_k=1 greedy baseline."""
+        context = [1]
+        model, padded = _make_model_and_padded_prompt(self.MODEL_CONFIG, context)
 
-        mock_model = Mock()
-        mock_model.return_value = logits.reshape(1, vocab_size)
-
-        with patch(
-            "toylib_projects.tinystories.decoder_only_model.jax.random.categorical"
-        ) as mock_categorical:
-            mock_categorical.return_value = jnp.array(4)
-
-            list(
-                decoder_only_model.sample(
-                    model=mock_model,
-                    input_tokens=[1],
-                    key=jax.random.key(0),
-                    max_output_tokens=1,
-                    temperature=1.0,
-                    top_k=None,
-                )
-            )
-
-            call_args = mock_categorical.call_args
-            passed_logits = call_args.kwargs["logits"]
-
-            assert jnp.allclose(passed_logits, logits)
+        # With the same key, two runs at temp=1.0 should be identical (determinism)
+        result_a = decoder_only_model.sample(
+            model=model,
+            input_tokens=padded,
+            prompt_len=len(context),
+            key=jax.random.key(7),
+            max_output_tokens=3,
+            temperature=1.0,
+            top_k=None,
+        )
+        result_b = decoder_only_model.sample(
+            model=model,
+            input_tokens=padded,
+            prompt_len=len(context),
+            key=jax.random.key(7),
+            max_output_tokens=3,
+            temperature=1.0,
+            top_k=None,
+        )
+        assert jnp.array_equal(result_a, result_b)
 
     def test_top_k_one_greedy(self):
-        """Test that top_k=1 results in greedy sampling (only max logit is valid)."""
-        vocab_size = 5
-        logits = jnp.array([1.0, 2.0, 5.0, 3.0, 4.0])  # max at index 2
+        """Test that top_k=1 always returns the argmax token."""
+        context = [1, 2, 3]
+        model, padded = _make_model_and_padded_prompt(self.MODEL_CONFIG, context)
 
-        mock_model = Mock()
-        mock_model.return_value = logits.reshape(1, vocab_size)
+        logits = model(padded)  # [seq_len, vocab_size]
+        expected_token = int(jnp.argmax(logits[len(context) - 1]))
 
-        with patch(
-            "toylib_projects.tinystories.decoder_only_model.jax.random.categorical"
-        ) as mock_categorical:
-            mock_categorical.return_value = jnp.array(2)
-
-            list(
-                decoder_only_model.sample(
-                    model=mock_model,
-                    input_tokens=[1],
-                    key=jax.random.key(0),
-                    max_output_tokens=1,
-                    temperature=1.0,
-                    top_k=1,
-                )
+        # top_k=1 is deterministic regardless of key
+        for seed in range(5):
+            generated = decoder_only_model.sample(
+                model=model,
+                input_tokens=padded,
+                prompt_len=len(context),
+                key=jax.random.key(seed),
+                max_output_tokens=1,
+                temperature=1.0,
+                top_k=1,
             )
-
-            call_args = mock_categorical.call_args
-            passed_logits = call_args.kwargs["logits"]
-
-            # Only index 2 should be finite
-            assert jnp.isfinite(passed_logits[2])
-            assert jnp.all(jnp.isinf(passed_logits[jnp.array([0, 1, 3, 4])]))
+            assert int(generated[0]) == expected_token

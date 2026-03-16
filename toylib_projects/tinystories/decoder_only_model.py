@@ -202,13 +202,10 @@ def loss_fn(
     Returns:
         Scalar loss value.
     """
-    targets_one_hot = jax.nn.one_hot(
-        targets, num_classes=logits.shape[-1]
-    )  # [batch_size, seq_len, vocab_size]
     log_probs = jax.nn.log_softmax(logits, axis=-1)  # [batch_size, seq_len, vocab_size]
-    per_token_loss = -jnp.sum(
-        targets_one_hot * log_probs, axis=-1
-    )  # [batch_size, seq_len]
+    per_token_loss = -jnp.take_along_axis(
+        log_probs, targets[..., None], axis=-1
+    ).squeeze(-1)  # [batch_size, seq_len]
 
     # masked loss - [batch_size, seq_len]
     masked_loss = mask * per_token_loss
@@ -244,7 +241,6 @@ def train_step(
     return total_loss, {"per_token_loss": per_token_loss}
 
 
-# TODO: jitted version??
 def sample(
     model: DecoderOnlyTransformer,
     input_tokens: jax.Array,
@@ -274,6 +270,7 @@ def sample(
     Returns:
         Generated token ids of shape [max_output_tokens].
     """
+
     def step(carry, _):
         tokens, pos, key = carry
 
@@ -287,7 +284,7 @@ def sample(
             logit = jnp.where(logit < top_k_logits[-1], -jnp.inf, logit)
 
         key, subkey = jax.random.split(key)
-        next_token = jax.random.categorical(subkey, logits=logit)
+        next_token = jax.random.categorical(subkey, logits=logit).astype(tokens.dtype)
         tokens = jax.lax.dynamic_update_slice(tokens, next_token[None], (pos,))
         return (tokens, pos + 1, key), next_token
 

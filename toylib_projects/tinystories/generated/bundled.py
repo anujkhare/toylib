@@ -7,6 +7,7 @@ from pathlib import Path
 from transformers import AutoTokenizer
 import abc
 import argparse
+import collections
 import dataclasses
 import datetime
 import einops
@@ -154,7 +155,7 @@ class BatchedTokenizedDataset(abc.ABC):
     def __post_init__(self):
         self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
         self.bos_token = self.tokenizer.bos_token_id
-        self.token_buffer = []
+        self.token_buffer = collections.deque()
         self.dataset_iter = self._get_dataset_iterator()
 
     def __iter__(self):
@@ -175,8 +176,7 @@ class BatchedTokenizedDataset(abc.ABC):
             for tokens in tokenized:
                 self.token_buffer.append(self.bos_token)
                 self.token_buffer.extend(tokens)
-        tokens = self.token_buffer[:token_needed]
-        self.token_buffer = self.token_buffer[token_needed:]
+        tokens = [self.token_buffer.popleft() for _ in range(token_needed)]
         inputs = jnp.array(tokens[:-1], dtype=jnp.uint16).reshape(
             self.batch_size, self.seq_len
         )
@@ -226,13 +226,13 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
 
     def get_state(self) -> dict[str, typing.Any]:
         """Get current state for checkpointing."""
-        self._state.token_buffer = self.token_buffer.copy()
+        self._state.token_buffer = list(self.token_buffer)
         return dataclasses.asdict(self._state)
 
     def restore_state(self, state: dict[str, typing.Any]) -> None:
         """Restore iterator position from checkpoint."""
         self._state = DatasetStateParquet(**state)
-        self._state.token_buffer = state["token_buffer"].copy()
+        self._state.token_buffer = collections.deque(state["token_buffer"])
         self.dataset_iter = self._get_dataset_iterator()
 
 
@@ -821,16 +821,17 @@ def loss_fn(
     Returns:
         Scalar loss value.
     """
-    targets_one_hot = jax.nn.one_hot(targets, num_classes=logits.shape[-1])
     log_probs = jax.nn.log_softmax(logits, axis=-1)
-    per_token_loss = -jnp.sum(targets_one_hot * log_probs, axis=-1)
+    per_token_loss = -jnp.take_along_axis(
+        log_probs, targets[..., None], axis=-1
+    ).squeeze(-1)
     masked_loss = mask * per_token_loss
     total_loss = jnp.sum(masked_loss) / jnp.sum(mask)
     return (total_loss, per_token_loss)
 
 
 def train_step(
-    model: DecoderOnlyTransformer, batch: jt.PyTree
+    model: DecoderOnlyTransformer, batch: jt.PyTree, return_aux: bool = False
 ) -> jt.Float[jt.Array, ""]:
     """A single training step for the model.
 
@@ -838,54 +839,67 @@ def train_step(
         model: The DecoderOnlyTransformer model.
         batch: PyTree containing 'inputs', 'targets', and 'mask', each of shape
             [batch_size, seq_len].
+        return_aux: If True, also return auxiliary information like per-token loss.
 
     Returns:
-        Loss value for the batch.
+        Loss value for the batch. If `return_aux` is True, also returns a dictionary
+        with auxiliary information.
     """
     tokens, targets, mask = (batch["inputs"], batch["targets"], batch["mask"])
     logits = model(tokens)
     total_loss, per_token_loss = loss_fn(logits, targets, mask)
-    return (total_loss, {"logits": logits, "per_token_loss": per_token_loss})
+    if not return_aux:
+        return (total_loss, {})
+    return (total_loss, {"per_token_loss": per_token_loss})
 
 
 def sample(
     model: DecoderOnlyTransformer,
-    input_tokens: list[int],
+    input_tokens: jax.Array,
+    prompt_len: int,
     key: jt.PRNGKeyArray,
     *,
     max_output_tokens: int = 100,
     temperature: float = 1.0,
     top_k: int | None = None,
-) -> jt.Int[jt.Array, "batch_size seq_len"]:
+) -> jax.Array:
     """Generates samples from the model given input tokens.
 
-    This is a simple implementation with no optimizations or batching support.
+    JIT-compatible: uses lax.scan over a fixed-size pre-padded token buffer.
+    input_tokens must be pre-padded to the model's seq_len with zeros.
+    prompt_len is the number of real (non-padding) tokens in input_tokens.
 
     Args:
         model: The DecoderOnlyTransformer model.
-        input_tokens: Input token ids of shape [seq_len].
+        input_tokens: Token ids pre-padded to model seq_len, shape [seq_len].
+        prompt_len: Number of real tokens in input_tokens.
         key: JAX PRNG key for sampling.
         max_output_tokens: Maximum number of tokens to generate.
         temperature: Sampling temperature. Higher values increase randomness.
         top_k: If specified, only consider the top_k logits for sampling. Set
             to 1 for greedy sampling.
 
-    Yields:
-        Generated token ids one at a time.
+    Returns:
+        Generated token ids of shape [max_output_tokens].
     """
-    if temperature < 0:
-        raise ValueError("Temperature must be non-negative.")
-    tokens = input_tokens.copy()
-    for _ in range(max_output_tokens):
-        outputs = model(jnp.array(tokens))
-        logits = outputs[-1, :]
-        logits /= temperature
+
+    def step(carry, _):
+        tokens, pos, key = carry
+        logits = model(tokens)
+        logit = jax.lax.dynamic_index_in_dim(logits, pos - 1, axis=0, keepdims=False)
+        logit = logit / temperature
         if top_k:
-            top_k_logits, _ = jax.lax.top_k(logits, top_k)
-            logits = jnp.where(logits < top_k_logits[-1], -jnp.inf, logits)
-        next_token = jax.random.categorical(key=key, logits=logits)
-        tokens.append(next_token)
-        yield next_token
+            top_k_logits, _ = jax.lax.top_k(logit, top_k)
+            logit = jnp.where(logit < top_k_logits[-1], -jnp.inf, logit)
+        key, subkey = jax.random.split(key)
+        next_token = jax.random.categorical(subkey, logits=logit).astype(tokens.dtype)
+        tokens = jax.lax.dynamic_update_slice(tokens, next_token[None], (pos,))
+        return ((tokens, pos + 1, key), next_token)
+
+    _, generated = jax.lax.scan(
+        step, (input_tokens, jnp.array(prompt_len), key), None, length=max_output_tokens
+    )
+    return generated
 
 
 # ============================================================
@@ -1426,8 +1440,6 @@ class Experiment:
         self._assert_initialized()
         if prompts is None:
             prompts = DEFAULT_PROMPTS
-        model_single = jax.tree.map(lambda x: np.asarray(x), self.model)
-        results = []
         tokenized_prompts = self.train_task.dataset.tokenizer(
             prompts,
             return_tensors=None,
@@ -1435,21 +1447,28 @@ class Experiment:
             truncation=False,
             max_length=None,
         )["input_ids"]
-        for ix in range(len(tokenized_prompts)):
-            generated = list(
-                sample(
-                    model=model_single,
-                    input_tokens=tokenized_prompts[ix],
-                    key=jax.random.key(0),
-                    max_output_tokens=max_tokens,
-                    temperature=1.0,
-                    top_k=5,
-                )
+        seq_len = self.model_config.seq_len
+        results = []
+        for ix, prompt_tokens in enumerate(tokenized_prompts):
+            padded = jnp.zeros(seq_len, dtype=jnp.uint16)
+            padded = padded.at[: len(prompt_tokens)].set(
+                jnp.array(prompt_tokens, dtype=jnp.uint16)
+            )
+            generated = sample(
+                model=self.model,
+                input_tokens=padded,
+                prompt_len=len(prompt_tokens),
+                key=jax.random.key(0),
+                max_output_tokens=max_tokens,
+                temperature=1.0,
+                top_k=5,
             )
             results.append(
                 {
                     "prompt": prompts[ix],
-                    "output": self.train_task.dataset.tokenizer.decode(generated),
+                    "output": self.train_task.dataset.tokenizer.decode(
+                        generated.tolist()
+                    ),
                 }
             )
         self.logger_obj.log(self.step, metrics={"step": self.step, "samples": results})
