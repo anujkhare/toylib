@@ -17,13 +17,13 @@ class RotaryPositionalEmbedding(module.Module):
     base: int = 100_000
 
     def init(self) -> None:
-        # Construct the frequencies
+        # Construct the frequencies in float32 for precision, then store in param_dtype.
         positions = jnp.arange(0, self.seq_len)
         freqs = self.base ** (jnp.arange(0, self.qkv_dim, 2) / self.qkv_dim)
         # [seq_len, qkv_dim // 2]
         self.gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
-        self.cos = jnp.cos(self.gamma).astype(jnp.bfloat16)
-        self.sin = jnp.sin(self.gamma).astype(jnp.bfloat16)
+        self.cos = jnp.cos(self.gamma).astype(self.param_dtype)
+        self.sin = jnp.sin(self.gamma).astype(self.param_dtype)
 
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"], t0: int = 0
@@ -41,9 +41,13 @@ class RotaryPositionalEmbedding(module.Module):
                 "Position index out of range of RoPE cache:"
                 f"t0 ({t0}) + t ({t}) > seq_len ({self.seq_len})"
             )
-        sin, cos = self.sin[t0 : t0 + t, :], self.cos[t0 : t0 + t, :]
+        sin = self.sin[t0 : t0 + t, :].astype(self.dtype)
+        cos = self.cos[t0 : t0 + t, :].astype(self.dtype)
 
-        x1, x2 = x[..., : d // 2], x[..., d // 2 :]
+        x1, x2 = (
+            x[..., : d // 2].astype(self.dtype),
+            x[..., d // 2 :].astype(self.dtype),
+        )
         # element-wise multiplication: rotate dims clockwise pair-wise
         es_shape = "... t d, t d -> ... t d"
         y1 = einops.einsum(x1, cos, es_shape) + einops.einsum(x2, sin, es_shape)
@@ -88,7 +92,10 @@ def scaled_dot_product_attention(
         # Use a large negative value to mask out attention logits instead of -jnp.inf
         attention_logits = jnp.where(mask, attention_logits, -1e9)
 
-    attention_weights = jax.nn.softmax(attention_logits, axis=-1)
+    # Softmax is computed in float32 for numerical stability, then cast back.
+    attention_weights = jax.nn.softmax(
+        attention_logits.astype(jnp.float32), axis=-1
+    ).astype(q.dtype)
     values = jnp.matmul(attention_weights, v)
     return values, attention_weights
 
@@ -105,8 +112,8 @@ class MultiHeadAttention(module.Module):
 
     qkv_dim: int
     num_heads: int
-    use_qk_norm: bool = True
     key: jt.PRNGKeyArray
+    use_qk_norm: bool = True
 
     def init(self) -> None:
         qkv_dim = self.qkv_dim
@@ -123,6 +130,8 @@ class MultiHeadAttention(module.Module):
             use_bias=False,
             key=keys[0],
             init_std=init_std,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.k_projection = layers.Linear(
             in_features=qkv_dim,
@@ -130,6 +139,8 @@ class MultiHeadAttention(module.Module):
             use_bias=False,
             key=keys[1],
             init_std=init_std,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.v_projection = layers.Linear(
             in_features=qkv_dim,
@@ -137,6 +148,8 @@ class MultiHeadAttention(module.Module):
             use_bias=False,
             key=keys[2],
             init_std=init_std,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
 
         # Output linear layer
@@ -147,6 +160,8 @@ class MultiHeadAttention(module.Module):
             key=keys[3],
             # Initialize weights to zero to stabilize training at the start
             init_std=0.0,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
 
     def __call__(

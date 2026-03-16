@@ -121,6 +121,7 @@ def get_model_config(
         qkv_dim=model_dim,
         vocab_size=vocab_size,
         seq_len=seq_len,
+        remat_policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
     )
 
 

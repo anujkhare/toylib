@@ -2,6 +2,7 @@ import abc
 import dataclasses
 import numpy as np
 import jax
+import jax.numpy as jnp
 import typing
 
 
@@ -19,6 +20,7 @@ def _is_supported_container(x: typing.Any) -> bool:
     return isinstance(x, (list, tuple))
 
 
+@dataclasses.dataclass
 class Module(abc.ABC):
     """
     Defines a base class to use for the neural network modules in toylib.
@@ -30,11 +32,19 @@ class Module(abc.ABC):
     Refer https://jax.readthedocs.io/en/latest/pytrees.html#extending-pytrees
 
     Inspired by equinox and the Custom PyTres and Initialization section in jax docs.
+
+    Every subclass automatically receives two dtype fields inherited from this base:
+
+        param_dtype: storage dtype for trainable parameters (default float32).
+        dtype: compute dtype for forward-pass operations (default float32).
     """
+
+    param_dtype: np.dtype | type = jnp.float32
+    dtype: np.dtype | type = jnp.float32
 
     def __init_subclass__(cls, **kwargs: typing.Any) -> None:
         super().__init_subclass__(**kwargs)
-        # Make all Modules dataclasses
+        # Make all Modules dataclasses.
         cls = dataclasses.dataclass(cls, kw_only=True)
         # Automatically register subclasses as pytree nodes
         cls = jax.tree_util.register_pytree_with_keys_class(cls)

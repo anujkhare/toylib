@@ -15,9 +15,9 @@ class TestModule:
         """Fixture that provides a test module."""
 
         class Linear(module.Module):
+            key: jt.PRNGKeyArray
             in_features: int = 3
             out_features: int = 2
-            key: jt.PRNGKeyArray
 
             def init(self) -> None:
                 self.w = jax.random.uniform(

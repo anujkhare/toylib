@@ -22,6 +22,18 @@ class ModelConfig:
     # logit softcap (Gemma 2: https://storage.googleapis.com/deepmind-media/gemma/gemma-2-report.pdf)
     logit_softcap: float = 15.0
 
+    # Storage dtype for all trainable parameters (default float32).
+    param_dtype: object = jnp.float32
+    # Compute dtype for all forward-pass operations (default float32).
+    dtype: object = jnp.float32
+
+    # Rematerialization (gradient checkpointing) policy applied to each transformer block.
+    # None disables remat entirely. Typical values from jax.checkpoint_policies:
+    #   nothing_saveable                     — recompute all intermediates (max memory savings)
+    #   dots_with_no_batch_dims_saveable     — save GEMM outputs, recompute activations
+    #   everything_saveable                  — save all intermediates (no memory savings)
+    remat_policy: object = None
+
 
 class MLP(module.Module):
     """A simple feedforward MLP with one hidden layer."""
@@ -41,9 +53,16 @@ class MLP(module.Module):
             out_features=4 * qkv_dim,
             key=keys[0],
             init_std=1 / math.sqrt(qkv_dim),
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.fc2 = layers.Linear(
-            in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1], init_std=0.0
+            in_features=4 * qkv_dim,
+            out_features=qkv_dim,
+            key=keys[1],
+            init_std=0.0,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
 
     def __call__(
@@ -70,11 +89,17 @@ class CausalSelfAttention(module.Module):
             num_heads=self.num_heads,
             key=self.key,
             use_qk_norm=True,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
 
         self.rope = attention.RotaryPositionalEmbedding(
-            qkv_dim=self.qkv_dim // self.num_heads, seq_len=self.seq_len, base=10_000
+            qkv_dim=self.qkv_dim // self.num_heads,
+            seq_len=self.seq_len,
+            base=10_000,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
 
     def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
@@ -102,8 +127,15 @@ class DecoderBlock(module.Module):
             num_heads=self.num_heads,
             seq_len=self.seq_len,
             key=keys[0],
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
-        self.mlp = MLP(qkv_dim=self.qkv_dim, key=keys[1])
+        self.mlp = MLP(
+            qkv_dim=self.qkv_dim,
+            key=keys[1],
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
+        )
 
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
@@ -138,6 +170,8 @@ class DecoderOnlyTransformer(module.Module):
             vocab_size=config.vocab_size,
             embedding_dim=config.qkv_dim,
             key=keys[0],
+            param_dtype=config.param_dtype,
+            dtype=config.dtype,
         )
 
         # Self-attention layers
@@ -149,15 +183,20 @@ class DecoderOnlyTransformer(module.Module):
                     num_heads=config.num_heads,
                     seq_len=config.seq_len,
                     key=keys[ix + 1],
+                    param_dtype=config.param_dtype,
+                    dtype=config.dtype,
                 )
             )
 
-        # Output projection
+        # Output projection — always stored and computed in float32 so logits
+        # are full precision before the softcap and loss computation.
         self.output_layer = layers.Linear(
             in_features=config.qkv_dim,
             out_features=config.vocab_size,
             key=keys[-1],
             init_std=0.001,  # small std to prevent large initial logit values which can destabilize training
+            param_dtype=config.param_dtype,
+            dtype=jnp.float32,
         )
 
     def __call__(
@@ -178,8 +217,13 @@ class DecoderOnlyTransformer(module.Module):
         x = layers.rms_norm(x)
 
         # Apply each attention layer
+        remat_policy = self.config.remat_policy
         for block in self.blocks:
-            x = block(x)
+            if remat_policy is not None:
+                # remat over a lambda function because Module can't be hashed
+                x = jax.remat(lambda b, x: b(x), policy=remat_policy)(block, x)
+            else:
+                x = block(x)
         x = layers.rms_norm(x)
 
         # Output projection with softcap to prevent large logit values
