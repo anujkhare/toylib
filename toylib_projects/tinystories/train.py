@@ -16,6 +16,7 @@ Usage (Colab/Interactive):
 """
 
 import jax
+import jax.numpy as jnp
 
 from toylib_projects.tinystories import analyze
 from toylib_projects.tinystories import data
@@ -122,6 +123,7 @@ def get_model_config(
         vocab_size=vocab_size,
         seq_len=seq_len,
         remat_policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
+        dtype=jnp.bfloat16,  # use bf16 for training (except for optimizer state which is kept in float32 in optax)
     )
 
 

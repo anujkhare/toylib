@@ -325,6 +325,7 @@ def _is_supported_container(x: typing.Any) -> bool:
     return isinstance(x, (list, tuple))
 
 
+@dataclasses.dataclass
 class Module(abc.ABC):
     """
     Defines a base class to use for the neural network modules in toylib.
@@ -336,9 +337,22 @@ class Module(abc.ABC):
     Refer https://jax.readthedocs.io/en/latest/pytrees.html#extending-pytrees
 
     Inspired by equinox and the Custom PyTres and Initialization section in jax docs.
+
+    Every subclass automatically receives two dtype fields inherited from this base:
+
+        param_dtype: storage dtype for trainable parameters (default float32).
+        dtype: compute dtype for forward-pass operations (default float32).
     """
 
+    param_dtype: np.dtype | type = jnp.float32
+    dtype: np.dtype | type = jnp.float32
+
     def __init_subclass__(cls, **kwargs: typing.Any) -> None:
+        """Initialize subclass as a dataclass and register as a pytree node.
+
+        Sub-classes of dataclasses are not automatically dataclasses, so we need to explicitly convert them.
+        We also register the class as a pytree with jax so that it can be used with jax transformations like jit and grad.
+        """
         super().__init_subclass__(**kwargs)
         cls = dataclasses.dataclass(cls, kw_only=True)
         cls = jax.tree_util.register_pytree_with_keys_class(cls)
@@ -405,11 +419,11 @@ class Linear(Module):
 
     in_features: int
     out_features: int
-    use_bias: bool = False
     key: jt.PRNGKeyArray
-    init_std: float | None = None
-    weights: jt.Float[jt.Array, "in_features out_features"] | None = None
-    bias: typing.Optional[jt.Float[jt.Array, " out_features"]] | None = None
+    use_bias: bool = False
+    init_std: typing.Optional[float] = None
+    weights: typing.Optional[jt.Float[jt.Array, "in_features out_features"]] = None
+    bias: typing.Optional[jt.Float[jt.Array, " out_features"]] = None
 
     def init(self) -> None:
         w_key = self.key
@@ -420,22 +434,26 @@ class Linear(Module):
             s = std * math.sqrt(3)
             self.weights = jax.random.uniform(
                 key=w_key, shape=(in_features, out_features), minval=-s, maxval=s
-            )
+            ).astype(self.param_dtype)
         else:
             std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(
                 in_features
             )
             self.weights = (
                 jax.random.normal(key=w_key, shape=(in_features, out_features)) * std
-            )
-        self.bias = jax.numpy.zeros((out_features,)) if self.use_bias else None
+            ).astype(self.param_dtype)
+        self.bias = (
+            jax.numpy.zeros((out_features,), dtype=self.param_dtype)
+            if self.use_bias
+            else None
+        )
 
     def __call__(
         self, x: jt.Float[jt.Array, "... in_features"]
     ) -> jt.Float[jt.Array, "... out_features"]:
-        x = jax.numpy.dot(x, self.weights)
+        x = jax.numpy.dot(x.astype(self.dtype), self.weights.astype(self.dtype))
         if self.use_bias:
-            x = x + self.bias
+            x = x + self.bias.astype(self.dtype)
         return x
 
 
@@ -445,21 +463,24 @@ class Embedding(Module):
     vocab_size: int
     embedding_dim: int
     key: jt.PRNGKeyArray
-    weights: jt.Float[jt.Array, "vocab_size embedding_dim"] | None = None
+    weights: typing.Optional[jt.Float[jt.Array, "vocab_size embedding_dim"]] = None
 
     def init(self) -> None:
         self.weights = jax.random.normal(
             self.key, (self.vocab_size, self.embedding_dim)
-        )
+        ).astype(self.param_dtype)
 
     def __call__(
         self, tokens: jt.Integer[jt.Array, "... seq_len"]
     ) -> jt.Float[jt.Array, "... seq_len embedding_dim"]:
-        return jax.numpy.take(self.weights, tokens, axis=0)
+        return jax.numpy.take(self.weights, tokens, axis=0).astype(self.dtype)
 
 
 def rms_norm(x: jt.Float[jt.Array, "... dim"]) -> jt.Float[jt.Array, "... dim"]:
     """Applies RMS Normalization over the last dimension of the input tensor.
+
+    The mean-square computation is done in float32 for numerical stability,
+    regardless of the input dtype. The output is cast back to the input dtype.
 
     Args:
         x: Input tensor
@@ -467,8 +488,10 @@ def rms_norm(x: jt.Float[jt.Array, "... dim"]) -> jt.Float[jt.Array, "... dim"]:
     Returns:
         The RMS normalized tensor of the same shape as input x.
     """
+    orig_dtype = x.dtype
+    x = x.astype(jnp.float32)
     rms = jnp.sqrt(jnp.mean(jnp.square(x), axis=-1, keepdims=True) + 1e-09)
-    return x / rms
+    return (x / rms).astype(orig_dtype)
 
 
 # ============================================================
@@ -487,8 +510,8 @@ class RotaryPositionalEmbedding(Module):
         positions = jnp.arange(0, self.seq_len)
         freqs = self.base ** (jnp.arange(0, self.qkv_dim, 2) / self.qkv_dim)
         self.gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
-        self.cos = jnp.cos(self.gamma).astype(jnp.bfloat16)
-        self.sin = jnp.sin(self.gamma).astype(jnp.bfloat16)
+        self.cos = jnp.cos(self.gamma).astype(self.param_dtype)
+        self.sin = jnp.sin(self.gamma).astype(self.param_dtype)
 
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"], t0: int = 0
@@ -498,8 +521,12 @@ class RotaryPositionalEmbedding(Module):
             raise ValueError(
                 f"Position index out of range of RoPE cache:t0 ({t0}) + t ({t}) > seq_len ({self.seq_len})"
             )
-        sin, cos = (self.sin[t0 : t0 + t, :], self.cos[t0 : t0 + t, :])
-        x1, x2 = (x[..., : d // 2], x[..., d // 2 :])
+        sin = self.sin[t0 : t0 + t, :].astype(self.dtype)
+        cos = self.cos[t0 : t0 + t, :].astype(self.dtype)
+        x1, x2 = (
+            x[..., : d // 2].astype(self.dtype),
+            x[..., d // 2 :].astype(self.dtype),
+        )
         es_shape = "... t d, t d -> ... t d"
         y1 = einops.einsum(x1, cos, es_shape) + einops.einsum(x2, sin, es_shape)
         y2 = -einops.einsum(x1, sin, es_shape) + einops.einsum(x2, cos, es_shape)
@@ -540,7 +567,9 @@ def scaled_dot_product_attention(
     attention_logits = jnp.matmul(q, k.swapaxes(-1, -2)) / jnp.sqrt(d_k)
     if mask is not None:
         attention_logits = jnp.where(mask, attention_logits, -1000000000.0)
-    attention_weights = jax.nn.softmax(attention_logits, axis=-1)
+    attention_weights = jax.nn.softmax(
+        attention_logits.astype(jnp.float32), axis=-1
+    ).astype(q.dtype)
     values = jnp.matmul(attention_weights, v)
     return (values, attention_weights)
 
@@ -557,8 +586,8 @@ class MultiHeadAttention(Module):
 
     qkv_dim: int
     num_heads: int
-    use_qk_norm: bool = True
     key: jt.PRNGKeyArray
+    use_qk_norm: bool = True
 
     def init(self) -> None:
         qkv_dim = self.qkv_dim
@@ -570,6 +599,8 @@ class MultiHeadAttention(Module):
             use_bias=False,
             key=keys[0],
             init_std=init_std,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.k_projection = Linear(
             in_features=qkv_dim,
@@ -577,6 +608,8 @@ class MultiHeadAttention(Module):
             use_bias=False,
             key=keys[1],
             init_std=init_std,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.v_projection = Linear(
             in_features=qkv_dim,
@@ -584,6 +617,8 @@ class MultiHeadAttention(Module):
             use_bias=False,
             key=keys[2],
             init_std=init_std,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.linear = Linear(
             in_features=qkv_dim,
@@ -591,6 +626,8 @@ class MultiHeadAttention(Module):
             use_bias=False,
             key=keys[3],
             init_std=0.0,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
 
     def __call__(
@@ -664,6 +701,9 @@ class ModelConfig:
     vocab_size: int = 50257
     seq_len: int = 512
     logit_softcap: float = 15.0
+    param_dtype: object = jnp.float32
+    dtype: object = jnp.float32
+    remat_policy: object = None
 
 
 class MLP(Module):
@@ -680,9 +720,16 @@ class MLP(Module):
             out_features=4 * qkv_dim,
             key=keys[0],
             init_std=1 / math.sqrt(qkv_dim),
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.fc2 = Linear(
-            in_features=4 * qkv_dim, out_features=qkv_dim, key=keys[1], init_std=0.0
+            in_features=4 * qkv_dim,
+            out_features=qkv_dim,
+            key=keys[1],
+            init_std=0.0,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
 
     def __call__(
@@ -708,10 +755,16 @@ class CausalSelfAttention(Module):
             num_heads=self.num_heads,
             key=self.key,
             use_qk_norm=True,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
         self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
         self.rope = RotaryPositionalEmbedding(
-            qkv_dim=self.qkv_dim // self.num_heads, seq_len=self.seq_len, base=10000
+            qkv_dim=self.qkv_dim // self.num_heads,
+            seq_len=self.seq_len,
+            base=10000,
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
 
     def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
@@ -739,8 +792,15 @@ class DecoderBlock(Module):
             num_heads=self.num_heads,
             seq_len=self.seq_len,
             key=keys[0],
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
         )
-        self.mlp = MLP(qkv_dim=self.qkv_dim, key=keys[1])
+        self.mlp = MLP(
+            qkv_dim=self.qkv_dim,
+            key=keys[1],
+            param_dtype=self.param_dtype,
+            dtype=self.dtype,
+        )
 
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
@@ -765,7 +825,11 @@ class DecoderOnlyTransformer(Module):
         config = self.config
         keys = jax.random.split(self.key, config.num_layers + 2)
         self.embedding_layer = Embedding(
-            vocab_size=config.vocab_size, embedding_dim=config.qkv_dim, key=keys[0]
+            vocab_size=config.vocab_size,
+            embedding_dim=config.qkv_dim,
+            key=keys[0],
+            param_dtype=config.param_dtype,
+            dtype=config.dtype,
         )
         self.blocks = []
         for ix in range(config.num_layers):
@@ -775,6 +839,8 @@ class DecoderOnlyTransformer(Module):
                     num_heads=config.num_heads,
                     seq_len=config.seq_len,
                     key=keys[ix + 1],
+                    param_dtype=config.param_dtype,
+                    dtype=config.dtype,
                 )
             )
         self.output_layer = Linear(
@@ -782,6 +848,8 @@ class DecoderOnlyTransformer(Module):
             out_features=config.vocab_size,
             key=keys[-1],
             init_std=0.001,
+            param_dtype=config.param_dtype,
+            dtype=jnp.float32,
         )
 
     def __call__(
@@ -799,8 +867,12 @@ class DecoderOnlyTransformer(Module):
         """
         x = self.embedding_layer(x)
         x = rms_norm(x)
+        remat_policy = self.config.remat_policy
         for block in self.blocks:
-            x = block(x)
+            if remat_policy is not None:
+                x = jax.remat(lambda b, x: b(x), policy=remat_policy)(block, x)
+            else:
+                x = block(x)
         x = rms_norm(x)
         x = self.output_layer(x)
         x = self.config.logit_softcap * jnp.tanh(x / self.config.logit_softcap)
@@ -1245,45 +1317,32 @@ class Experiment:
 
     def _train_step(self, model, opt_state, batch):
         """Perform a single training step with microbatching."""
-
-        def _slice_tensors(
-            batch: jt.PyTree, start: int, microbatch_size: int
-        ) -> jt.PyTree:
-            return jax.tree_util.tree_map(
-                lambda x: jax.lax.dynamic_slice_in_dim(
-                    x, start, microbatch_size, axis=0
-                ),
-                batch,
-            )
-
         sharded_batch_size = batch["inputs"].shape[0]
         num_microbatches = self.training_config.num_microbatches
         microbatch_size = sharded_batch_size // num_microbatches
-        total_grads = jax.tree.map(lambda x: jnp.zeros_like(x), model)
-        accumulated_metrics = None
+        microbatches = jax.tree.map(
+            lambda x: x.reshape(num_microbatches, microbatch_size, *x.shape[1:]), batch
+        )
+
+        def scan_fn(carry_grads, microbatch):
+            (loss_val, aux), grads = jax.value_and_grad(self.forward_fn, has_aux=True)(
+                model, microbatch
+            )
+            new_carry_grads = jax.tree.map(lambda c, g: c + g, carry_grads, grads)
+            microbatch_metrics = self._compute_metrics(
+                task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
+            )
+            return (new_carry_grads, microbatch_metrics)
+
+        init_carry_grads = jax.tree.map(jnp.zeros_like, model)
         with jax.profiler.TraceAnnotation("microbatch_loop"):
-            for microbatch_idx in range(num_microbatches):
-                start_idx = microbatch_idx * microbatch_size
-                microbatch = _slice_tensors(batch, start_idx, microbatch_size)
-                (loss_val, aux), grads = jax.value_and_grad(
-                    self.forward_fn, has_aux=True
-                )(model, microbatch)
-                microbatch_metrics = self._compute_metrics(
-                    task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
-                )
-                total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
-                if accumulated_metrics is None:
-                    accumulated_metrics = microbatch_metrics
-                else:
-                    accumulated_metrics = jax.tree.map(
-                        lambda x, y: x + y, accumulated_metrics, microbatch_metrics
-                    )
-            total_grads = jax.tree.map(
-                lambda g: g / self.num_devices / num_microbatches, total_grads
+            total_grads, all_metrics = jax.lax.scan(
+                scan_fn, init_carry_grads, microbatches
             )
-            averaged_metrics = jax.tree.map(
-                lambda x: x / num_microbatches, accumulated_metrics
-            )
+        total_grads = jax.tree.map(
+            lambda g: g / self.num_devices / num_microbatches, total_grads
+        )
+        averaged_metrics = jax.tree.map(lambda x: jnp.mean(x, axis=0), all_metrics)
         with jax.profiler.TraceAnnotation("optimizer_update"):
             updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
             model = optax.apply_updates(model, updates)
@@ -1438,6 +1497,8 @@ class Experiment:
             prompts: List of string prompts to evaluate.
         """
         self._assert_initialized()
+        if self.train_task.dataset.tokenizer is None:
+            return
         if prompts is None:
             prompts = DEFAULT_PROMPTS
         tokenized_prompts = self.train_task.dataset.tokenizer(
@@ -1889,6 +1950,8 @@ def get_model_config(
         qkv_dim=model_dim,
         vocab_size=vocab_size,
         seq_len=seq_len,
+        remat_policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
+        dtype=jnp.bfloat16,
     )
 
 
