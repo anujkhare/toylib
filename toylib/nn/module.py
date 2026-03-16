@@ -43,6 +43,11 @@ class Module(abc.ABC):
     dtype: np.dtype | type = jnp.float32
 
     def __init_subclass__(cls, **kwargs: typing.Any) -> None:
+        """Initialize subclass as a dataclass and register as a pytree node.
+
+        Sub-classes of dataclasses are not automatically dataclasses, so we need to explicitly convert them.
+        We also register the class as a pytree with jax so that it can be used with jax transformations like jit and grad.
+        """
         super().__init_subclass__(**kwargs)
         # Make all Modules dataclasses.
         cls = dataclasses.dataclass(cls, kw_only=True)

@@ -40,6 +40,8 @@ Things to investigate:
     * [ ] fp8 training (~50% HBM lowering)
     * [ ] 4 microbatches (4x effective batch size)
     * [ ] remat all the attention layers (??)
+    * [ ] we init the model on CPU first - this probably needs to change to directly on device (RAM OOMs with large models)
+      * [ ] the module init() is done as post_init right now - do it explicitly instead
   * [ ] GQA
   * [ ] Weight init
   * [ ] Per-layer scalers
