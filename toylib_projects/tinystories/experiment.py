@@ -261,16 +261,6 @@ class Experiment:
     def _train_step(self, model, opt_state, batch):
         """Perform a single training step with microbatching."""
 
-        def _slice_tensors(
-            batch: jt.PyTree, start: int, microbatch_size: int
-        ) -> jt.PyTree:
-            return jax.tree_util.tree_map(
-                lambda x: jax.lax.dynamic_slice_in_dim(
-                    x, start, microbatch_size, axis=0
-                ),
-                batch,
-            )
-
         # train_step is run on each device with a shard of the batch
         sharded_batch_size = batch["inputs"].shape[0]
 
@@ -278,40 +268,41 @@ class Experiment:
         num_microbatches = self.training_config.num_microbatches
         microbatch_size = sharded_batch_size // num_microbatches
 
-        total_grads = jax.tree.map(lambda x: jnp.zeros_like(x), model)
-        accumulated_metrics = None
+        # Reshape batch leaves from [sharded_batch, ...] to [num_microbatches, microbatch_size, ...]
+        # so scan can slice one microbatch per iteration along the leading axis.
+        microbatches = jax.tree.map(
+            lambda x: x.reshape(num_microbatches, microbatch_size, *x.shape[1:]), batch
+        )
+
+        def scan_fn(carry_grads, microbatch):
+            # Run forward and backward pass on the microbatch.
+            # model is closed over — it does not change during gradient accumulation.
+            (loss_val, aux), grads = jax.value_and_grad(
+                self.forward_fn, has_aux=True
+            )(model, microbatch)
+            # Accumulate gradients into the carry.
+            new_carry_grads = jax.tree.map(lambda c, g: c + g, carry_grads, grads)
+            # Metrics are emitted as outputs and stacked by scan across iterations.
+            microbatch_metrics = self._compute_metrics(
+                task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
+            )
+            return new_carry_grads, microbatch_metrics
+
+        init_carry_grads = jax.tree.map(jnp.zeros_like, model)
         with jax.profiler.TraceAnnotation("microbatch_loop"):
-            for microbatch_idx in range(num_microbatches):
-                start_idx = microbatch_idx * microbatch_size
-                microbatch = _slice_tensors(batch, start_idx, microbatch_size)
-
-                # Run forward and backward pass on the microbatch
-                (loss_val, aux), grads = jax.value_and_grad(
-                    self.forward_fn, has_aux=True
-                )(model, microbatch)
-
-                # Compute metrics for this microbatch
-                microbatch_metrics = self._compute_metrics(
-                    task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
-                )
-
-                # Accumulate the gradients and metrics over microbatches
-                total_grads = jax.tree.map(lambda x, y: x + y, total_grads, grads)
-                if accumulated_metrics is None:
-                    accumulated_metrics = microbatch_metrics
-                else:
-                    accumulated_metrics = jax.tree.map(
-                        lambda x, y: x + y, accumulated_metrics, microbatch_metrics
-                    )
-
-            # The default reduce operation in jax is a sum across devices
-            # Average the grads and metrics by the number of devices and microbatches
-            total_grads = jax.tree.map(
-                lambda g: g / self.num_devices / num_microbatches, total_grads
+            total_grads, all_metrics = jax.lax.scan(
+                scan_fn, init_carry_grads, microbatches
             )
-            averaged_metrics = jax.tree.map(
-                lambda x: x / num_microbatches, accumulated_metrics
-            )
+
+        # The default reduce operation in jax is a sum across devices.
+        # Average the grads and metrics by the number of devices and microbatches.
+        # all_metrics leaves have shape [num_microbatches, ...] — mean over the leading axis.
+        total_grads = jax.tree.map(
+            lambda g: g / self.num_devices / num_microbatches, total_grads
+        )
+        averaged_metrics = jax.tree.map(
+            lambda x: jnp.mean(x, axis=0), all_metrics
+        )
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
             updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
@@ -515,6 +506,8 @@ class Experiment:
             prompts: List of string prompts to evaluate.
         """
         self._assert_initialized()
+        if self.train_task.dataset.tokenizer is None:
+            return
         if prompts is None:
             prompts = DEFAULT_PROMPTS
 
