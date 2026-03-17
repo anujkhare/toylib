@@ -293,18 +293,7 @@ def create_experiment(
     return exp
 
 
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Train or compile TinyStories model")
-    parser.add_argument(
-        "--compile",
-        action="store_true",
-        help="Run compilation analysis instead of training",
-    )
-    args = parser.parse_args()
-    use_dummy_data = args.compile  # Use dummy data for compilation analysis
-
+def main(use_dummy_data: bool = False, compile: bool = False) -> None:
     exp = create_experiment(
         batch_size_per_device=18,
         seq_len=2048,
@@ -319,13 +308,23 @@ def main():
         use_dummy_data=use_dummy_data,
     )
 
-    if args.compile:
+    if compile:
         compile_utils.run_compilation_analysis(exp, output_dir="/tmp/compile_analysis")
     else:
         exp.outer_loop()
 
-    exp.cleanup()
+    return exp
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train or compile TinyStories model")
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Run compilation analysis instead of training",
+    )
+    args = parser.parse_args()
+
+    _ = main(compile=args.compile, use_dummy_data=args.compile)

@@ -22,6 +22,7 @@ def get_tree_stats(model: jt.PyTree) -> pd.DataFrame:
             {
                 "params": count,
                 "n_bytes": nbytes,
+                "dtype": str(dtype),
                 "path": "/".join(path),
             }
         )
@@ -43,12 +44,16 @@ def print_param_sizes(
     df_stats.loc[:, "n_bytes_divided"] = df_stats["n_bytes"] / size_denom
     total_params = df_stats.params.sum()
     total_bytes = df_stats.n_bytes_divided.sum()
-    print(f"Total Parameters: {total_params}. Bytes: ({total_bytes:.2f})")
-    return (
+    print(f"Total Parameters: {total_params:,}. Bytes: ({total_bytes:,.2f})")
+    level_cols = [f"level_{i}" for i in range(depth)]
+    grouped = (
         df_stats.fillna("")
-        .groupby([f"level_{i}" for i in range(depth)])
+        .groupby(level_cols + ["dtype"])
         .sum()[["params", "n_bytes_divided"]]
-        .reset_index(),
+        .reset_index()
+    )
+    return (
+        grouped,
         total_params,
         total_bytes,
     )
@@ -88,14 +93,13 @@ def print_estimated_tokens(exp) -> int:
     print("------------------------------")
     print("Token Analysis:")
     print("------------------------------")
-    print("Batch size:", exp.train_task.dataset.batch_size)
-    print("Seq len:", exp.train_task.dataset.seq_len)
-    print("Max steps:", exp.training_config.max_steps)
+    print(f"Batch size: {exp.train_task.dataset.batch_size:,}")
+    print(f"Seq len: {exp.train_task.dataset.seq_len:,}")
+    print(f"Max steps: {exp.training_config.max_steps:,}")
     print(
-        "Num microbatches (split from within batch_size):",
-        exp.training_config.num_microbatches,
+        f"Num microbatches (split from within batch_size): {exp.training_config.num_microbatches:,}"
     )
-    print("Total training tokens:", total_tokens)
+    print(f"Total training tokens: {total_tokens:,}")
     print("------------------------------")
 
 
@@ -104,6 +108,6 @@ def print_chinchilla_estimate(model: jt.PyTree):
     print("------------------------------")
     print("Chinchilla Analysis:")
     print("------------------------------")
-    print("Model parameters:", model_params)
-    print("Chinchilla estimate: (20 * model_params):", 20 * model_params, "tokens")
+    print(f"Model parameters: {model_params:,}")
+    print(f"Chinchilla estimate: (20 * model_params): {20 * model_params:,} tokens")
     print("------------------------------")
