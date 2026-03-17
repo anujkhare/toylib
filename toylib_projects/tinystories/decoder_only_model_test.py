@@ -27,6 +27,7 @@ class TestDecoderOnlyTransformer:
         model = decoder_only_model.DecoderOnlyTransformer(
             config=model_config, key=jax.random.key(42)
         )
+        model.init()
         actual = model(input_tokens)
         assert actual.shape == (
             input_tokens.shape[0],
@@ -60,6 +61,7 @@ class TestTrainStep:
         model = decoder_only_model.DecoderOnlyTransformer(
             config=model_config, key=jax.random.key(42)
         )
+        model.init()
         (loss, _), _ = jax.jit(
             jax.value_and_grad(decoder_only_model.train_step, has_aux=True)
         )(model, batch)
@@ -72,6 +74,7 @@ def _make_model_and_padded_prompt(model_config, context):
     model = decoder_only_model.DecoderOnlyTransformer(
         config=model_config, key=jax.random.key(42)
     )
+    model.init()
     padded = jnp.zeros(model_config.seq_len, dtype=jnp.uint16)
     padded = padded.at[: len(context)].set(jnp.array(context, dtype=jnp.uint16))
     return model, padded

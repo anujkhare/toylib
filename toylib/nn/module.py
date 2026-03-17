@@ -20,6 +20,24 @@ def _is_supported_container(x: typing.Any) -> bool:
     return isinstance(x, (list, tuple))
 
 
+def _wrap_init(orig: typing.Callable) -> typing.Callable:
+    def wrapped(self) -> None:
+        orig(self)
+        # DFS: init any sub-modules created during orig(self)
+        for v in self.__dict__.values():
+            if isinstance(v, Module) and not hasattr(v, "_trainable_param_keys"):
+                v.init()
+            elif _is_supported_container(v):
+                for elem in v:
+                    if isinstance(elem, Module) and not hasattr(
+                        elem, "_trainable_param_keys"
+                    ):
+                        elem.init()
+        self._trainable_param_keys = self._get_trainable_param_keys()
+
+    return wrapped
+
+
 @dataclasses.dataclass
 class Module(abc.ABC):
     """
@@ -47,12 +65,21 @@ class Module(abc.ABC):
 
         Sub-classes of dataclasses are not automatically dataclasses, so we need to explicitly convert them.
         We also register the class as a pytree with jax so that it can be used with jax transformations like jit and grad.
+
+        Also wraps the subclass's init() to recursively initialize any sub-Module instances
+        created during init(), then compute _trainable_param_keys. This means calling init()
+        on the top-level module is sufficient to initialize the entire module tree.
         """
         super().__init_subclass__(**kwargs)
         # Make all Modules dataclasses.
         cls = dataclasses.dataclass(cls, kw_only=True)
         # Automatically register subclasses as pytree nodes
         cls = jax.tree_util.register_pytree_with_keys_class(cls)
+        # Wrap init() to recursively init sub-modules and compute _trainable_param_keys
+        if "init" in cls.__dict__:
+            original_init = cls.__dict__["init"]
+
+            cls.init = _wrap_init(original_init)
 
     @abc.abstractmethod
     def init(self) -> None:
@@ -78,10 +105,6 @@ class Module(abc.ABC):
             ):
                 param_keys.append(k)
         return param_keys
-
-    def __post_init__(self) -> None:
-        self.init()
-        self._trainable_param_keys = self._get_trainable_param_keys()
 
     def tree_flatten_with_keys(self) -> tuple:
         params_with_keys = []

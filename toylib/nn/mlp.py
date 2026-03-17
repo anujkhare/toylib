@@ -23,12 +23,12 @@ class MLP(module.Module):
         hidden_layers = []
         input_dim = self.in_features
         for i, hidden_dim in enumerate(self.hidden_dims):
-            layer = layers.Linear(input_dim, hidden_dim, key=keys[i])
+            layer = layers.Linear(in_features=input_dim, out_features=hidden_dim, key=keys[i])
             hidden_layers.append(layer)
             input_dim = hidden_dim
 
         # Create the output layer
-        output_layer = layers.Linear(input_dim, self.out_features, key=keys[-1])
+        output_layer = layers.Linear(in_features=input_dim, out_features=self.out_features, key=keys[-1])
 
         self.hidden_layers = hidden_layers
         self.output_layer = output_layer

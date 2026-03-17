@@ -48,6 +48,7 @@ class TestModule:
                 return self.a + x
 
         obj = Foo(b="world")
+        obj.init()
 
         # Use jax.tree_util functions which internally use your methods
         leaves, treedef = jax.tree_util.tree_flatten(obj)
@@ -64,6 +65,7 @@ class TestModule:
             return model(x)
 
         model = linear_module(key=jax.random.key(0))
+        model.init()
         result = forward(model, sample_input)
         expected = sample_input @ model.w + model.bias
         assert jnp.array_equal(result, expected)
@@ -75,6 +77,7 @@ class TestModule:
             return jnp.sum(model(x) ** 2)
 
         model = linear_module(key=jax.random.key(0))
+        model.init()
         grads = jax.grad(loss_fn)(model, sample_input)
 
         # grads should be a Linear module with gradient arrays
@@ -89,6 +92,7 @@ class TestModule:
             return jnp.sum(model(x) ** 2)
 
         model = linear_module(key=jax.random.key(0))
+        model.init()
         loss, grads = jax.value_and_grad(loss_fn)(model, sample_input)
 
         assert isinstance(loss, jax.Array)
@@ -105,6 +109,7 @@ class TestModule:
                 return x * self.weight
 
         obj = Foo()
+        obj.init()
         paths = []
 
         def collect_paths(path, leaf):
@@ -119,6 +124,7 @@ class TestModule:
     def test_optax_training_loop(self, linear_module, sample_input):
         """Test a full training loop with optax."""
         model = linear_module(key=jax.random.key(0))
+        model.init()
         optimizer = optax.adam(learning_rate=0.01)
         opt_state = optimizer.init(model)
 

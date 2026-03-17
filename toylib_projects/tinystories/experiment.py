@@ -383,6 +383,7 @@ class Experiment:
         self.model = decoder_only_model.DecoderOnlyTransformer(
             config=self.model_config, key=jax.random.key(0)
         )
+        self.model.init()
         # Replicate model across all devices
         self.model = jax.device_put(self.model, self.replicated_sharding)
 

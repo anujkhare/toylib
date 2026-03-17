@@ -92,7 +92,6 @@ class CausalSelfAttention(module.Module):
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
-        self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
 
         self.rope = attention.RotaryPositionalEmbedding(
             qkv_dim=self.qkv_dim // self.num_heads,
