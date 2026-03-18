@@ -206,7 +206,7 @@ class Experiment:
             all_metrics.update(metric_results)
         return all_metrics
 
-    def _create_optimizer(self, model: jt.PyTree) -> optax.GradientTransformation:
+    def _create_optimizer(self) -> optax.GradientTransformation:
         """Create the optimizer with optional per-parameter optimization.
 
         This is called after model initialization to create an optimizer that
@@ -277,9 +277,9 @@ class Experiment:
         def scan_fn(carry_grads, microbatch):
             # Run forward and backward pass on the microbatch.
             # model is closed over — it does not change during gradient accumulation.
-            (loss_val, aux), grads = jax.value_and_grad(
-                self.forward_fn, has_aux=True
-            )(model, microbatch)
+            (loss_val, aux), grads = jax.value_and_grad(self.forward_fn, has_aux=True)(
+                model, microbatch
+            )
             # Accumulate gradients into the carry.
             new_carry_grads = jax.tree.map(lambda c, g: c + g, carry_grads, grads)
             # Metrics are emitted as outputs and stacked by scan across iterations.
@@ -300,9 +300,7 @@ class Experiment:
         total_grads = jax.tree.map(
             lambda g: g / self.num_devices / num_microbatches, total_grads
         )
-        averaged_metrics = jax.tree.map(
-            lambda x: jnp.mean(x, axis=0), all_metrics
-        )
+        averaged_metrics = jax.tree.map(lambda x: jnp.mean(x, axis=0), all_metrics)
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
             updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
@@ -369,8 +367,8 @@ class Experiment:
             self.eval_step_fn = jax.jit(
                 self._eval_step,
                 in_shardings=(
-                    self.replicated_sharding,
-                    self.data_sharding,
+                    self.replicated_sharding,  # model
+                    self.data_sharding,  # batch (sharded)
                 ),
                 out_shardings=self.replicated_sharding,  # metrics
             )
@@ -379,21 +377,20 @@ class Experiment:
             self.eval_step_fn = self._eval_step
 
     def init_state(self):
-        # Initialize model on CPU first
-        self.model = decoder_only_model.DecoderOnlyTransformer(
+        # init() is imperative (mutates self), so it can't be JIT'd. Initialize
+        # on the default device (CPU) and replicate to target devices afterward.
+        model = decoder_only_model.DecoderOnlyTransformer(
             config=self.model_config, key=jax.random.key(0)
         )
-        self.model.init()
-        # Replicate model across all devices
-        self.model = jax.device_put(self.model, self.replicated_sharding)
+        with jax.set_mesh(self.mesh):
+            model.init()
 
-        # Create the optimizer based on the model structure
-        # This allows different optimizers for different parts of the model
-        self.optimizer = self._create_optimizer(self.model)
+        # Create the optimizer
+        self.optimizer = self._create_optimizer()
 
         # Initialize and replicate optimizer state
-        self.opt_state = self.optimizer.init(self.model)
-        self.opt_state = jax.device_put(self.opt_state, self.replicated_sharding)
+        with jax.set_mesh(self.mesh):
+            self.opt_state = self.optimizer.init(self.model)
 
         self.step = 0
 

@@ -43,7 +43,14 @@ def get_tree_stats(model: jt.PyTree) -> pd.DataFrame:
         path = [str(p) for p in path]
         count = math.prod(shape)
         nbytes = count * dtype.itemsize
-        results.append({"params": count, "n_bytes": nbytes, "path": "/".join(path)})
+        results.append(
+            {
+                "params": count,
+                "n_bytes": nbytes,
+                "dtype": str(dtype),
+                "path": "/".join(path),
+            }
+        )
         for i, p in enumerate(path):
             results[-1][f"level_{i}"] = p
     return pd.DataFrame(results)
@@ -62,15 +69,15 @@ def print_param_sizes(
     df_stats.loc[:, "n_bytes_divided"] = df_stats["n_bytes"] / size_denom
     total_params = df_stats.params.sum()
     total_bytes = df_stats.n_bytes_divided.sum()
-    print(f"Total Parameters: {total_params}. Bytes: ({total_bytes:.2f})")
-    return (
+    print(f"Total Parameters: {total_params:,}. Bytes: ({total_bytes:,.2f})")
+    level_cols = [f"level_{i}" for i in range(depth)]
+    grouped = (
         df_stats.fillna("")
-        .groupby([f"level_{i}" for i in range(depth)])
+        .groupby(level_cols + ["dtype"])
         .sum()[["params", "n_bytes_divided"]]
-        .reset_index(),
-        total_params,
-        total_bytes,
+        .reset_index()
     )
+    return (grouped, total_params, total_bytes)
 
 
 def print_xla_memory_analysis(
@@ -106,14 +113,13 @@ def print_estimated_tokens(exp) -> int:
     print("------------------------------")
     print("Token Analysis:")
     print("------------------------------")
-    print("Batch size:", exp.train_task.dataset.batch_size)
-    print("Seq len:", exp.train_task.dataset.seq_len)
-    print("Max steps:", exp.training_config.max_steps)
+    print(f"Batch size: {exp.train_task.dataset.batch_size:,}")
+    print(f"Seq len: {exp.train_task.dataset.seq_len:,}")
+    print(f"Max steps: {exp.training_config.max_steps:,}")
     print(
-        "Num microbatches (split from within batch_size):",
-        exp.training_config.num_microbatches,
+        f"Num microbatches (split from within batch_size): {exp.training_config.num_microbatches:,}"
     )
-    print("Total training tokens:", total_tokens)
+    print(f"Total training tokens: {total_tokens:,}")
     print("------------------------------")
 
 
@@ -122,8 +128,8 @@ def print_chinchilla_estimate(model: jt.PyTree):
     print("------------------------------")
     print("Chinchilla Analysis:")
     print("------------------------------")
-    print("Model parameters:", model_params)
-    print("Chinchilla estimate: (20 * model_params):", 20 * model_params, "tokens")
+    print(f"Model parameters: {model_params:,}")
+    print(f"Chinchilla estimate: (20 * model_params): {20 * model_params:,} tokens")
     print("------------------------------")
 
 
@@ -325,6 +331,24 @@ def _is_supported_container(x: typing.Any) -> bool:
     return isinstance(x, (list, tuple))
 
 
+def _wrap_init(orig: typing.Callable) -> typing.Callable:
+
+    def wrapped(self) -> None:
+        orig(self)
+        for v in self.__dict__.values():
+            if isinstance(v, Module) and (not hasattr(v, "_trainable_param_keys")):
+                v.init()
+            elif _is_supported_container(v):
+                for elem in v:
+                    if isinstance(elem, Module) and (
+                        not hasattr(elem, "_trainable_param_keys")
+                    ):
+                        elem.init()
+        self._trainable_param_keys = self._get_trainable_param_keys()
+
+    return wrapped
+
+
 @dataclasses.dataclass
 class Module(abc.ABC):
     """
@@ -352,10 +376,17 @@ class Module(abc.ABC):
 
         Sub-classes of dataclasses are not automatically dataclasses, so we need to explicitly convert them.
         We also register the class as a pytree with jax so that it can be used with jax transformations like jit and grad.
+
+        Also wraps the subclass's init() to recursively initialize any sub-Module instances
+        created during init(), then compute _trainable_param_keys. This means calling init()
+        on the top-level module is sufficient to initialize the entire module tree.
         """
         super().__init_subclass__(**kwargs)
         cls = dataclasses.dataclass(cls, kw_only=True)
         cls = jax.tree_util.register_pytree_with_keys_class(cls)
+        if "init" in cls.__dict__:
+            original_init = cls.__dict__["init"]
+            cls.init = _wrap_init(original_init)
 
     @abc.abstractmethod
     def init(self) -> None:
@@ -382,10 +413,6 @@ class Module(abc.ABC):
             ):
                 param_keys.append(k)
         return param_keys
-
-    def __post_init__(self) -> None:
-        self.init()
-        self._trainable_param_keys = self._get_trainable_param_keys()
 
     def tree_flatten_with_keys(self) -> tuple:
         params_with_keys = []
@@ -758,7 +785,6 @@ class CausalSelfAttention(Module):
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
-        self.mha.linear.weights = jnp.zeros_like(self.mha.linear.weights)
         self.rope = RotaryPositionalEmbedding(
             qkv_dim=self.qkv_dim // self.num_heads,
             seq_len=self.seq_len,
@@ -1275,7 +1301,7 @@ class Experiment:
             all_metrics.update(metric_results)
         return all_metrics
 
-    def _create_optimizer(self, model: jt.PyTree) -> optax.GradientTransformation:
+    def _create_optimizer(self) -> optax.GradientTransformation:
         """Create the optimizer with optional per-parameter optimization.
 
         This is called after model initialization to create an optimizer that
@@ -1401,13 +1427,12 @@ class Experiment:
             self.eval_step_fn = self._eval_step
 
     def init_state(self):
-        self.model = DecoderOnlyTransformer(
-            config=self.model_config, key=jax.random.key(0)
-        )
-        self.model = jax.device_put(self.model, self.replicated_sharding)
-        self.optimizer = self._create_optimizer(self.model)
-        self.opt_state = self.optimizer.init(self.model)
-        self.opt_state = jax.device_put(self.opt_state, self.replicated_sharding)
+        model = DecoderOnlyTransformer(config=self.model_config, key=jax.random.key(0))
+        with jax.set_mesh(self.mesh):
+            model.init()
+        self.optimizer = self._create_optimizer()
+        with jax.set_mesh(self.mesh):
+            self.opt_state = self.optimizer.init(self.model)
         self.step = 0
         print(f"Model initialized and replicated across {self.num_devices} devices")
 
@@ -2099,15 +2124,7 @@ def create_experiment(
     return exp
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Train or compile TinyStories model")
-    parser.add_argument(
-        "--compile",
-        action="store_true",
-        help="Run compilation analysis instead of training",
-    )
-    args = parser.parse_args()
-    use_dummy_data = args.compile
+def main(use_dummy_data: bool = False, compile: bool = False) -> None:
     exp = create_experiment(
         batch_size_per_device=18,
         seq_len=2048,
@@ -2121,12 +2138,19 @@ def main():
         adamw_output_lr=0.0001,
         use_dummy_data=use_dummy_data,
     )
-    if args.compile:
+    if compile:
         run_compilation_analysis(exp, output_dir="/tmp/compile_analysis")
     else:
         exp.outer_loop()
-    exp.cleanup()
+    return exp
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train or compile TinyStories model")
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Run compilation analysis instead of training",
+    )
+    args = parser.parse_args()
+    _ = main(compile=args.compile, use_dummy_data=args.compile)
