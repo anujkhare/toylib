@@ -24,6 +24,7 @@ import os
 import pandas as pd
 import pathlib
 import pyarrow.parquet as pq
+import time
 import typing
 
 # ============================================================
@@ -1430,10 +1431,12 @@ class Experiment:
         model = DecoderOnlyTransformer(config=self.model_config, key=jax.random.key(0))
         with jax.set_mesh(self.mesh):
             model.init()
+            self.model = model
         self.optimizer = self._create_optimizer()
         with jax.set_mesh(self.mesh):
             self.opt_state = self.optimizer.init(self.model)
         self.step = 0
+        self._train_start_time = time.monotonic()
         print(f"Model initialized and replicated across {self.num_devices} devices")
 
     def _assert_initialized(self) -> bool:
@@ -1573,6 +1576,9 @@ class Experiment:
             train_metrics_with_prefix = {
                 f"train/{key}": float(value) for key, value in train_metrics.items()
             }
+            elapsed = time.monotonic() - self._train_start_time
+            if elapsed > 0 and self.step > 0:
+                train_metrics_with_prefix["train/steps_per_sec"] = self.step / elapsed
             self.logger_obj.log(self.step, metrics=train_metrics_with_prefix)
 
     def outer_loop(self):
