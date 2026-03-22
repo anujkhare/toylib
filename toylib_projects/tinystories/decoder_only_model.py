@@ -173,7 +173,6 @@ class DecoderOnlyTransformer(module.Module):
             dtype=config.dtype,
         )
 
-        # Self-attention layers
         self.blocks = []
         for ix in range(config.num_layers):
             self.blocks.append(
@@ -217,12 +216,21 @@ class DecoderOnlyTransformer(module.Module):
 
         # Apply each attention layer
         remat_policy = self.config.remat_policy
-        for block in self.blocks:
+
+        # Self-attention layers
+        def scan_body(block_inputs, block):
             if remat_policy is not None:
                 # remat over a lambda function because Module can't be hashed
-                x = jax.remat(lambda b, x: b(x), policy=remat_policy)(block, x)
+                block_outputs = jax.remat(lambda b, x: b(x), policy=remat_policy)(
+                    block, block_inputs
+                )
             else:
-                x = block(x)
+                block_outputs = block(block_inputs)
+
+            return block_outputs, None
+
+        stacked_blocks = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *self.blocks)
+        x, _ = jax.lax.scan(scan_body, x, stacked_blocks)
         x = layers.rms_norm(x)
 
         # Output projection with softcap to prevent large logit values

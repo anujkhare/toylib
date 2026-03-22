@@ -269,6 +269,7 @@ class Experiment:
         num_microbatches = self.training_config.num_microbatches
         microbatch_size = sharded_batch_size // num_microbatches
 
+        # TODO: consider outer python loop to avoid increasing input size on device
         # Reshape batch leaves from [sharded_batch, ...] to [num_microbatches, microbatch_size, ...]
         # so scan can slice one microbatch per iteration along the leading axis.
         microbatches = jax.tree.map(
