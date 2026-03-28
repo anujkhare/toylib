@@ -346,6 +346,8 @@ def _wrap_init(orig: typing.Callable) -> typing.Callable:
                     ):
                         elem.init()
         self._trainable_param_keys = self._get_trainable_param_keys()
+        if hasattr(self, "key"):
+            self.key = None
 
     return wrapped
 
@@ -895,11 +897,18 @@ class DecoderOnlyTransformer(Module):
         x = self.embedding_layer(x)
         x = rms_norm(x)
         remat_policy = self.config.remat_policy
-        for block in self.blocks:
+
+        def scan_body(block_inputs, block):
             if remat_policy is not None:
-                x = jax.remat(lambda b, x: b(x), policy=remat_policy)(block, x)
+                block_outputs = jax.remat(lambda b, x: b(x), policy=remat_policy)(
+                    block, block_inputs
+                )
             else:
-                x = block(x)
+                block_outputs = block(block_inputs)
+            return (block_outputs, None)
+
+        stacked_blocks = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *self.blocks)
+        x, _ = jax.lax.scan(scan_body, x, stacked_blocks)
         x = rms_norm(x)
         x = self.output_layer(x)
         x = self.config.logit_softcap * jnp.tanh(x / self.config.logit_softcap)

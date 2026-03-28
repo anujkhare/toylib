@@ -34,6 +34,9 @@ def _wrap_init(orig: typing.Callable) -> typing.Callable:
                     ):
                         elem.init()
         self._trainable_param_keys = self._get_trainable_param_keys()
+        # Drop the random key after init since it's not needed anymore.
+        if hasattr(self, "key"):
+            self.key = None
 
     return wrapped
 
