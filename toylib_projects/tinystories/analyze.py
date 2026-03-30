@@ -93,8 +93,12 @@ def print_estimated_tokens(exp) -> int:
     print("------------------------------")
     print("Token Analysis:")
     print("------------------------------")
-    print(f"Batch size: {exp.train_task.dataset.batch_size:,}")
+    tokens_per_batch = (
+        exp.train_task.dataset.batch_size * exp.train_task.dataset.seq_len
+    )
     print(f"Seq len: {exp.train_task.dataset.seq_len:,}")
+    print(f"Batch size: {exp.train_task.dataset.batch_size:,}")
+    print(f"Tokens per batch: {tokens_per_batch:,}")
     print(f"Max steps: {exp.training_config.max_steps:,}")
     print(
         f"Num microbatches (split from within batch_size): {exp.training_config.num_microbatches:,}"
