@@ -29,13 +29,17 @@ def download_shard(shard_idx: int, output_dir: Path, client: httpx.Client) -> Pa
     return dest
 
 
-def download(num_shards: int, output_dir: Path, workers: int) -> None:
+def download(
+    num_shards: int, output_dir: Path, workers: int, start_offset: int = 0
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    indices = list(range(num_shards))
+    indices = list(range(start_offset, start_offset + num_shards))
 
     with httpx.Client(timeout=300) as client:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(download_shard, i, output_dir, client): i for i in indices}
+            futures = {
+                pool.submit(download_shard, i, output_dir, client): i for i in indices
+            }
             with tqdm(total=num_shards, unit="shard") as bar:
                 for future in as_completed(futures):
                     idx = futures[future]
@@ -71,7 +75,9 @@ def main() -> None:
     if args.num_shards < 1 or args.num_shards > MAX_SHARD + 1:
         parser.error(f"--num-shards must be between 1 and {MAX_SHARD + 1}")
 
-    print(f"Downloading {args.num_shards} shards → {args.output_dir} ({args.workers} workers)")
+    print(
+        f"Downloading {args.num_shards} shards → {args.output_dir} ({args.workers} workers)"
+    )
     download(args.num_shards, args.output_dir, args.workers)
     print("Done.")
 
