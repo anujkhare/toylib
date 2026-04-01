@@ -40,16 +40,16 @@ def compute_bytes_per_token(tokenizer_name: str) -> np.ndarray:
         tokenizer.unk_token_id,
     ]
 
-    bytes_per_token = []
+    bpt = []
     for token_id in range(len(tokenizer)):
         if token_id in special_token_ids:
             # for special tokens, use -1 to mark as invalid
-            bytes_per_token.append(-1)
+            bpt.append(-1)
         else:
             # Decode the token to its actual string representation
             decoded = tokenizer.decode([token_id])
-            bytes_per_token.append(len(decoded.encode("utf-8")))
-    return np.array(bytes_per_token)
+            bpt.append(len(decoded.encode("utf-8")))
+    return np.array(bpt)
 
 
 def main():

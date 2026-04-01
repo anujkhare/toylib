@@ -17,6 +17,7 @@ Usage (Colab/Interactive):
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from toylib_projects.tinystories import analyze
 from toylib_projects.tinystories import data
@@ -24,6 +25,7 @@ from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
 from toylib_projects.tinystories import metrics as metrics_module
 from toylib_projects.tinystories.scripts import compile as compile_utils
+from toylib_projects.tinystories.tokenizer import bytes_per_token
 
 
 def create_muon_adam_multi_optimizer_config(
@@ -177,7 +179,6 @@ def create_experiment(
     dataset_path: str = "/tmp/",
     dataset_train_split: str = "train",
     dataset_val_split: str | None = "val",
-    bpt_path: str = "/tmp/bpt_gpt2.npy",
     muon_lr: float = 2e-2,
     adamw_embed_lr: float = 2e-1,
     adamw_output_lr: float = 4e-3,
@@ -198,7 +199,6 @@ def create_experiment(
         dataset_path: Path to the dataset
         dataset_train_split: Training split name
         dataset_val_split: Validation split name (None to skip)
-        bpt_path: Path to bytes-per-token file for BitsPerByte metric
         muon_lr: Learning rate for Muon optimizer
         adamw_embed_lr: Learning rate for Adam optimizer (embeddings)
         adamw_output_lr: Learning rate for Adam optimizer (output)
@@ -222,6 +222,11 @@ def create_experiment(
         use_dummy=use_dummy_data,
     )
     train_task = experiment.Task(name="train", dataset=train_dataset)
+
+    # Generate the bytes per token counts
+    bpt_path = "/tmp/bpt_gpt2.npy"
+    bpt_arr = bytes_per_token.compute_bytes_per_token(tokenizer_name="gpt2")
+    np.save(bpt_path, bpt_arr)
 
     val_task = None
     if dataset_val_split is not None and not use_dummy_data:

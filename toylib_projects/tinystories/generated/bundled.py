@@ -1928,6 +1928,54 @@ def run_compilation_analysis(
 
 
 # ============================================================
+# toylib_projects.tinystories.tokenizer.bytes_per_token - /Users/anuj/Desktop/code/toylib/toylib_projects/tinystories/tokenizer/bytes_per_token.py
+# ============================================================
+
+"""Dumps the tokens per byte statistics for the given tokenizer.
+
+Sample command:
+python toylib_projects/tinystories/tokenizer/bytes_per_token.py   --tokenizer gpt2   --output-path toylib_projects/tinystories/data/bpt_gpt2.npy
+"""
+
+
+def parse_command_line_args():
+    parser = argparse.ArgumentParser(
+        description="Run tokens per byte analysis for a given tokenizer"
+    )
+    parser.add_argument(
+        "--tokenizer",
+        type=str,
+        required=True,
+        default="gpt2",
+        help="HF tokenizer name (e.g., 'gpt2')",
+    )
+    parser.add_argument(
+        "--output-path",
+        type=str,
+        required=True,
+        help="Path to save bytes per token (.npy file)",
+    )
+    return parser.parse_args()
+
+
+def compute_bytes_per_token(tokenizer_name: str) -> np.ndarray:
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    special_token_ids = [
+        tokenizer.bos_token_id,
+        tokenizer.eos_token_id,
+        tokenizer.unk_token_id,
+    ]
+    bpt = []
+    for token_id in range(len(tokenizer)):
+        if token_id in special_token_ids:
+            bpt.append(-1)
+        else:
+            decoded = tokenizer.decode([token_id])
+            bpt.append(len(decoded.encode("utf-8")))
+    return np.array(bpt)
+
+
+# ============================================================
 # None - ../tinystories/train.py
 # ============================================================
 
@@ -2084,7 +2132,6 @@ def create_experiment(
     dataset_path: str = "/tmp/",
     dataset_train_split: str = "train",
     dataset_val_split: str | None = "val",
-    bpt_path: str = "/tmp/bpt_gpt2.npy",
     muon_lr: float = 0.02,
     adamw_embed_lr: float = 0.2,
     adamw_output_lr: float = 0.004,
@@ -2105,7 +2152,6 @@ def create_experiment(
         dataset_path: Path to the dataset
         dataset_train_split: Training split name
         dataset_val_split: Validation split name (None to skip)
-        bpt_path: Path to bytes-per-token file for BitsPerByte metric
         muon_lr: Learning rate for Muon optimizer
         adamw_embed_lr: Learning rate for Adam optimizer (embeddings)
         adamw_output_lr: Learning rate for Adam optimizer (output)
@@ -2126,6 +2172,9 @@ def create_experiment(
         use_dummy=use_dummy_data,
     )
     train_task = Task(name="train", dataset=train_dataset)
+    bpt_path = "/tmp/bpt_gpt2.npy"
+    bpt_arr = compute_bytes_per_token(tokenizer_name="gpt2")
+    np.save(bpt_path, bpt_arr)
     val_task = None
     if dataset_val_split is not None and (not use_dummy_data):
         val_dataset = make_dataset(
@@ -2185,35 +2234,3 @@ def create_experiment(
     print_chinchilla_estimate(exp.model)
     print(print_param_sizes(exp.model, depth=3)[0])
     return exp
-
-
-def main(use_dummy_data: bool = False, compile: bool = False) -> None:
-    exp = create_experiment(
-        batch_size_per_device=18,
-        seq_len=2048,
-        max_steps=12000,
-        num_microbatches=2,
-        depth=12,
-        vocab_size=50257,
-        checkpoint_dir="/tmp/checkpoints",
-        muon_lr=0.0001,
-        adamw_embed_lr=0.0001,
-        adamw_output_lr=0.0001,
-        use_dummy_data=use_dummy_data,
-    )
-    if compile:
-        run_compilation_analysis(exp, output_dir="/tmp/compile_analysis")
-    else:
-        exp.outer_loop()
-    return exp
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train or compile TinyStories model")
-    parser.add_argument(
-        "--compile",
-        action="store_true",
-        help="Run compilation analysis instead of training",
-    )
-    args = parser.parse_args()
-    _ = main(compile=args.compile, use_dummy_data=args.compile)
