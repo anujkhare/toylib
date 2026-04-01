@@ -1260,6 +1260,24 @@ class LoggerConfig:
     log_dir: str = "/tmp/"
     train_log_interval_steps: int = 1
 
+    def build_logger(self, config_dict: dict) -> Logger:
+        return self.logger_cls(config_dict=config_dict, output_path=self.log_dir)
+
+
+@dataclasses.dataclass
+class WandBLoggerConfig(LoggerConfig):
+    logger_cls: Logger = WandBLogger
+    project_name: str = ""
+    user_name: str = ""
+
+    def build_logger(self, config_dict: dict) -> Logger:
+        return self.logger_cls(
+            config_dict=config_dict,
+            output_path=self.log_dir,
+            project_name=self.project_name,
+            user_name=self.user_name,
+        )
+
 
 def _serialize_dataclass_config(config: dataclasses.dataclass) -> dict:
     result = dataclasses.asdict(config)
@@ -1421,9 +1439,8 @@ class Experiment:
     def __post_init__(self):
         self._setup_sharding()
         self._validate_configs()
-        self.logger_obj = self.logger_config.logger_cls(
-            config_dict=_serialize_dataclass_config(self),
-            output_path=self.logger_config.log_dir,
+        self.logger_obj = self.logger_config.build_logger(
+            config_dict=_serialize_dataclass_config(self)
         )
         self.optimizer = None
         self.opt_state = None
@@ -2071,6 +2088,8 @@ def create_experiment(
     muon_lr: float = 0.02,
     adamw_embed_lr: float = 0.2,
     adamw_output_lr: float = 0.004,
+    wandb_project_name: str = "tinystories",
+    wandb_username: str = "your_wandb_username",
     use_dummy_data: bool = False,
 ) -> Experiment:
     """Create an experiment for training or compilation analysis.
@@ -2090,6 +2109,8 @@ def create_experiment(
         muon_lr: Learning rate for Muon optimizer
         adamw_embed_lr: Learning rate for Adam optimizer (embeddings)
         adamw_output_lr: Learning rate for Adam optimizer (output)
+        wandb_project_name: Weights & Biases project name for logging
+        wandb_username: Weights & Biases username for logging
         use_dummy_data: If True, use DummyDataset for compilation analysis
 
     Returns:
@@ -2153,7 +2174,9 @@ def create_experiment(
             checkpoint_dir=checkpoint_dir,
             checkpoint_dataset_iterator=False,
         ),
-        logger_config=LoggerConfig(log_dir=checkpoint_dir),
+        logger_config=WandBLoggerConfig(
+            project_name=wandb_project_name, user_name=wandb_username
+        ),
         train_task=train_task,
         eval_task=val_task,
     )

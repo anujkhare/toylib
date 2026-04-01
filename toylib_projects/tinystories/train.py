@@ -181,6 +181,8 @@ def create_experiment(
     muon_lr: float = 2e-2,
     adamw_embed_lr: float = 2e-1,
     adamw_output_lr: float = 4e-3,
+    wandb_project_name: str = "tinystories",
+    wandb_username: str = "your_wandb_username",
     use_dummy_data: bool = False,
 ) -> experiment.Experiment:
     """Create an experiment for training or compilation analysis.
@@ -200,6 +202,8 @@ def create_experiment(
         muon_lr: Learning rate for Muon optimizer
         adamw_embed_lr: Learning rate for Adam optimizer (embeddings)
         adamw_output_lr: Learning rate for Adam optimizer (output)
+        wandb_project_name: Weights & Biases project name for logging
+        wandb_username: Weights & Biases username for logging
         use_dummy_data: If True, use DummyDataset for compilation analysis
 
     Returns:
@@ -276,8 +280,9 @@ def create_experiment(
             checkpoint_dir=checkpoint_dir,
             checkpoint_dataset_iterator=False,
         ),
-        logger_config=experiment.LoggerConfig(
-            log_dir=checkpoint_dir,
+        logger_config=experiment.WandBLoggerConfig(
+            project_name=wandb_project_name,
+            user_name=wandb_username,
         ),
         train_task=train_task,
         eval_task=val_task,

@@ -104,6 +104,24 @@ class LoggerConfig:
 
     train_log_interval_steps: int = 1
 
+    def build_logger(self, config_dict: dict) -> logger.Logger:
+        return self.logger_cls(config_dict=config_dict, output_path=self.log_dir)
+
+
+@dataclasses.dataclass
+class WandBLoggerConfig(LoggerConfig):
+    logger_cls: logger.Logger = logger.WandBLogger
+    project_name: str = ""
+    user_name: str = ""
+
+    def build_logger(self, config_dict: dict) -> logger.Logger:
+        return self.logger_cls(
+            config_dict=config_dict,
+            output_path=self.log_dir,
+            project_name=self.project_name,
+            user_name=self.user_name,
+        )
+
 
 def _serialize_dataclass_config(config: dataclasses.dataclass) -> dict:
     result = dataclasses.asdict(config)
@@ -329,9 +347,8 @@ class Experiment:
         self._validate_configs()
 
         # Logger
-        self.logger_obj = self.logger_config.logger_cls(
+        self.logger_obj = self.logger_config.build_logger(
             config_dict=_serialize_dataclass_config(self),
-            output_path=self.logger_config.log_dir,
         )
 
         # Optimizer will be created in init_state() after model is initialized
