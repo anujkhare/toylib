@@ -32,9 +32,8 @@ def parse_command_line_args():
     return parser.parse_args()
 
 
-def main():
-    args = parse_command_line_args()
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+def compute_bytes_per_token(tokenizer_name: str) -> np.ndarray:
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     special_token_ids = [
         tokenizer.bos_token_id,
         tokenizer.eos_token_id,
@@ -50,9 +49,16 @@ def main():
             # Decode the token to its actual string representation
             decoded = tokenizer.decode([token_id])
             bytes_per_token.append(len(decoded.encode("utf-8")))
-    np.save(args.output_path, np.array(bytes_per_token))
-    print("Average bytes per token:", np.mean(bytes_per_token))
-    print("Total number of tokens:", len(bytes_per_token))
+    return np.array(bytes_per_token)
+
+
+def main():
+    args = parse_command_line_args()
+    bpt = compute_bytes_per_token(args.tokenizer)
+    np.save(args.output_path, bpt)
+    print("Average bytes per token:", np.mean(bpt))
+    print("Total number of tokens:", len(bpt))
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     print(f"(Should be the same as the vocab size: {tokenizer.vocab_size})")
 
 
