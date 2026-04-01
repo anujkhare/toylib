@@ -105,6 +105,39 @@ class ImportRemover(ast.NodeTransformer):
         return None  # Remove the import statement from the tree
 
 
+class MainStripper(ast.NodeTransformer):
+    """Remove mainI() function definitions and if __name__ == '__main__' blocks."""
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> Optional[ast.FunctionDef]:
+        if node.name == "main":
+            return None
+        return self.generic_visit(node)
+
+    def visit_If(self, node: ast.If) -> Optional[ast.If]:
+        # Match: if __name__ == "__main__" or if "__main__" == __name__
+        test = node.test
+        if isinstance(test, ast.Compare):
+            left = test.left
+            ops = test.ops
+            comparators = test.comparators
+            if len(ops) == 1 and isinstance(ops[0], ast.Eq) and len(comparators) == 1:
+                left_is_name = isinstance(left, ast.Name) and left.id == "__name__"
+                right_is_main = (
+                    isinstance(comparators[0], ast.Constant)
+                    and comparators[0].value == "__main__"
+                )
+                left_is_main = (
+                    isinstance(left, ast.Constant) and left.value == "__main__"
+                )
+                right_is_name = (
+                    isinstance(comparators[0], ast.Name)
+                    and comparators[0].id == "__name__"
+                )
+                if (left_is_name and right_is_main) or (left_is_main and right_is_name):
+                    return None
+        return self.generic_visit(node)
+
+
 class AttributeStripper(ast.NodeTransformer):
     """Strip module prefixes from attribute accesses."""
 
@@ -212,6 +245,9 @@ class Bundler:
 
         # Parse the AST
         tree = ast.parse(source)
+
+        # Remove mainI functions and if __name__ == "__main__" blocks
+        tree = MainStripper().visit(tree)
 
         # Remove all imports and classify as bundled or external
         import_remover = ImportRemover(self.packages_to_bundle)
