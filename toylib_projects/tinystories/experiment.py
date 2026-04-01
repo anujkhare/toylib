@@ -315,7 +315,7 @@ class Experiment:
     def _eval_step(self, model, batch):
         """Perform a single evaluation step and compute metrics."""
         with jax.profiler.TraceAnnotation("eval_forward"):
-            loss_val, aux = self.forward_fn(model, batch)
+            loss_val, aux = self.forward_fn(model, batch, return_aux=True)
 
         # Compute metrics for this batch
         eval_metrics = self._compute_metrics(
