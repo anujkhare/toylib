@@ -15,6 +15,7 @@ Usage (Colab/Interactive):
     compile_utils.run_compilation_analysis(exp, output_dir="/tmp/compile_analysis")
 """
 
+import datetime
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -185,6 +186,7 @@ def create_experiment(
     wandb_project_name: str = "tinystories",
     wandb_username: str = "your_wandb_username",
     use_dummy_data: bool = False,
+    run_id: str | None = None,
 ) -> experiment.Experiment:
     """Create an experiment for training or compilation analysis.
 
@@ -209,6 +211,9 @@ def create_experiment(
     Returns:
         Initialized Experiment
     """
+    if run_id is None:
+        run_id = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+
     # The batch is sharded across devices and then split into microbatches
     batch_size = batch_size_per_device * jax.local_device_count() * num_microbatches
 
@@ -282,12 +287,13 @@ def create_experiment(
         checkpoint_config=experiment.CheckpointConfig(
             save_interval_steps=2500,
             max_to_keep=10,
-            checkpoint_dir=checkpoint_dir,
+            checkpoint_dir=f"{checkpoint_dir}/{run_id}",
             checkpoint_dataset_iterator=False,
         ),
         logger_config=experiment.WandBLoggerConfig(
             project_name=wandb_project_name,
             user_name=wandb_username,
+            run_id=run_id,
         ),
         train_task=train_task,
         eval_task=val_task,

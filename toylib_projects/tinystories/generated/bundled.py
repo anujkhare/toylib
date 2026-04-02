@@ -1047,11 +1047,21 @@ class WandBLogger(Logger):
     """Logger implementation using Weights and Biases (wandb)."""
 
     def __init__(
-        self, config_dict: dict, project_name: str, user_name: str, *args, **kwargs
+        self,
+        config_dict: dict,
+        project_name: str,
+        user_name: str,
+        run_id: str | None = None,
+        *args,
+        **kwargs,
     ) -> None:
         self.config_dict = config_dict
         self.run = wandb.init(
-            entity=user_name, project=project_name, config=self.config_dict
+            entity=user_name,
+            project=project_name,
+            config=self.config_dict,
+            id=run_id,
+            resume="allow",
         )
         self.run.define_metric("*", step_metric="global_step")
 
@@ -1066,10 +1076,17 @@ class WandBLogger(Logger):
 class FileLogger(Logger):
     """Logger implementation that logs metrics to a local file."""
 
-    def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        config_dict: dict,
+        output_path: str,
+        run_id: str | None = None,
+        *args,
+        **kwargs,
+    ) -> None:
         self.config_dict = config_dict
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.file_ptr = open(os.path.join(output_path, f"logs_{timestamp}.txt"), "w")
+        label = run_id or datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        self.file_ptr = open(os.path.join(output_path, f"logs_{label}.txt"), "w")
         self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:
@@ -1258,10 +1275,13 @@ class Task:
 class LoggerConfig:
     logger_cls: Logger = FileLogger
     log_dir: str = "/tmp/"
+    run_id: str | None = None
     train_log_interval_steps: int = 1
 
     def build_logger(self, config_dict: dict) -> Logger:
-        return self.logger_cls(config_dict=config_dict, output_path=self.log_dir)
+        return self.logger_cls(
+            config_dict=config_dict, output_path=self.log_dir, run_id=self.run_id
+        )
 
 
 @dataclasses.dataclass
@@ -1276,6 +1296,7 @@ class WandBLoggerConfig(LoggerConfig):
             output_path=self.log_dir,
             project_name=self.project_name,
             user_name=self.user_name,
+            run_id=self.run_id,
         )
 
 
@@ -1447,10 +1468,6 @@ class Experiment:
         self.model = None
         self.ckpt_manager = ocp.CheckpointManager(
             self.checkpoint_config.checkpoint_dir,
-            checkpointers={
-                "model": ocp.StandardCheckpointer(),
-                "opt_state": ocp.StandardCheckpointer(),
-            },
             options=ocp.CheckpointManagerOptions(
                 max_to_keep=self.checkpoint_config.max_to_keep
             ),
@@ -2138,6 +2155,7 @@ def create_experiment(
     wandb_project_name: str = "tinystories",
     wandb_username: str = "your_wandb_username",
     use_dummy_data: bool = False,
+    run_id: str | None = None,
 ) -> Experiment:
     """Create an experiment for training or compilation analysis.
 
@@ -2162,6 +2180,8 @@ def create_experiment(
     Returns:
         Initialized Experiment
     """
+    if run_id is None:
+        run_id = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
     batch_size = batch_size_per_device * jax.local_device_count() * num_microbatches
     train_dataset = make_dataset(
         dataset_path=dataset_path,
@@ -2220,11 +2240,11 @@ def create_experiment(
         checkpoint_config=CheckpointConfig(
             save_interval_steps=2500,
             max_to_keep=10,
-            checkpoint_dir=checkpoint_dir,
+            checkpoint_dir=f"{checkpoint_dir}/{run_id}",
             checkpoint_dataset_iterator=False,
         ),
         logger_config=WandBLoggerConfig(
-            project_name=wandb_project_name, user_name=wandb_username
+            project_name=wandb_project_name, user_name=wandb_username, run_id=run_id
         ),
         train_task=train_task,
         eval_task=val_task,

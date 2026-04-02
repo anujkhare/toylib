@@ -101,11 +101,14 @@ class Task:
 class LoggerConfig:
     logger_cls: logger.Logger = logger.FileLogger
     log_dir: str = "/tmp/"
+    run_id: str | None = None
 
     train_log_interval_steps: int = 1
 
     def build_logger(self, config_dict: dict) -> logger.Logger:
-        return self.logger_cls(config_dict=config_dict, output_path=self.log_dir)
+        return self.logger_cls(
+            config_dict=config_dict, output_path=self.log_dir, run_id=self.run_id
+        )
 
 
 @dataclasses.dataclass
@@ -120,6 +123,7 @@ class WandBLoggerConfig(LoggerConfig):
             output_path=self.log_dir,
             project_name=self.project_name,
             user_name=self.user_name,
+            run_id=self.run_id,
         )
 
 
@@ -359,10 +363,6 @@ class Experiment:
         # Checkpoint manager
         self.ckpt_manager = ocp.CheckpointManager(
             self.checkpoint_config.checkpoint_dir,
-            checkpointers={
-                "model": ocp.StandardCheckpointer(),
-                "opt_state": ocp.StandardCheckpointer(),
-            },
             options=ocp.CheckpointManagerOptions(
                 max_to_keep=self.checkpoint_config.max_to_keep
             ),

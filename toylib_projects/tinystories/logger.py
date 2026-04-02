@@ -31,7 +31,13 @@ class WandBLogger(Logger):
     """Logger implementation using Weights and Biases (wandb)."""
 
     def __init__(
-        self, config_dict: dict, project_name: str, user_name: str, *args, **kwargs
+        self,
+        config_dict: dict,
+        project_name: str,
+        user_name: str,
+        run_id: str | None = None,
+        *args,
+        **kwargs,
     ) -> None:
         import wandb
 
@@ -40,6 +46,8 @@ class WandBLogger(Logger):
             entity=user_name,
             project=project_name,
             config=self.config_dict,
+            id=run_id,
+            resume="allow",
         )
         self.run.define_metric("*", step_metric="global_step")
 
@@ -74,10 +82,17 @@ class WandBLogger(Logger):
 class FileLogger(Logger):
     """Logger implementation that logs metrics to a local file."""
 
-    def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        config_dict: dict,
+        output_path: str,
+        run_id: str | None = None,
+        *args,
+        **kwargs,
+    ) -> None:
         self.config_dict = config_dict
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.file_ptr = open(os.path.join(output_path, f"logs_{timestamp}.txt"), "w")
+        label = run_id or datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        self.file_ptr = open(os.path.join(output_path, f"logs_{label}.txt"), "w")
         self.file_ptr.write("\n")
 
     def log(self, step: int, metrics: dict) -> None:
