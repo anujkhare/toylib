@@ -187,6 +187,7 @@ def create_experiment(
     wandb_username: str = "your_wandb_username",
     use_dummy_data: bool = False,
     run_id: str | None = None,
+    bpt_path: str = "/tmp/bpt_gpt2.npy",
 ) -> experiment.Experiment:
     """Create an experiment for training or compilation analysis.
 
@@ -229,7 +230,6 @@ def create_experiment(
     train_task = experiment.Task(name="train", dataset=train_dataset)
 
     # Generate the bytes per token counts
-    bpt_path = "/tmp/bpt_gpt2.npy"
     bpt_arr = bytes_per_token.compute_bytes_per_token(tokenizer_name="gpt2")
     np.save(bpt_path, bpt_arr)
 

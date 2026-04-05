@@ -6,6 +6,7 @@ tested separately, these tests focus on integration and API compatibility.
 """
 
 from pathlib import Path
+from unittest import mock
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -62,6 +63,13 @@ def create_dummy_bpt_mapping(bpt_path: Path, vocab_size: int = VOCAB_SIZE):
 
 class TestCreateExperiment:
     """Tests for create_experiment function."""
+
+    @pytest.fixture(autouse=True)
+    def mock_wandb(self):
+        with mock.patch("wandb.init") as mock_init:
+            mock_run = mock.MagicMock()
+            mock_init.return_value = mock_run
+            yield mock_init
 
     @pytest.fixture
     def fake_fs(self, tmp_path: Path):
