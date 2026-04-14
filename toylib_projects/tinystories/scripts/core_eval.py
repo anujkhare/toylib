@@ -21,13 +21,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
-from transformers import AutoTokenizer
+import transformers
 
-from toylib_projects.tinystories import data as data_module
-from toylib_projects.tinystories import decoder_only_model
-from toylib_projects.tinystories import metrics as metrics_module
-from toylib_projects.tinystories.train import get_model_config
-from toylib_projects.tinystories.tokenizer.bytes_per_token import compute_bytes_per_token
+import toylib_projects.tinystories.data as ts_data
+import toylib_projects.tinystories.decoder_only_model as ts_model
+import toylib_projects.tinystories.metrics as ts_metrics
+import toylib_projects.tinystories.train as ts_train
+import toylib_projects.tinystories.tokenizer.bytes_per_token as ts_bpt
 
 EVAL_BUNDLE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -55,15 +55,15 @@ def load_model_from_checkpoint(
     depth: int,
     seq_len: int,
     vocab_size: int = 50257,
-) -> tuple[decoder_only_model.DecoderOnlyTransformer, int, decoder_only_model.ModelConfig]:
+) -> tuple[ts_model.DecoderOnlyTransformer, int, ts_model.ModelConfig]:
     """Load model weights from an orbax checkpoint.
 
     The model config (depth, seq_len, vocab_size) must match the training run.
     """
-    model_config = get_model_config(depth=depth, seq_len=seq_len, vocab_size=vocab_size)
+    model_config = ts_train.get_model_config(depth=depth, seq_len=seq_len, vocab_size=vocab_size)
 
     # Build a template with the right pytree structure so orbax can restore into it.
-    template = decoder_only_model.DecoderOnlyTransformer(
+    template = ts_model.DecoderOnlyTransformer(
         config=model_config, key=jax.random.key(0)
     )
     template.init()
@@ -91,8 +91,8 @@ def load_model_from_checkpoint(
 
 
 def run_sampling(
-    model: decoder_only_model.DecoderOnlyTransformer,
-    model_config: decoder_only_model.ModelConfig,
+    model: ts_model.DecoderOnlyTransformer,
+    model_config: ts_model.ModelConfig,
     tokenizer,
     max_tokens: int = 64,
 ) -> None:
@@ -103,7 +103,7 @@ def run_sampling(
     seq_len = model_config.seq_len
     # max_output_tokens must be static since lax.scan uses it as loop length.
     generate = jax.jit(
-        decoder_only_model.sample, static_argnames=["max_output_tokens", "top_k"]
+        ts_model.sample, static_argnames=["max_output_tokens", "top_k"]
     )
 
     for prompt in DEFAULT_PROMPTS:
@@ -129,8 +129,8 @@ def run_sampling(
 
 
 def run_bpb(
-    model: decoder_only_model.DecoderOnlyTransformer,
-    model_config: decoder_only_model.ModelConfig,
+    model: ts_model.DecoderOnlyTransformer,
+    model_config: ts_model.ModelConfig,
     dataset_path: str,
     val_split: str,
     batch_size: int,
@@ -142,19 +142,19 @@ def run_bpb(
 
     bpt_path = "/tmp/bpt_gpt2.npy"
     if not os.path.exists(bpt_path):
-        bpt_arr = compute_bytes_per_token(tokenizer_name="gpt2")
+        bpt_arr = ts_bpt.compute_bytes_per_token(tokenizer_name="gpt2")
         np.save(bpt_path, bpt_arr)
 
-    val_dataset = data_module.BatchedTokenizedDatasetGrain(
+    val_dataset = ts_data.BatchedTokenizedDatasetGrain(
         dataset_path=dataset_path,
         split=val_split,
         batch_size=batch_size,
         seq_len=model_config.seq_len,
     )
 
-    bpb_metric = metrics_module.BitsPerByte(bpt_path)
+    bpb_metric = ts_metrics.BitsPerByte(bpt_path)
     forward_jit = jax.jit(
-        lambda m, batch: decoder_only_model.train_step(m, batch, return_aux=True)
+        lambda m, batch: ts_model.train_step(m, batch, return_aux=True)
     )
 
     total_bpb = 0.0
@@ -286,8 +286,8 @@ def _evaluate_task(forward_jit, tokenizer, data, task_meta, seq_len) -> float:
 
 
 def run_core_eval(
-    model: decoder_only_model.DecoderOnlyTransformer,
-    model_config: decoder_only_model.ModelConfig,
+    model: ts_model.DecoderOnlyTransformer,
+    model_config: ts_model.ModelConfig,
     tokenizer,
     max_per_task: int = -1,
 ) -> dict:
@@ -444,7 +444,7 @@ def main():
         seq_len=args.seq_len,
         vocab_size=args.vocab_size,
     )
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2")
 
     if "sample" in eval_modes:
         run_sampling(model, model_config, tokenizer, max_tokens=args.max_sample_tokens)

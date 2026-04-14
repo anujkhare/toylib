@@ -2,44 +2,31 @@
 
 A reimplementation of a GPT-2 sytle model in Jax. The idea is to implement it _mostly_ from scratch, but we've used existing libraries for many components as a starting point to keep things simple. Notably, the optimzers (optax) and tokenizer (huggingface) are reused directly from existing libraries.
 
-I started this a little bit before [nanochat](https://github.com/karpathy/nanochat/tree/master) came out, with the initial focus around using the [TinyStories](https://arxiv.org/abs/2305.07759) dataset to train a model. However, given the amazing resource, I pivoted this project to simply rebuilding parts of nanochat that interested me and have closely followed it's implementation. The nanochat respository presents the final state of the project - rebuilding it is a great opportunity to question and understand the various decisions and implementation details that went into it.
+I started this a little bit before [nanochat](https://github.com/karpathy/nanochat/tree/master) came out, with the initial focus around using the [TinyStories](https://arxiv.org/abs/2305.07759) dataset to train a model. However, given the amazing resource, I pivoted this project to rebuilding gpt-2 following nanochat's implementation.
 
-## Logs
-
-### 2026-02-15
-
-Trained an initial d20 model with bs=48, seq_len=2048, 100k steps.
-
-The minimum val-bpb is `~1.45` which seems very high, though it's unclear to me what a comparable number from nanochat is. The quoted numbers on nanochat are for a `d24` model at val bpb of `~0.75`.
-
-Things to investigate:
-
-0. Just look through <https://github.com/karpathy/nanochat/discussions/481> and pull in all the optimizations made there.
-1. Tokenizer is different: we're using the default GPT-2 tokenizer from HF which has `vocab_size=50257`, with `bpb=~6.5` (TODO: check), whereas nanochat trains a custom tokenizer with `vocab_size=32768` and `bpb=xx`. The larger vocab size likely makes it harder for our model to learn initially.
-2. Can we actually compare bpb...?
-3. Add the CORE metric evaluation
+There are a few key differences: framework (jax vs pytorch), nn libary (nanochat uses layers and sharding primitives from pytorch, this repo rebuilds base layers in jax).
 
 ## TODOs
 
-* [*] Baseline: Train a single-device model
-  * [*] Checkpointing
-  * [*] Train a single-device model
+* [x] Baseline: Train a single-device model
+  * [x] Checkpointing
+  * [x] Train a single-device model
 * [ ] Evaluations
-  * [*] Val split and loss
-  * [*] Sampling / inference eval
-  * [*] val bpb
-  * [ ] CORE metric
+  * [x] Val split and loss
+  * [x] Sampling / inference eval
+  * [x] val bpb
+  * [x] CORE metric
 * [ ] Improvements
-  * [*] Param counts
-  * [*] Scale the batch size for stable gradients
-  * [*] LR/optimizers for different parts of the model
-  * [*] Gradient clipping
+  * [x] Param counts
+  * [x] Scale the batch size for stable gradients
+  * [x] LR/optimizers for different parts of the model
+  * [x] Gradient clipping
   * [ ] Train batch size at ~512k tokens, per device batch size ~32, 8 devices (`32 * 8 * 2048 = 512k`)
     * [ ] Smaller vocab size of the tokenizer (~25% HBM lowering)
-    * [ ] bf16 training (~50% HBM lowering)
+    * [x] bf16 training (~50% HBM lowering)
     * [ ] fp8 training (~50% HBM lowering)
-    * [ ] 4 microbatches (4x effective batch size)
-    * [ ] remat all the attention layers (??)
+    * [x] 4 microbatches (4x effective batch size)
+    * [x] remat all the attention layers (??)
     * [ ] we init the model on CPU first - this probably needs to change to directly on device (RAM OOMs with large models)
       * [ ] the module init() is done as post_init right now - do it explicitly instead
   * [ ] GQA
@@ -48,17 +35,14 @@ Things to investigate:
   * [ ] SSSL attention
   * [ ] Value embeddings
   * [ ] LR schedule
-  * [*] Chinchilla optimal total FLOPs
+  * [x] Chinchilla optimal total FLOPs
 * [ ] Scaling
-  * [*] Memory and parameter analysis
-  * [*] Training budget - # tokens
-  * [*] Multi-core training?
-  * [ ] Set up some sort of cross compile equivalent for local iterations
+  * [x] Memory and parameter analysis
+  * [x] Training budget - # tokens
+  * [x] Multi-core training?
+  * [x] ~~Set up some sort of cross compile equivalent for local iterations~~
   * [ ] CPU/TPU memory usage, profiling
-  * [ ] Gradient accumulation / micro-batching -- memory usage is still pretty high
-    * [ ] work out memory analysis
-    * [ ] how to make sure that we use the minimal amount of memory in the loop
-    * [ ] Do we need to remat?
+  * [ ] Gradient accumulation / micro-batching -- should memory usage be constant irrespective of the number of microbatches?
   * [*] TF Grain
   * [ ] Handle interrupts: restore checkpoints and dataset iterators
 * [ ] Inference setup
@@ -68,8 +52,6 @@ Things to investigate:
 * [ ] Post-training
 * [ ] Code health improvements
   * [x] fix dep management
-  * [ ] How to make everything more configurable?
-  * [ ] Refactor out the experiment and train loop
 
 ## Compilation Analysis
 
