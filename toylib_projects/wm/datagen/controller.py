@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from breakout import FIRE, LEFT, NOOP, RIGHT, FRAME_H, State
+from .breakout import FIRE, LEFT, NOOP, RIGHT, FRAME_H, State
 
 
 class Controller:

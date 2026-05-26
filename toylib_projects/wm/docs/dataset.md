@@ -45,12 +45,14 @@ We generate a **High-Capacity Raw Episodic Pool** containing complete, continuou
 - **Native Resolution:** Frames are stored at the emulator's native $210 \times 160$ RGB resolution with no spatial cropping. Patchification in the VAE encoder handles non-square inputs natively; any region masking or focus cropping can be deferred to Stage 2 compilation.
 - **Storage:** Sharded into `.h5` files via `h5py`, with multiple episodes per shard (exact shard size TBD — verify empirically on a sample batch before committing to a storage budget).
 - **Episode Definition:** A single episode is a complete game run across all 3 lives, starting from the first ball launch and ending at game over. In-game level resets (all bricks cleared mid-episode) are treated as continuations within the same record for now; see §5 for the open question on how to handle this boundary.
+- **Game Mode and Difficulty:** Each episode records the ALE `mode` and `difficulty` switches under which it was generated, as per-episode HDF5 attrs. Breakout exposes 12 modes (`[0, 4, 8, ..., 44]`) and 2 difficulties (`[0, 1]`); see §2E for how we sweep over a curated subset of Breakout variants (skipping the three "Catch" modes 12/28/44, which are a different game).
+- **Per-combo Layout:** A multi-mode run organizes shards under `data/raw/mode_MM_diff_D/episodes_shard_NNNN.h5`. The viz loader's `find_shards()` walks this recursively, so the rest of the pipeline can either treat the whole tree as one dataset or filter by sub-directory.
 - **Episode Record Format:** Each episode is stored as an HDF5 group `episode_NNNNNN/` within a shard file, with the following structure:
 
 ```
 episodes_shard_0000.h5
 └── episode_000001/
-    ├── attrs:  length (int32)
+    ├── attrs:  length (int32), mode (int32), difficulty (int32), seed (int64)
     ├── frames          — (L, 210, 160, 3) uint8, LZ4-compressed
     ├── actions         — (L,) int32  (action indices; see §2B)
     └── states/
@@ -84,6 +86,17 @@ Breakout uses the ALE minimal action set (4 discrete actions). The environment i
 | 3     | LEFT  | Move paddle left            |
 
 `FIRE` acts as `NOOP` during active play. The recording controller sends it explicitly at life-start before engaging the tracking loop (§2A).
+
+### E. Game Modes and Difficulty
+
+Atari 2600 Breakout exposes 12 game variations via ALE's `mode` switch (indexed `[0, 4, 8, ..., 44]`) and 2 settings via the `difficulty` switch (`0` = easy, `1` = hard / half-width paddle). These are passed to `gym.make()` and take effect on the next `reset()`.
+
+A snapshot at start-of-play groups the 12 modes as follows:
+
+- **Breakout variants** (full brick wall at start) — `[0, 4, 8, 16, 20, 24, 32, 36, 40]`. Visual layout at start is nearly identical across these; the variants differ in mid-game rules (cavity balls, progressive descent, etc.).
+- **Catch variants** (empty play area, no bricks) — `[12, 28, 44]`. Different game mechanics; the paddle catches and re-throws the ball. **Excluded from the default sweep.**
+
+The matrix generator (`datagen/generate_matrix.py`) sweeps over a curated set of Breakout variants by default — `modes=[0, 8, 20, 40]` × `difficulties=[0, 1]` = 8 combinations — writing each to its own `mode_MM_diff_D/` sub-directory. Mode/difficulty are stamped as per-episode HDF5 attrs so episodes from different combos can be safely concatenated downstream.
 
 ### C. Caption Generation
 

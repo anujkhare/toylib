@@ -26,6 +26,7 @@ FIRE = 1
 RIGHT = 2
 LEFT = 3
 ACTION_NAMES = ("NOOP", "FIRE", "RIGHT", "LEFT")
+MODES = [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44]
 
 # RAM addresses for Atari 2600 Breakout. Commonly cited values; verified by
 # breakout_test.py against the pinned ale-py ROM.
@@ -51,7 +52,7 @@ class State(TypedDict):
     lives: int
 
 
-def make_env(seed: int | None = None) -> gym.Env:
+def make_env(seed: int | None = None, difficulty: int = 0, mode: int = 0) -> gym.Env:
     """Build a Breakout env at native 60Hz with deterministic dynamics.
 
     `frameskip=1` disables ALE's default frame-skip so we record every physics
@@ -60,6 +61,8 @@ def make_env(seed: int | None = None) -> gym.Env:
     """
     env = gym.make(
         ENV_ID,
+        difficulty=difficulty,
+        mode=mode,
         frameskip=1,
         repeat_action_probability=0.0,
         full_action_space=False,
@@ -76,7 +79,9 @@ def _bcd_to_int(byte: int) -> int:
 
 def extract_state(ram: np.ndarray) -> State:
     """Pull a State dict out of a 128-byte RAM snapshot."""
-    score = _bcd_to_int(int(ram[RAM_SCORE_HIGH])) * 100 + _bcd_to_int(int(ram[RAM_SCORE_LOW]))
+    score = _bcd_to_int(int(ram[RAM_SCORE_HIGH])) * 100 + _bcd_to_int(
+        int(ram[RAM_SCORE_LOW])
+    )
     return State(
         paddle_x=float(ram[RAM_PADDLE_X]),
         ball_x=float(ram[RAM_BALL_X]),

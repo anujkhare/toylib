@@ -7,7 +7,7 @@ arrays are stored uncompressed.
 Schema per episode group (see dataset.md §2):
 
     episode_NNNNNN/
-      attrs: length (int32)
+      attrs: length (int32), mode (int32), difficulty (int32), seed (int64)
       frames          — (L, 210, 160, 3) uint8, LZ4, chunk=(1, 210, 160, 3)
       actions         — (L,) int32
       states/
@@ -28,7 +28,7 @@ import h5py
 import hdf5plugin
 import numpy as np
 
-from breakout import State
+from .breakout import State
 
 _STATE_INT_KEYS = ("score", "bricks_remaining", "lives")
 _STATE_FLOAT_KEYS = ("paddle_x", "ball_x", "ball_y")
@@ -74,6 +74,10 @@ class ShardWriter:
         frames: np.ndarray,
         actions: np.ndarray,
         states: list[State],
+        *,
+        mode: int = 0,
+        difficulty: int = 0,
+        seed: int | None = None,
     ) -> None:
         if self._shard is None:
             raise RuntimeError("ShardWriter must be used as a context manager")
@@ -88,6 +92,10 @@ class ShardWriter:
 
         grp = self._shard.create_group(f"episode_{self._global_ep_index:06d}")
         grp.attrs["length"] = np.int32(length)
+        grp.attrs["mode"] = np.int32(mode)
+        grp.attrs["difficulty"] = np.int32(difficulty)
+        if seed is not None:
+            grp.attrs["seed"] = np.int64(seed)
 
         grp.create_dataset(
             "frames",
