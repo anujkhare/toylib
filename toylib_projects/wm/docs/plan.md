@@ -46,7 +46,7 @@ The dataset/task is chosen with the following objectives:
    - *Pros:* Zero-code simulator setup; highly impressive first-person 3D action rollouts.
    - *Cons:* 3D first-person projection introduces partial observability, dynamic scale changes, and high-frequency visual shifts during camera rotation. Highly likely to exceed the capacity of a ~50M parameter model on a small budget.
 
-**Note on Real-Video Datasets (e.g., YouTube, Robotics):** 
+**Note on Real-Video Datasets (e.g., YouTube, Robotics):**
 We explicitly decided against using real-video-based datasets (such as robotics manipulation logs or curated YouTube clips). Real video has infinite visual entropy (reflections, shadows, moving backgrounds, camera motion) that would require a massive, pre-trained black-box VAE to compress cleanly, violating our "built from scratch" objective. Furthermore, real videos do not come with action labels; estimating actions would require training or running a complex Inverse Dynamics Model (IDM), introducing severe engineering overhead and noise that would distract from the core flow-matching and temporal attention mechanics.
 
 ### Decision
@@ -57,31 +57,27 @@ We choose **Gymnasium Atari (Breakout)** as the primary target. Atari gives us t
 
 To train our action-conditioned world model, we generate a high-quality local dataset from **Gymnasium Atari (Breakout)** using a custom mixed-competency exploration script.
 
-For a full specification of the emulator configuration, state RAM extraction, visual preprocessing pipelines, and linguistic templates, see the separate [dataset.md](file:///Users/anuj/Desktop/code/toylib/toylib_projects/wm/dataset.md).
+For a full specification of the emulator configuration, state RAM extraction, visual preprocessing pipelines, and linguistic templates, see the separate [dataset.md](dataset.md).
 
-#### Core Dataset Requirements:
-* **Total Scale:** ~500,000 frames (approx. 500 complete episodes) yielding ~120,000 distinct sliding window samples.
-* **Resolution & Color:** $64\times64$ (Theme A standard) or $128\times128$ (A3/A4 high-res) in full RGB.
-* **Input Window:** $16$ consecutive frames per sample.
-* **Actions:** A sequence of $16$ discrete actions corresponding to the player input per frame:
-  $$a_t \in \{0: \text{NOOP}, 1: \text{FIRE}, 2: \text{RIGHT}, 3: \text{LEFT}\}$$
-* **Text Captions:** A single semantically diverse text string describing the starting physical state (ball/paddle coordinates, brick count, and trajectory) of the 16-frame window.
-* **Exploration Strategy:** A custom $\epsilon$-greedy agent ($80\%$ competent tracking, $15\%$ random jitter, $5\%$ deliberate misses) to prevent Out-of-Distribution failures during interactive rollout.
+#### Core Dataset Pool Requirements
 
-#### Saved Sample Format:
-The dataset is stored in JAX-native **ArrayRecord** format and contains:
-- `frames`: `(16, H, W, 3)` uint8 array (stored as bytes).
-- `actions`: `(16,)` int32 array.
-- `caption`: a single text string.
-- `metadata`: physical state dictionary (coordinates and scoring statistics for physics-grounded evaluation).
+- **Total Scale (Stage 1 Master Pool):** 1,000 complete gameplay episodes (approx. 1.5 million frames total) stored as continuous raw trajectories.
+
+- **Storage Crop:** $160\times 160$ RGB cropped play area (preserves square aspect ratio, discards scoreboards and borders).
+- **Two-Stage Compiler Pipeline:** Downstream parameters—including target image resolution ($64\times 64$ or $128\times 128$), sequence horizon length ($T=16$ or $T=25$), temporal downsampling rates (e.g. 5Hz, 10Hz, 15Hz), caption rendering, and **offline VAE latent caching**—are compiled offline into highly optimized, model-coupled training shards.
+- **Exploration Strategy:** A custom $\epsilon$-greedy agent ($80\%$ competent tracking, $15\%$ random jitter, $5\%$ deliberate misses) to prevent Out-of-Distribution failures during interactive rollout.
+
+#### Saved Episode Record Format (Stage 1 Master)
+
+The raw dataset is stored in sharded **HDF5** files (`h5py`), one episode per group. Each group contains: `frames` `(L, 210, 160, 3)` uint8 LZ4-compressed, `actions` `(L,)` int32, and a `states/` subgroup of parallel float32/int32 arrays (`paddle_x`, `ball_x`, `ball_y`, `score`, `bricks_remaining`, `lives`). Compiled Stage 2 shards extend this with a `caption` string dataset and optional `latents`. See [dataset.md](dataset.md) for the full schema.
 
 ---
 
-# Theme A — Synthetic domain, built from scratch
+## Implementation Tracks
 
-Four stages, each isolating one new mechanism. Models are deliberately small (**~50–80M params**, DIAMOND-scale): the domain is simple, and a larger model just memorizes. We use **Gymnasium Atari (Breakout)** as our primary environment, which gives free action labels, visual sprites (paddle, ball, bricks), score progression, and classic collision physics, generated via a simple episode recorder loop (~30 LoC).
+Four stages, each isolating one new mechanism. Models are deliberately small: the domain is simple, and a larger model just memorizes.
 
-## A1 — Text → image, in pixel space
+## Track 1: Vision encoder
 
 **Task.** `caption → single frame` (64×64 RGB). Diffusion runs directly in pixel space — no VAE — so the diffusion mechanics are validated before any tokenizer exists.
 

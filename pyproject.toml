@@ -67,4 +67,5 @@ members = [
     "toylib_projects/bundler",
     "toylib_projects/tinystories",
     "toylib_projects/dotsAndBoxes",
+    "toylib_projects/wm",
 ]
