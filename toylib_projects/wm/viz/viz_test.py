@@ -9,7 +9,16 @@ import hdf5plugin
 import numpy as np
 
 from .loader import list_episodes, load_episode
-from .render import RenderOptions, build_episode_page, build_episode_viewer, build_shard_index_page
+from .render import (
+    ComboSamples,
+    RenderOptions,
+    build_combo_index_page,
+    build_compact_episode_card,
+    build_episode_page,
+    build_episode_viewer,
+    build_matrix_index_page,
+    build_shard_index_page,
+)
 
 
 def _write_fake_shard(path: Path, n_episodes: int = 2, length: int = 24) -> Path:
@@ -77,3 +86,31 @@ def test_build_shard_index() -> None:
     assert "2 episodes" in page
     assert "shard_0000__episode_000000.html" in page
     assert "shard_0000__episode_000001.html" in page
+
+
+def test_compact_card_and_matrix_pages(tmp_path: Path) -> None:
+    """build_compact_episode_card and build_matrix_index_page produce non-empty HTML
+    referencing each combo's mode/diff."""
+    # Two combos, one episode each.
+    combos = []
+    for mode, diff in [(0, 0), (8, 1)]:
+        shard = _write_fake_shard(tmp_path / f"shard_{mode}_{diff}.h5", n_episodes=1, length=10)
+        ep = load_episode(shard, "episode_000000")
+        ep.mode = mode
+        ep.difficulty = diff
+        combos.append(ComboSamples(mode=mode, difficulty=diff, episodes=[ep], href=f"m{mode}d{diff}/index.html"))
+
+    # Compact card embeds an animated WebP.
+    card_html = build_compact_episode_card(combos[0].episodes[0], thumb_downsample=2, thumb_max_frames=5)
+    assert "data:image/webp;base64," in card_html
+
+    matrix = build_matrix_index_page(combos)
+    assert "<!DOCTYPE html>" in matrix
+    assert "mode 0 · diff 0" in matrix
+    assert "mode 8 · diff 1" in matrix
+    assert "m0d0/index.html" in matrix
+    assert "m8d1/index.html" in matrix
+
+    combo_page = build_combo_index_page(combos[0])
+    assert "mode 0 · difficulty 0" in combo_page
+    assert "data:image/webp;base64," in combo_page

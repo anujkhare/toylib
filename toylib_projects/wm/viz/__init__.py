@@ -21,17 +21,25 @@ from pathlib import Path
 
 from .loader import Episode, find_shards, iter_episodes, list_episodes, load_episode
 from .render import (
+    ComboSamples,
     RenderOptions,
+    build_combo_index_page,
+    build_compact_episode_card,
     build_episode_page,
     build_episode_viewer,
+    build_matrix_index_page,
     build_shard_index_page,
 )
 
 __all__ = [
+    "ComboSamples",
     "Episode",
     "RenderOptions",
+    "build_combo_index_page",
+    "build_compact_episode_card",
     "build_episode_page",
     "build_episode_viewer",
+    "build_matrix_index_page",
     "build_shard_index_page",
     "find_shards",
     "iter_episodes",

@@ -4,11 +4,102 @@ Toy from-scratch world model in JAX, trained on Gymnasium Atari Breakout.
 
 See [docs/plan.md](docs/plan.md) for the project plan and [docs/dataset.md](docs/dataset.md) for the dataset pipeline spec.
 
+## Project layout
+
+```
+toylib_projects/wm/
+├── README.md
+├── pyproject.toml
+├── docs/
+│   ├── plan.md                 — staged project plan
+│   └── dataset.md              — Stage 1 / Stage 2 dataset spec
+├── datagen/                    — Stage 1 raw episode generation
+│   ├── breakout.py             — env + RAM state extraction
+│   ├── controller.py           — ε-greedy mixed-competency policy
+│   ├── storage.py              — HDF5 shard writer
+│   ├── generate_raw.py         — single (mode, diff) generator
+│   ├── generate_matrix.py      — sweep over (mode, diff) combos
+│   ├── run_stage1.py           — canonical 1000-episode entry point
+│   └── breakout_test.py        — datagen tests
+├── viz/                        — episode visualization
+│   ├── loader.py               — load Episode from HDF5
+│   ├── render.py               — build self-contained HTML
+│   ├── cli.py                  — per-episode deep-dive HTML pages
+│   ├── matrix.py               — mode × difficulty overview grid
+│   └── viz_test.py             — viz tests
+└── data/raw/                   — generated dataset (gitignored)
+    └── mode_MM_diff_D/
+        └── episodes_shard_NNNN.h5
+```
+
+## Setup
+
+This package is a member of the toylib uv workspace. From the repo root:
+
+```bash
+uv sync --package toylib-wm
+```
+
+All `uv run` commands below assume the working directory is `toylib_projects/wm/`.
+
+## Quickstart (end-to-end)
+
+```bash
+cd toylib_projects/wm
+
+# 1) Verify the env + dataset code works (under a second)
+uv run pytest -v datagen/ viz/
+
+# 2) Sanity-check the generator on a tiny sweep (16 episodes, ~5s)
+uv run python -m datagen.run_stage1 --smoke --output-root /tmp/wm_smoke
+uv run python -m viz.matrix --input /tmp/wm_smoke --output /tmp/wm_smoke_viz
+open /tmp/wm_smoke_viz/matrix.html
+
+# 3) Run the full Stage 1 sweep (~5-10 minutes, ~3.6 GB on disk)
+uv run python -m datagen.run_stage1
+
+# 4) Build the overview viz, then drill into one combo
+uv run python -m viz.matrix --input data/raw --output viz_out/matrix
+open viz_out/matrix/matrix.html
+```
+
 ## Stage 1: raw episode generation
 
-From this directory.
+Three entry points, in order of decreasing convenience.
 
-**Single (mode, difficulty) combination:**
+### A. Canonical full sweep (`run_stage1.py`)
+
+Bakes in the `docs/dataset.md` §2 plan: 4 Breakout modes × 2 difficulties × 125 episodes = **1,000 episodes total, ~3.6 GB on disk**.
+
+```bash
+uv run python -m datagen.run_stage1                  # full run
+uv run python -m datagen.run_stage1 --smoke          # 16 ep sanity test (~5s)
+uv run python -m datagen.run_stage1 --skip-existing  # resume after interruption
+uv run python -m datagen.run_stage1 --output-root /tmp/wm_test  # side-by-side run
+uv run python -m datagen.run_stage1 --base-seed 42   # different seed offset
+```
+
+### B. Custom matrix sweep (`generate_matrix.py`)
+
+```bash
+uv run python -m datagen.generate_matrix \
+    --output-root data/raw \
+    --episodes-per-combo 100 \
+    --modes 0 8 20 40 \
+    --difficulties 0 1 \
+    --episodes-per-shard 25 \
+    --base-seed 0
+```
+
+Notes:
+
+- **Modes 12, 28, 44 are deliberately excluded** by default — they're the Atari "Catch" variants (no bricks; different game mechanics). See `docs/dataset.md` §2E.
+- Per-combo seeds are derived deterministically from `--base-seed`.
+- `--skip-existing` skips combos whose output dir already has shards (resumable).
+
+### C. Single combo (`generate_raw.py`)
+
+For one-off experiments with a specific mode/difficulty:
 
 ```bash
 uv run python -m datagen.generate_raw \
@@ -16,40 +107,112 @@ uv run python -m datagen.generate_raw \
     --output-dir data/raw/mode_00_diff_0 \
     --episodes-per-shard 50 \
     --mode 0 --difficulty 0 \
+    --max-steps 20000 \
     --seed 0
 ```
 
-**Sweep over a matrix of Breakout variants** (default `modes=[0,8,20,40]` × `difficulties=[0,1]`, skipping the three "Catch" modes 12/28/44):
+### Output layout
 
-```bash
-uv run python -m datagen.generate_matrix \
-    --output-root data/raw \
-    --episodes-per-combo 100 \
-    --episodes-per-shard 25 \
-    --base-seed 0
+All three entry points write the same per-combo layout, so the viz tools and Stage 2 compiler can consume them interchangeably:
+
+```
+data/raw/
+├── mode_00_diff_0/episodes_shard_0000.h5
+├── mode_00_diff_0/episodes_shard_0001.h5
+├── ...
+└── mode_40_diff_1/episodes_shard_NNNN.h5
 ```
 
-This writes `data/raw/mode_MM_diff_D/episodes_shard_NNNN.h5` for each combo. The `--skip-existing` flag makes the sweep resumable.
+Each `episodes_shard_NNNN.h5` contains multiple `episode_NNNNNN/` groups. See `docs/dataset.md` §2 for the full schema.
 
 ## Visualization
 
-Render any shard (or whole tree) into self-contained HTML files:
+Two complementary tools.
+
+### Mode × difficulty sample matrix (`viz.matrix`)
+
+Builds a top-level grid of auto-looping animated-WebP thumbnails — one cell per (mode, difficulty) combo — so you can see variation across the dataset at a glance. Each cell links to a per-combo page with more samples.
 
 ```bash
-uv run python -m viz.cli --input data/raw --output viz_out
-open viz_out/index.html
+uv run python -m viz.matrix \
+    --input data/raw \
+    --output viz_out/matrix \
+    --samples-per-combo 3
+open viz_out/matrix/matrix.html
 ```
 
-Or inside Jupyter / Colab:
+Optional flags:
+
+- `--samples-per-combo N` — how many episodes to sample per combo (default 3)
+- `--thumb-downsample K` — take every Kth frame for thumbnails (default 4)
+- `--thumb-max-frames N` — cap on frames in each thumb's WebP (default 300)
+
+### Per-episode deep dive (`viz.cli`)
+
+Full scrubber + per-frame metadata panel + state-over-time chart. One HTML file per episode, plus an `index.html` listing them all.
+
+```bash
+# Whole dataset (one HTML per episode + index)
+uv run python -m viz.cli --input data/raw --output viz_out/full
+open viz_out/full/index.html
+
+# Single shard
+uv run python -m viz.cli \
+    --input data/raw/mode_20_diff_1/episodes_shard_0000.h5 \
+    --output viz_out/m20d1
+
+# One specific episode
+uv run python -m viz.cli \
+    --input data/raw/mode_20_diff_1/episodes_shard_0000.h5 \
+    --episode episode_000000 \
+    --output viz_out/single
+```
+
+Optional rendering flags (defaults are usually fine):
+
+- `--fps 30` — playback rate of the per-frame WebP carousel
+- `--downsample 2` — take every Nth frame
+- `--upscale 2` — pixel-double the frames for visibility
+- `--webp-quality 70` — 0..100 tradeoff
+
+### Inside Jupyter / Colab
+
+The same renderer wraps cleanly via `IPython.display.HTML`:
 
 ```python
-from viz import load_episode, show_episode
-ep = load_episode("data/raw/mode_00_diff_0/episodes_shard_0000.h5", "episode_000000")
-show_episode(ep)
+from viz import load_episode, show_episode, RenderOptions
+
+ep = load_episode(
+    "data/raw/mode_00_diff_0/episodes_shard_0000.h5",
+    "episode_000000",
+)
+show_episode(ep)  # renders inline
+
+# With custom render options
+show_episode(ep, RenderOptions(downsample=4, upscale=1, webp_quality=50))
 ```
 
 ## Tests
 
 ```bash
-uv run pytest -v datagen/ viz/
+uv run pytest -v datagen/ viz/   # all tests
+uv run pytest -v datagen/        # datagen only
+uv run pytest -v viz/            # viz only
 ```
+
+## Disk usage / clean-up
+
+```bash
+du -sh data/raw                  # ~3.6 GB after a full sweep
+du -sh viz_out                   # depends on samples + episode count
+
+rm -rf data/raw                  # nuke the dataset
+rm -rf viz_out                   # nuke the viz output
+```
+
+## Known open issues
+
+See `docs/dataset.md` §5. Current outstanding items:
+
+- **`bricks_remaining` RAM address**: `RAM[76]` is the wrong byte — the brick state is a bitmap across multiple bytes, not a single int. The field is currently stuck at 0 in all episodes.
+- **Brick-clear level reset**: not yet handled. Episodes that span an all-bricks-cleared reset will see a discontinuous state transition.

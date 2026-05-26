@@ -61,6 +61,35 @@ def _encode_frame_uris(frames: np.ndarray, opts: RenderOptions) -> list[str]:
     return uris
 
 
+def _encode_animated_webp(
+    frames: np.ndarray,
+    *,
+    fps: int = 30,
+    quality: int = 60,
+    upscale: int = 1,
+) -> bytes:
+    """Encode (T, H, W, 3) uint8 frames as a single animated WebP that auto-loops."""
+    assert frames.ndim == 4 and frames.dtype == np.uint8
+    h, w = frames.shape[1:3]
+    dw, dh = w * upscale, h * upscale
+    imgs = [Image.fromarray(f) for f in frames]
+    if upscale != 1:
+        imgs = [im.resize((dw, dh), Image.NEAREST) for im in imgs]
+    buf = io.BytesIO()
+    duration_ms = max(1, int(1000 / fps))
+    imgs[0].save(
+        buf,
+        format="WEBP",
+        save_all=True,
+        append_images=imgs[1:],
+        duration=duration_ms,
+        loop=0,
+        quality=quality,
+        method=4,
+    )
+    return buf.getvalue()
+
+
 def _encode_state_chart(ep: Episode, opts: RenderOptions) -> bytes:
     """Stacked time-series chart of all state variables → PNG bytes."""
     L = ep.length
@@ -378,3 +407,180 @@ def build_shard_index_page(rows: list[dict], title: str = "Episode index") -> st
     )
     body = f"<h1>{html.escape(title)}</h1><p class='subtitle'>{len(rows)} episodes</p>{table}"
     return _PAGE_TEMPLATE.format(title=html.escape(title), css=_PAGE_CSS, nav="", body=body)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Mode × difficulty matrix viz
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class ComboSamples:
+    """One (mode, difficulty) cell of the matrix view."""
+
+    mode: int
+    difficulty: int
+    episodes: list[Episode]  # sample episodes drawn from this combo
+    href: str = ""  # set by the renderer / CLI
+
+
+def build_compact_episode_card(
+    ep: Episode,
+    *,
+    thumb_fps: int = 30,
+    thumb_downsample: int = 4,
+    thumb_upscale: int = 1,
+    thumb_quality: int = 55,
+    thumb_max_frames: int | None = None,
+) -> str:
+    """One self-contained ``<div>`` showing an episode as a looping WebP + stats.
+
+    Optimized for grids and combo-overview pages: an auto-looping ``<img>``,
+    a small monospace caption with shard / length / score / lives, no JS.
+    """
+    frames = ep.frames[:: thumb_downsample]
+    if thumb_max_frames is not None:
+        frames = frames[:thumb_max_frames]
+    webp = _encode_animated_webp(
+        frames, fps=thumb_fps, quality=thumb_quality, upscale=thumb_upscale,
+    )
+    s = ep.states
+    final_score = int(s["score"][-1])
+    lives_lost = int(s["lives"][0]) - int(s["lives"][-1])
+    caption = (
+        f"{html.escape(ep.shard_path.parent.name)} / {html.escape(ep.name)}<br>"
+        f"L={ep.length}  score={final_score}  deaths={lives_lost}"
+    )
+    return (
+        f"<div class='card'>"
+        f"<img src='{_b64(webp, 'image/webp')}' />"
+        f"<div class='card-meta'>{caption}</div>"
+        f"</div>"
+    )
+
+
+_MATRIX_CSS = """
+.matrix { display: grid; gap: 16px; }
+.matrix .cell { border: 1px solid #e2e2e2; border-radius: 6px; padding: 12px;
+                background: #fff; }
+.matrix .cell h2 { margin: 0 0 6px 0; font-size: 14px;
+                   font-family: ui-monospace, Menlo, monospace; color: #333; }
+.matrix .cell .stats { font-family: ui-monospace, Menlo, monospace;
+                       font-size: 12px; color: #666; margin-bottom: 8px; }
+.matrix .cell .thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+.matrix .cell a.more { display: inline-block; margin-top: 8px;
+                       font-size: 12px; color: #06c; text-decoration: none; }
+.matrix .cell a.more:hover { text-decoration: underline; }
+.card { display: inline-block; }
+.card img { image-rendering: pixelated; border: 1px solid #ddd; display: block; }
+.card-meta { font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+             color: #555; margin-top: 4px; max-width: 220px; }
+"""
+
+
+def build_matrix_index_page(
+    cells: list[ComboSamples],
+    *,
+    title: str = "Mode × Difficulty samples",
+    thumb_downsample: int = 4,
+    thumb_max_frames: int = 300,
+    thumb_quality: int = 55,
+) -> str:
+    """Top-level matrix page: one cell per (mode, difficulty) with sample thumbs."""
+    # Group by mode for a wide row-per-mode grid.
+    modes = sorted({c.mode for c in cells})
+    diffs = sorted({c.difficulty for c in cells})
+
+    by_key = {(c.mode, c.difficulty): c for c in cells}
+    n_cols = len(diffs)
+
+    cell_html = []
+    for m in modes:
+        for d in diffs:
+            c = by_key.get((m, d))
+            if c is None:
+                cell_html.append(
+                    f"<div class='cell'><h2>mode {m} · diff {d}</h2>"
+                    f"<div class='stats'>(no episodes)</div></div>"
+                )
+                continue
+            thumbs = "".join(
+                build_compact_episode_card(
+                    ep,
+                    thumb_downsample=thumb_downsample,
+                    thumb_max_frames=thumb_max_frames,
+                    thumb_quality=thumb_quality,
+                )
+                for ep in c.episodes
+            )
+            stats = _combo_stats(c.episodes)
+            more_link = (
+                f"<a class='more' href='{html.escape(c.href)}'>full combo →</a>"
+                if c.href
+                else ""
+            )
+            cell_html.append(
+                f"<div class='cell'>"
+                f"<h2>mode {m} · diff {d}</h2>"
+                f"<div class='stats'>{stats}</div>"
+                f"<div class='thumbs'>{thumbs}</div>"
+                f"{more_link}"
+                f"</div>"
+            )
+
+    body = (
+        f"<h1>{html.escape(title)}</h1>"
+        f"<p class='subtitle'>{len(cells)} combos · "
+        f"showing {sum(len(c.episodes) for c in cells)} sample episodes</p>"
+        f"<div class='matrix' style='grid-template-columns: repeat({n_cols}, 1fr);'>"
+        f"{''.join(cell_html)}"
+        f"</div>"
+    )
+    return _PAGE_TEMPLATE.format(
+        title=html.escape(title),
+        css=_PAGE_CSS + _MATRIX_CSS,
+        nav="",
+        body=body,
+    )
+
+
+def build_combo_index_page(
+    combo: ComboSamples,
+    *,
+    title: str | None = None,
+    nav_html: str = "",
+    thumb_downsample: int = 2,
+    thumb_quality: int = 65,
+) -> str:
+    """Per-combo page: a column of compact cards for the sample episodes."""
+    t = title or f"mode {combo.mode} · difficulty {combo.difficulty}"
+    cards = "".join(
+        build_compact_episode_card(
+            ep, thumb_downsample=thumb_downsample, thumb_quality=thumb_quality
+        )
+        for ep in combo.episodes
+    )
+    stats = _combo_stats(combo.episodes)
+    body = (
+        f"<h1>{html.escape(t)}</h1>"
+        f"<p class='subtitle'>{len(combo.episodes)} sample episodes · {stats}</p>"
+        f"<div class='thumbs' style='display:flex;flex-wrap:wrap;gap:16px;'>{cards}</div>"
+    )
+    return _PAGE_TEMPLATE.format(
+        title=html.escape(t),
+        css=_PAGE_CSS + _MATRIX_CSS,
+        nav=nav_html,
+        body=body,
+    )
+
+
+def _combo_stats(episodes: list[Episode]) -> str:
+    if not episodes:
+        return "(empty)"
+    lengths = [ep.length for ep in episodes]
+    scores = [int(ep.states["score"][-1]) for ep in episodes]
+    return (
+        f"n={len(episodes)}  "
+        f"length min/mean/max = {min(lengths)} / {sum(lengths) // len(lengths)} / {max(lengths)}  "
+        f"final-score mean = {sum(scores) // len(scores)}"
+    )

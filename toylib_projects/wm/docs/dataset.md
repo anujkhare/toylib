@@ -203,3 +203,25 @@ When all bricks are destroyed mid-episode, Breakout resets the brick layout and 
 3. **Filter clips at the boundary:** During Stage 2, detect the reset event (e.g., `bricks_remaining` jumping from 0) and discard any clip that straddles it.
 
 Option 3 is the likely best default — it preserves episode continuity while preventing the temporal incoherence of the reset from appearing in training clips. To be decided before running Stage 2.
+
+### Low data diversity at the start of the episodes
+
+Current state: Stage 1 stores complete unbroken episodes (one HDF5 group per game-over run, ~1500–3000 frames each). Stage 2 — the "compile into T-frame clips at stride k with hop H" pass — isn't built yet. The dataset.md spec describes a uniform sliding-window sampler with 50% overlap, but no code yet.
+
+So your suggestion is exactly the right move: the homogeneous-starting-layout problem belongs at Stage 2, not Stage 1. The raw pool stays maximally informative; sampling biases live in the compiler. This is much cleaner than RAM hacks or warm-up shenanigans at generation time.
+
+Concrete options for Stage 2
+In rough order of sophistication:
+
+Hard skip — drop the first M frames of every episode (e.g. M=200). Brutal but trivial: one line in the clip-extraction loop.
+Soft start-weighting — weight each candidate clip's start frame t0 by some w(t0) that ramps from ~0.2 at t0=0 up to 1.0 at t0 > M. Resample to target N clips. Keeps some early-state coverage (the model still learns the canonical wall exists) without flooding the dataset with it.
+Stratified-by-score sampling — bucket candidate clips by score[t0] (e.g. 0, 1–50, 51–200, 201–500, 500+) and sample equally from each bucket. Directly targets "diverse wall states" since score correlates with bricks broken. This is the most principled — it makes "stage of gameplay" a stratification axis just like mode or difficulty.
+Stratified-by-bricks_remaining — same as (3) but using the brick count directly. Cleaner if we've pinned the RAM addresses (task #7); otherwise score is a fine proxy.
+Recommendation
+Build the Stage 2 compiler with a pluggable sampler interface, then ship two strategies:
+
+uniform — the original spec (uniform sliding window at hop H). Useful as a baseline / for ablation.
+stratified-score (default) — score-bucketed sampling. Free balanced coverage; no RAM-address work required.
+Add a --min-start-frame N flag too, as a coarse escape hatch.
+
+This also defers the brick-injection / palette-swap / warmup-steps ideas — none of them are needed if Stage 2 is doing its job. Keep dataset.md §5 (RAM-address verification) as the only outstanding open question on the raw pool.
