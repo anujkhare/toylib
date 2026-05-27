@@ -2,17 +2,21 @@
 
 Toy from-scratch world model in JAX, trained on Gymnasium Atari Breakout.
 
-See [docs/plan.md](docs/plan.md) for the project plan and [docs/dataset.md](docs/dataset.md) for the dataset pipeline spec.
+See [docs/designs/plan.md](docs/designs/plan.md) for the project plan and [docs/designs/dataset.md](docs/designs/dataset.md) for the dataset pipeline spec. Learning walkthroughs (one per track) live in [docs/walkthroughs/](docs/walkthroughs/); authoring guidelines are in [docs/walkthrough_guidelines.md](docs/walkthrough_guidelines.md).
 
 ## Project layout
 
 ```
 toylib_projects/wm/
 ├── README.md
+├── CLAUDE.md                   — AI collaboration rules for this project
 ├── pyproject.toml
 ├── docs/
-│   ├── plan.md                 — staged project plan
-│   └── dataset.md              — Stage 1 / Stage 2 dataset spec
+│   ├── walkthrough_guidelines.md  — how to author a walkthrough doc
+│   ├── designs/
+│   │   ├── plan.md             — staged project plan & architecture decisions
+│   │   └── dataset.md          — Stage 1 / Stage 2 dataset spec
+│   └── walkthroughs/           — one learning walkthrough per implementation track
 ├── datagen/                    — Stage 1 raw episode generation
 │   ├── breakout.py             — env + RAM state extraction
 │   ├── controller.py           — ε-greedy mixed-competency policy
@@ -123,7 +127,7 @@ data/raw/
 └── mode_40_diff_1/episodes_shard_NNNN.h5
 ```
 
-Each `episodes_shard_NNNN.h5` contains multiple `episode_NNNNNN/` groups. See `docs/dataset.md` §2 for the full schema.
+Each `episodes_shard_NNNN.h5` contains multiple `episode_NNNNNN/` groups. See `docs/designs/dataset.md` §2 for the full schema.
 
 ## Visualization
 
@@ -212,7 +216,7 @@ rm -rf viz_out                   # nuke the viz output
 
 ## Known open issues
 
-See `docs/dataset.md` §5. Current outstanding items:
+See `docs/designs/dataset.md` §5. Current outstanding items:
 
 - **`bricks_remaining` RAM address**: `RAM[76]` is the wrong byte — the brick state is a bitmap across multiple bytes, not a single int. The field is currently stuck at 0 in all episodes.
 - **Brick-clear level reset**: not yet handled. Episodes that span an all-bricks-cleared reset will see a discontinuous state transition.
