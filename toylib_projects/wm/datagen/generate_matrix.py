@@ -71,20 +71,49 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    combos = [(m, d) for m in args.modes for d in args.difficulties]
-    print(f"Sweeping {len(combos)} combos × {args.episodes_per_combo} episodes each")
+    sweep(
+        modes=args.modes,
+        difficulties=args.difficulties,
+        episodes_per_combo=args.episodes_per_combo,
+        output_root=args.output_root,
+        episodes_per_shard=args.episodes_per_shard,
+        max_steps=args.max_steps,
+        base_seed=args.base_seed,
+        skip_existing=args.skip_existing,
+    )
+
+
+def sweep(
+    *,
+    modes: list[int],
+    difficulties: list[int],
+    episodes_per_combo: int,
+    output_root: Path,
+    episodes_per_shard: int = 50,
+    max_steps: int = 20_000,
+    base_seed: int = 0,
+    skip_existing: bool = False,
+) -> None:
+    """Run ``run_generation`` once per (mode, difficulty) combination.
+
+    Splitting this out from ``main`` lets other entry points (notably
+    ``run_stage1.py``) call into the same loop with their own settings
+    without going through argparse.
+    """
+    combos = [(m, d) for m in modes for d in difficulties]
+    print(f"Sweeping {len(combos)} combos × {episodes_per_combo} episodes each")
     for i, (mode, diff) in enumerate(combos):
-        out_dir = _combo_dir(args.output_root, mode, diff)
-        if args.skip_existing and any(out_dir.glob("episodes_shard_*.h5")):
+        out_dir = _combo_dir(output_root, mode, diff)
+        if skip_existing and any(out_dir.glob("episodes_shard_*.h5")):
             print(f"[{i + 1}/{len(combos)}] skip mode={mode} diff={diff} (exists)")
             continue
-        seed = _combo_seed(args.base_seed, mode, diff)
+        seed = _combo_seed(base_seed, mode, diff)
         print(f"\n[{i + 1}/{len(combos)}] mode={mode} diff={diff} → {out_dir} (seed={seed})")
         run_generation(
-            num_episodes=args.episodes_per_combo,
+            num_episodes=episodes_per_combo,
             output_dir=out_dir,
-            episodes_per_shard=args.episodes_per_shard,
-            max_steps=args.max_steps,
+            episodes_per_shard=episodes_per_shard,
+            max_steps=max_steps,
             seed=seed,
             mode=mode,
             difficulty=diff,

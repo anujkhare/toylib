@@ -75,117 +75,73 @@ The raw dataset is stored in sharded **HDF5** files (`h5py`), one episode per gr
 
 ## Implementation Tracks
 
-Four stages, each isolating one new mechanism. Models are deliberately small: the domain is simple, and a larger model just memorizes.
+Each track isolates one new mechanism. Models are deliberately small — the domain is simple and a larger model just memorizes. Tracks 2–4 build a single joint-sequence transformer where frame latents use diffusion loss and discrete tokens (actions, captions) use AR cross-entropy loss (Transfusion-style). This enables any-conditional inference (`P(X | Y)` for any modality subset) without per-modality conditioning mechanisms.
 
-## Track 1: Vision encoder
+| Track | What it builds | Loss(es) | New mechanism | Example conditionals unlocked |
+|---|---|---|---|---|
+| **1** | 2D KL-VAE: `image ↔ latent` | Reconstruction + KL + perceptual | Reparameterization, latent compression | — (codec only) |
+| **1b** | Unconditional image generation in latent space | Diffusion (flow matching) | Latent diffusion, Euler sampler | `∅ → frame` |
+| **2** | Video diffusion model in latent space | Diffusion | Temporal attention over frame latent sequence | `frames → next frame` |
+| **3** | Hybrid video + action model | Diffusion (frames) + AR cross-entropy (actions) | Joint sequence, dual loss, action token AR head | `frames → actions`, `frames + actions → next frame` |
+| **3b** *(optional, post e2e spike)* | 3D causal VAE: inflate 2D VAE weights into temporal codec | Reconstruction + KL + perceptual (per-clip) | 3D causal convolutions, temporal compression, weight inflation | — (codec upgrade; re-enables all Track 2–3 conditionals with 4× fewer temporal tokens) |
+| **4** | Full any-conditional world model | Diffusion (frames) + AR cross-entropy (actions + captions) | Caption token AR head, modality-masked training | `captions + actions → frames`, `frames → captions`, all prior |
 
-**Task.** `caption → single frame` (64×64 RGB). Diffusion runs directly in pixel space — no VAE — so the diffusion mechanics are validated before any tokenizer exists.
+**Training coverage note (Track 3+):** batches must explicitly sample all conditioning patterns — not just forward dynamics. If training only covers `(frames, actions) → next frame`, the model will be poor at `frames → actions`.
 
-**Dataset.** ~100–200k single Breakout gameplay frames. Captions auto-generated from game state variables / RAM (e.g. "Atari Breakout: paddle at center, ball moving up-left, 18 bricks remaining"), with a **mandatory LLM-paraphrasing pass** for linguistic diversity — without it, templated captions make text conditioning a lookup table.
-
-**Modeling choices considered.**
-
-- Pixel vs. latent space: pixel chosen *for this stage only*, to isolate diffusion from VAE confounds.
-- Backbone: DiT over UNet — matches the rest of the project and is simpler to inflate later.
-- Loss: rectified-flow / flow matching (velocity field) over DDPM ε-prediction — fewer schedule hyperparameters, modern default.
-- Attention: standard softmax. Linear attention (Sana) is rejected here — at 16×16–32×32 token grids it has no efficiency advantage and trains worse; kept only as an optional ablation.
-- Positional encoding: 2D sinusoidal/learned; NoPE noted as an ablation.
-
-**Implementation plan.**
-
-1. Atari Breakout episode generator (Gymnasium) + RAM-based caption generator + paraphrasing pass.
-2. Spatial DiT in Flax NNX (~10–20M params): patchify → N transformer blocks → AdaLN-zero timestep conditioning → text cross-attention.
-3. Flow-matching training loop: EMA, bf16 compute / fp32 master, gradient clipping.
-4. Euler sampler with classifier-free guidance on text.
-5. Smoke-test on Moving-MNIST / CIFAR before the synthetic set.
-
-**Eval & gate.** Physics-grounded: detect paddle, ball, and remaining bricks in samples, score paddle and ball positioning accuracy vs. the caption. FID reported only as a rough secondary proxy (Inception is out-of-distribution on this domain). Gate: samples clearly satisfy captions; CFG visibly improves adherence.
-
-## A2 — Add a from-scratch VAE → latent text → image
-
-**Task.** Same `caption → frame`, but diffusion now runs in a *learned latent space*. Introduces latent diffusion and forces us to understand the latent space the model lives in.
-
-**Dataset.** Same Breakout gameplay frames.
-
-**Modeling choices considered.**
-
-- KL-VAE (continuous) vs. VQ-VAE (discrete): continuous chosen — better reconstruction, matches Theme B's continuous tokenizers; VQ noted as an ablation.
-- Compression ratio: study 4× vs. 8× spatial; pick the smallest latent grid that still reconstructs ball/paddle cleanly.
-- Per-frame 2D VAE this stage; 3D temporal VAE deferred to A3.
-
-**Implementation plan.**
-
-1. Small 2D convolutional KL-VAE; train to reconstruct Breakout frames; visualize reconstructions and latent channels.
-2. Re-target the A1 DiT to operate on cached VAE latents.
-3. Compare latent-space vs. A1 pixel-space samples on the physics metrics.
-
-**Gate.** VAE reconstruction error below a set threshold; latent-space sample quality matches A1.
-
-## A3 — Text → video
-
-**Task.** `caption → 16-frame clip` (128×128, ~8 fps).
-
-**Dataset.** 50–200k Breakout gameplay clips containing ball bounces, paddle movements, and brick destructions. Joint image/video batches (~30% single-frame, the Latte recipe).
-
-**Modeling choices considered.**
-
-- VAE: extend the A2 VAE to a **3D causal VAE** (temporal compression 4×, spatial 8×). A 16×128×128 clip → **4×16×16×C** latent (note: 16×16 spatial — not 32 — at 128px with 8× compression).
-- Temporal attention: **bidirectional softmax** chosen — the whole 16-frame clip is denoised jointly. Causal attention is rejected as the default; it belongs with autoregressive rollout and is reserved for the diffusion-forcing stretch.
-- Spatial/temporal structure: factorized, interleaved spatial-then-temporal blocks (Latte).
-- Build temporal from scratch vs. inflate from A2: **inflate** — initialize spatial blocks from A2, zero-init temporal output projections (AnimateDiff), train spatial layers at 1/10 LR (low-LR fine-tune, not frozen).
-
-**Implementation plan.**
-
-1. 3D causal VAE; re-encode the clip dataset; cache latents.
-2. Temporal attention blocks (temporal RoPE) interleaved into the A2 DiT.
-3. Inflation: load A2 spatial weights, zero-init temporal projections.
-4. Video sampler with temporal CFG.
-
-**Eval & gate.** Primary metric: trajectory consistency — extract per-frame paddle/ball positions, compare to actual game-physics trajectory. FVD as a rough proxy only. Gate: temporally coherent clips with plausible motion that follow captions.
-
-## A4 — Action-conditioned world model
-
-**Task.** `(caption, first frame, action sequence) → video`. This is the world model.
-
-**Dataset.** Breakout clips where the paddle is controlled by discrete actions `{NOOP, FIRE, RIGHT, LEFT}`; ground-truth paddle/ball positions recorded. **Held-out split on action sequences and initial configurations** — not just held-out clips — so generalization (physics vs. memorization) is genuinely tested.
-
-**Modeling choices considered.**
-
-- First-frame conditioning: latent concatenation along the temporal axis (CogVideoX-I2V / Cosmos-V2W).
-- Action conditioning: per-frame action embedding → **per-frame AdaLN modulation**, vs. an extra cross-attention stream. The action is a *sequence* (one per frame), so conditioning must be per temporal position, not a single global vector.
-- Action-CFG: drop actions during training, apply guidance at sampling.
-
-**Implementation plan.**
-
-1. First-frame latent-concat conditioning.
-2. Action embedding + per-frame AdaLN.
-3. Action-CFG dropout.
-4. Controllability metric: fix caption + first frame, vary the action sequence, measure paddle movement correlation with action inputs on the held-out action split.
-
-**Gate (and Theme A exit criterion).** Same first frame + different action sequences produce visibly different, action-consistent continuations; controlled-paddle displacement correlates with the commanded action above a set threshold **on the held-out action split**.
-
----
-
-# Cross-cutting notes
+**Track 3b note:** only worth attempting once the end-to-end diffusion+AR spike (Tracks 2–3) is validated. The 3D VAE replaces the per-frame encoder with a clip-level encoder (e.g. 4× temporal compression: 16 frames → 4 temporal latent positions × 8×8 spatial = 256 tokens vs 1024). The downstream transformer is re-used unchanged — only the frame latents change shape. Initialize 3D conv weights from the 2D VAE using the AnimateDiff inflation recipe [20].
 
 ## Evaluation philosophy
 
 The synthetic domain's killer feature is ground-truth state. Primary metrics are physics-grounded — object-position MSE, collision-timing error, action-response accuracy — computed by detecting shapes in samples and comparing to ground truth. FID/FVD are reported only as rough secondary proxies; their feature extractors (Inception, I3D) are out-of-distribution on synthetic shapes and noisy even on real video.
 
-## Prior art drawn on
+## Prior work
 
-Action-conditioned / world models: **DIAMOND** (50M diffusion world model on Atari — our closest analogue), **GameNGen** (real-time Doom), **Oasis** (Minecraft, diffusion forcing), **Genie** (latent actions), **Cosmos-Predict2** (our scale target). T2V DiT architecture: **Sana** (linear attention, Mix-FFN, AdaLN-zero), **CogVideoX** (3D causal VAE, expert AdaLN), **Latte** (factorized attention, joint image/video training), **AnimateDiff** (inflation recipe). Reference repos: `willisma/diffuse_nnx`, `Vchitect/Latte`, `guoyww/AnimateDiff`, `eloialonso/diamond`, `etched-ai/open-oasis`, `nvidia-cosmos/cosmos-predict2`.
+### Action-conditioned world models
 
-## Risks
+| Paper | Key relevance |
+|---|---|
+| **DIAMOND** (Alonso et al., NeurIPS 2024) | 50M diffusion world model on Atari; pixel-space; our closest benchmark analogue |
+| **GameNGen** (Valevski et al., 2024) | Real-time Doom via diffusion; validates fast autoregressive rollout |
+| **Oasis** (Etched, 2024) | Minecraft world model; diffusion forcing for temporal coherence |
+| **Genie** (Bruce et al., 2024) | Latent action inference from video; unsupervised action space |
+| **Cosmos-Predict2** (NVIDIA, 2025) | Scale target; continuous 3D tokenizer + diffusion world model |
+
+### Video DiT architecture
+
+| Paper | Key relevance |
+|---|---|
+| **Sana** (NVIDIA, 2024) | Linear attention, Mix-FFN, AdaLN-zero conditioning |
+| **CogVideoX** (Yang et al., 2024) | 3D causal VAE design; expert AdaLN; reference for Track 3b |
+| **Latte** (Ma et al., 2024) | Factorized spatial/temporal attention; joint image+video training recipe |
+| **AnimateDiff** (Guo et al., ICLR 2024) | Weight inflation recipe for 2D → 3D temporal block initialization; used in Track 3b |
+
+### Joint-sequence and any-conditional models
+
+| Paper | Key relevance |
+|---|---|
+| **Gato** (Reed et al., DeepMind, 2022) | Tokenizes Atari frames, discrete actions, and text into one flat sequence; trains a single AR transformer over all — the most direct architectural precedent |
+| **GAIA-1** (Wayve, 2023) | World model for autonomous driving; video + text + ego-actions as a joint AR sequence; structurally identical to our target in a different domain |
+| **UniDiffuser** (Bao et al., 2023) | Diffusion transformer over a joint image+text sequence; randomly masks modality subsets at training time to learn `P(X|Y)` for any X, Y from one model |
+| **VideoPoet** (Yu et al., Google, 2023) | Tokenizes video, audio, text, and actions into one MAGVIT-2/SentencePiece vocabulary; trains a single AR LLM; demonstrates the full conditional variety we target |
+| **Transfusion** (Zhou et al., Meta, 2024) | Hybrid AR+diffusion in one transformer: discrete tokens use next-token prediction, continuous image tokens use diffusion; the natural upgrade path if frame tokens need to stay continuous at larger scale |
+
+### Reference repositories
+
+| Repo | Used for |
+|---|---|
+| `willisma/diffuse_nnx` | JAX/NNX diffusion reference |
+| `Vchitect/Latte` | Factorized attention implementation |
+| `guoyww/AnimateDiff` | Temporal inflation recipe |
+| `eloialonso/diamond` | DIAMOND Atari world model |
+| `etched-ai/open-oasis` | Open Oasis world model |
+| `nvidia-cosmos/cosmos-predict2` | Cosmos scale reference |
+
+## Risks / open questions
 
 - Synthetic domain too simple → memorization. *Mitigation:* held-out action/config splits; physics metrics over FVD; deliberately small models.
-- From-scratch VAE artifacts. *Mitigation:* A1 is pixel-space, so diffusion is validated before any VAE exists; visualize reconstructions in A2.
-- Theme A rabbit-holes. *Mitigation:* timebox each stage; the A4 gate is the hard exit.
-- TRC denied → Theme B unaffordable. *Mitigation:* drop B3b; run B2 at lower resolution.
-- Cosmos weight-porting fails. *Mitigation:* B3a delivers the demo without it; B3b is optional.
-
-## Order of operations
-
-**Theme A** (~3–5 weeks, < $50): renderer → A1 → A2 → A3 → A4.
-**Theme B** (~3–5 weeks, $150–300): B1 → B2 → B3a → B3b (optional).
-Apply for TRC on day 1. Each stage is a working deliverable; Theme A end-to-end is a complete, standalone artifact before any real money is spent.
+- From-scratch VAE artifacts.
+- **Hybrid Loss Balancing (Track 3+):** Joint sequences with dual losses (Diffusion and AR) are highly sensitive to gradient imbalances. The scale of the continuous flow-matching loss can easily dominate the discrete AR cross-entropy loss. We will need to implement dynamic loss weighting or separate learning rate schedules for the AR and Diffusion heads to ensure the model learns action conditioning alongside pixel generation.
+- **Sequence Length Bottlenecks (Track 2+):** Flattening multi-frame spatial latents (e.g., 16 frames of $20\times 20$ latents) results in sequence lengths that quickly exceed the memory capacity of standard dense self-attention. We must explicitly define whether we are using factorized spatial-temporal attention (e.g., Latte architecture) or full 3D attention to manage OOM errors on small hardware.
+- **Latent Space Regularization (Track 1):** The KL penalty must be carefully tuned for downstream diffusion. Over-regularization will blur the sharp edges of Atari sprites, while under-regularization will create a latent distribution that the Track 2 diffusion model struggles to learn.
+- **Dataset State-Space Coverage:** Atari Breakout is prone to highly correlated, endless loops (e.g., the ball bouncing horizontally indefinitely). The dataset generation script must include periodic forced resets, random ball respawns, or varied initial brick layouts to prevent the model from memorizing infinite-bounce trajectories.
+- **Physics Perception on Noisy Outputs:** Evaluating object-position MSE requires extracting coordinates from generated frames. Because early diffusion outputs will contain flickering edges or slight noise, standard contour detection (e.g., OpenCV) may fail. Evaluation pipelines must either use highly noise-tolerant heuristics or a lightweight CNN trained to extract coordinates from generated frames.
