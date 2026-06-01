@@ -101,13 +101,24 @@ The encoder outputs a mean `μ` and log-variance `log σ²`. The latent is sampl
 
 **Compression ratio choices:**
 
-| Input | Latent | Spatial factor | Tokens/frame | Tokens for T=16 clip | Notes |
-|---|---|---|---|---|---|
-| 64×64×3 | 16×16×4 | 4× | 256 | 4,096 | SD 1.x standard [2]; too long for Track 2–4 joint sequence |
-| 64×64×3 | 8×8×4 | 8× | 64 | 1,024 | SD 2.x / SDXL [2]; manageable with factorized attention |
-| 64×64×3 | 8×8×16 | 8× | 64 | 1,024 | Same grid; more channels; FLUX [7] / CogVideoX [6] style |
+The total spatial compression seen by the video model is `VAE spatial factor × video model spatial patch size`. Temporal patching adds a third axis. Ball size in the latent is the key quality indicator: sub-pixel means the ball's position cannot be precisely encoded at the latent grid resolution. Ball is ~4px in the 160×160 crop; it scales with input resolution.
 
-Recommendation: **8×8×4** for the Breakout domain. The scenes are simple enough that 4 channels hold the state, the 64 tokens/frame budget is feasible for the Track 2–4 joint-sequence transformer, and the smaller spatial grid (vs. 16×16) significantly reduces attention compute. Validate by checking if paddle/ball are reconstructable from the 8×8 latent before committing (see §6).
+| Input | VAE spatial | Latent/frame | Spatial patch P | Temporal patch T_p | Tokens (T=16 clip) | Ball in latent | Notes |
+|---|---|---|---|---|---|---|---|
+| 64×64 | 8× | 8×8×4 | 1×1 | 1 | 1,024 | ~0.2px sub-pixel | SD 2.x baseline; ball very hard to encode |
+| 128×128 | 8× | 16×16×4 | 1×1 | 1 | 4,096 | ~0.4px sub-pixel | Higher res but token count too large unpatched |
+| 128×128 | 8× | 16×16×4 | 2×2 | 1 | 1,024 | ~0.4px sub-pixel | Same token count as baseline; ball still sub-pixel |
+| 128×128 | 4× | 32×32×4 | 2×2 | 1 | 4,096 | ~0.8px near-pixel | Best ball encoding; clip tokens expensive |
+| **128×128** | **4×** | **32×32×4** | **2×2** | **2** | **2,048** | **~0.8px near-pixel** | **Recommended — see note below** |
+| 128×128 | 4× | 32×32×4 | 4×4 | 2 | 512 | ~0.8px near-pixel | Aggressive; only 32 tokens/effective frame |
+
+**Recommended setup — 128×128, 4× VAE, 2×2 spatial patch, 2× temporal patch:**
+- VAE trains at 4× compression → 32×32 latent. Ball (~3.2px in 128×128) maps to ~0.8px in the latent — near-pixel, significantly easier to encode than the 0.2px in the 64×64/8× baseline.
+- Video model patchifies the 32×32 latent with 2×2 patches → 16×16 = 256 spatial tokens/frame. Total spatial compression 8× (same as SD 2.x) but the information bottleneck is at the video model, not the codec.
+- Temporal patch T_p=2 groups adjacent frame latents into pairs → 8 temporal positions × 256 = 2,048 tokens for a 16-frame clip. Manageable for a small transformer.
+- The VAE still decodes from the full 32×32 latent at inference — patching is internal to the video model and does not reduce the fidelity of the generated output.
+
+**Temporal patchification:** grouping T_p consecutive frame latents into a single token via a learned 3D projection (patch size T_p×P×P). This is distinct from the 3D VAE (Track 3b), which compresses temporally at the codec level before the video model ever sees the latents. The two can be composed: a 3D VAE with 4× temporal compression followed by T_p=2 temporal patching would give 32 temporal positions from a 16-frame clip, each latent already aggregating 4 frames. For this project, temporal patching in the video model alone is simpler and sufficient — the 3D VAE upgrade adds further compression only if sequence length remains the bottleneck after Track 3.
 
 ### 3.2 Vector-Quantized VAE (VQ-VAE / VQGAN)
 
@@ -206,73 +217,7 @@ Standard multi-head self-attention reshaped to treat the spatial positions as th
 
 ## 5. Data Selection from the Existing Dataset
 
-The raw pool contains 1,000 episodes across 8 (mode, difficulty) combinations. The VAE only needs **single frames**, not sequences, so Stage 2 clip compilation is not required — you can sample frames directly from the Stage 1 HDF5 shards.
-
-### 5.1 The Diversity Problem
-
-Breakout frames cluster heavily around two states:
-1. **Early game** (full brick wall, ball near paddle): dominant in every episode's opening.
-2. **Mid/late game** (partial/empty wall, ball anywhere): much rarer per episode.
-
-A naive random frame sample skews massively toward the full-brick configuration. The VAE would then overfit to that appearance and struggle with late-game visual states (the ones with interesting dynamics).
-
-### 5.2 Stratification Strategy
-
-Sample frames along **four independent axes**, drawing roughly equal counts from each stratum:
-
-**Axis 1 — Game mode × difficulty (8 combos)**
-Equal samples from `mode_00_diff_0`, `mode_00_diff_1`, ..., `mode_40_diff_1`. This covers the visual variation in brick layout patterns introduced by different game modes.
-
-**Axis 2 — Bricks remaining (4 buckets)**
-Direct measure of how far into the game a frame comes.
-
-| Bucket | Bricks remaining | Interpretation |
-|---|---|---|
-| 0 | 108 (full wall) | Game start |
-| 1 | 55–107 | Early-mid |
-| 2 | 10–54 | Mid-late |
-| 3 | 0–9 | Endgame / brick-clear |
-
-Uniform sampling across these buckets forces the VAE to see all visual states equally. Since `bricks_remaining` is stored in Stage 1 HDF5 state arrays, this is free to implement.
-
-**Axis 3 — Paddle zone (3 buckets: left / center / right)**
-Ensures the VAE sees the paddle at all horizontal positions, preventing the decoder from hallucinating it into a learned prior position.
-
-**Axis 4 — Ball position zone (6 buckets: 3 horizontal × 2 vertical)**
-The ball is the hardest object to reconstruct (small, fast, high-contrast). Equal coverage across ball positions ensures the decoder learns to place it accurately everywhere. See §6 for a deeper discussion of ball encoding challenges.
-
-### 5.3 Sampling Recipe
-
-Pseudo-algorithm for building the VAE training frame set:
-
-```
-target_per_stratum = total_frames / (8 modes × 4 brick_buckets)
-                   = 100k / 32  ≈ 3,125 frames per (mode, brick_bucket)
-
-for each (mode, difficulty) combo:
-    load all episodes in that combo
-    bin frames by bricks_remaining into 4 buckets
-    from each bucket: sample min(available, target_per_stratum) frames
-    apply secondary soft-weighting by paddle zone to equalize within bucket
-```
-
-A secondary pass checks that each of the 6 ball zones contains at least `min_ball_zone_count` frames, re-sampling if any zone is underrepresented. The ball-in-corner frames are rare in natural play but critical for reconstruction quality.
-
-### 5.4 Frame Count Recommendation
-
-| Use | Frames | Notes |
-|---|---|---|
-| VAE train | ~80k | Stratified as above |
-| VAE val | ~10k | Stratified same way, different episodes |
-| VAE test | ~10k | Episode-disjoint from train+val |
-
-Total: ~100k frames. This is a tiny dataset for a VAE — the model will see each frame many times. High diversity per frame is therefore critical. With 1,000 episodes × ~1,500 frames each = 1.5M total frames, 100k is only 6.7% of the pool, so the stratification headroom is large.
-
-### 5.5 Handling Life-Reset Frames
-
-Frames immediately following a ball reset (life lost) look unusual: paddle is centered, ball spawns at a fixed position, no ball motion yet. Include these deliberately — the VAE must handle them, and they occur during world model rollouts in Track 4.
-
-Frames immediately following a brick-clear level reset are also unusual (bricks teleport back). Include a small fixed count (~2k) to prevent out-of-distribution failure, but do not oversample.
+Frame selection strategy for VAE training (stratification across game modes, brick states, paddle zones, and ball zones) is documented in the main plan under [Selecting the Vision Encoder Dataset](plan.md#selecting-the-vision-encoder-dataset).
 
 ---
 

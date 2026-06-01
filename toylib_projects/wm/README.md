@@ -17,14 +17,17 @@ toylib_projects/wm/
 │   │   ├── plan.md             — staged project plan & architecture decisions
 │   │   └── dataset.md          — Stage 1 / Stage 2 dataset spec
 │   └── walkthroughs/           — one learning walkthrough per implementation track
-├── datagen/                    — Stage 1 raw episode generation
+├── datagen/                    — Stage 1 raw episode generation + Stage 2 compilers
 │   ├── breakout.py             — env + RAM state extraction
 │   ├── controller.py           — ε-greedy mixed-competency policy
 │   ├── storage.py              — HDF5 shard writer
 │   ├── generate_raw.py         — single (mode, diff) generator
 │   ├── generate_matrix.py      — sweep over (mode, diff) combos
 │   ├── run_stage1.py           — canonical 1000-episode entry point
-│   └── breakout_test.py        — datagen tests
+│   ├── preprocess_frames.py    — reusable crop + resize (VAE input pipeline)
+│   ├── generate_vision_enc_data.py  — VAE dataset compiler (Stage 2)
+│   ├── breakout_test.py        — Stage 1 tests
+│   └── preprocess_test.py      — preprocess + VAE compiler tests
 ├── viz/                        — episode visualization
 │   ├── loader.py               — load Episode from HDF5
 │   ├── render.py               — build self-contained HTML
@@ -128,6 +131,35 @@ data/raw/
 ```
 
 Each `episodes_shard_NNNN.h5` contains multiple `episode_NNNNNN/` groups. See `docs/designs/dataset.md` §2 for the full schema.
+
+## Stage 2: vision-encoder dataset
+
+Build a flat, pre-resized, stratified-sampled dataset for VAE training (see `datagen/generate_vision_enc_data.py` docstring for the design rationale):
+
+```bash
+# Defaults: 100k train / 10k val / 10k test at 128×128, sampled at native 60Hz
+uv run python -m datagen.generate_vision_enc_data
+
+# Diverse sampling for VAE — 6Hz effective rate avoids near-duplicates
+uv run python -m datagen.generate_vision_enc_data \
+    --n-train 100000 --n-val 10000 --n-test 10000 \
+    --input-fps 6 \
+    --output-root data/compiled
+
+# Smoke run (few seconds, ~7 MB on disk)
+uv run python -m datagen.generate_vision_enc_data \
+    --n-train 2000 --n-val 200 --n-test 200 \
+    --input-fps 6 \
+    --output-root /tmp/wm_vae
+```
+
+Outputs `data/compiled/vae_{train,val,test}.h5`. Each file has `frames (N,H,W,3) uint8` plus a `source/` group with per-frame state and provenance. Configurable knobs:
+
+- `--target-size N` — output frame size (default 128)
+- `--input-fps N` — temporal sub-sampling rate from native 60Hz (default 60 = every frame)
+- `--score-buckets a b c ...` — score-stratum boundaries
+- `--crop-top --crop-bottom --crop-left --crop-right` — explicit crop bounds
+- `--resize-filter {lanczos,bilinear,bicubic,nearest,box}` — default lanczos
 
 ## Visualization
 
