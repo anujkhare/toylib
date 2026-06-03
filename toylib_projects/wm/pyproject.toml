@@ -18,6 +18,12 @@ dependencies = [
     # viz
     "pillow>=10.0.0",     # animated WebP encoding
     "matplotlib>=3.7.0",  # state-over-time charts
+    # data loading
+    "grain>=0.0.4",       # PyGrain — shuffle/batch over compiled HDF5 datasets
+    # training loop infrastructure (forked from tinystories)
+    "optax>=0.1.7",
+    "orbax-checkpoint>=0.4.0",
+    "flax>=0.10.0",       # NNX modules for the VAE / DiT
 ]
 
 [project.optional-dependencies]
