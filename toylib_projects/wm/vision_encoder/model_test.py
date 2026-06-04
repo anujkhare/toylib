@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from .model import (
+from toylib_projects.wm.vision_encoder.model import (
     AttentionBlock,
     Decoder,
     Encoder,

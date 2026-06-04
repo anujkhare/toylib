@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from .dataloader import (
+from toylib_projects.wm.vision_encoder.dataloader import (
     DatasetState,
     Hdf5FramesDataset,
     Hdf5FramesDatasetState,
@@ -193,7 +193,7 @@ def test_source_survives_pickle(tmp_path: Path) -> None:
     """_Hdf5FramesSource must pickle cleanly even after a read (drops live handle)."""
     import pickle
 
-    from .dataloader import _Hdf5FramesSource
+    from toylib_projects.wm.vision_encoder.dataloader import _Hdf5FramesSource
 
     _write_fake_vae_h5(tmp_path / "v.h5", n=8)
     src = _Hdf5FramesSource(str(tmp_path / "v.h5"))

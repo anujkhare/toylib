@@ -8,7 +8,7 @@ forked because we don't carry ``BitsPerByte`` in this project (see
 
 import jax.numpy as jnp
 
-from . import metrics
+from toylib_projects.wm.vision_encoder import metrics
 
 
 class TestLossMetric:

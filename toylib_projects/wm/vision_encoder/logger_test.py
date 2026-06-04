@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from unittest import mock
 
-from . import logger as logger_mod
+from toylib_projects.wm.vision_encoder import logger as logger_mod
 
 
 # ──────────────────────────────────────────────────────────────────────────

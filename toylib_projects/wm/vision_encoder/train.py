@@ -70,10 +70,10 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from . import experiment as exp_lib
-from . import metrics as metrics_lib
-from .dataloader import Hdf5FramesDataset
-from .model import ModelConfig, VAE, vae_loss
+from toylib_projects.wm.vision_encoder import dataloader as dataloader_lib
+from toylib_projects.wm.vision_encoder import experiment as exp_lib
+from toylib_projects.wm.vision_encoder import metrics as metrics_lib
+from toylib_projects.wm.vision_encoder import model as model_lib
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -84,8 +84,8 @@ from .model import ModelConfig, VAE, vae_loss
 def make_model_factory() -> typing.Callable:
     """Return a factory that builds an initialized VAE from (config, key)."""
 
-    def factory(config: ModelConfig, key) -> VAE:
-        vae = VAE(config=config, key=key)
+    def factory(config: model_lib.ModelConfig, key) -> model_lib.VAE:
+        vae = model_lib.VAE(config=config, key=key)
         vae.init()
         return vae
 
@@ -101,10 +101,10 @@ def make_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
     """
     fixed_key = jax.random.key(rng_seed)
 
-    def forward_fn(model: VAE, batch):
+    def forward_fn(model: model_lib.VAE, batch):
         # batch shape: (B, H, W, 3) uint8. Normalize to (B, H, W, 3) float32 in [-1, 1].
         frames = batch.astype(jnp.float32) / 127.5 - 1.0
-        loss, aux = vae_loss(model, frames, rng_key=fixed_key, beta=beta)
+        loss, aux = model_lib.vae_loss(model, frames, rng_key=fixed_key, beta=beta)
         # Only return the scalar pieces the metric/log layer cares about —
         # passing the full recon/mu/log_sigma_sq tensors through the metric
         # accumulator would explode batch * shape memory needlessly.
@@ -166,7 +166,7 @@ def create_experiment(
     batch_size = batch_size_per_device * n_devices * num_microbatches
 
     # ── Datasets ────────────────────────────────────────────────────────
-    train_ds = Hdf5FramesDataset(
+    train_ds = dataloader_lib.Hdf5FramesDataset(
         dataset_path=str(train_path), batch_size=batch_size,
         seed=seed, shuffle=True, drop_remainder=True,
     )
@@ -177,7 +177,7 @@ def create_experiment(
     )
     eval_task = None
     if val_path is not None:
-        val_ds = Hdf5FramesDataset(
+        val_ds = dataloader_lib.Hdf5FramesDataset(
             dataset_path=str(val_path), batch_size=batch_size,
             seed=seed, shuffle=False, drop_remainder=True,
         )
@@ -218,7 +218,7 @@ def create_experiment(
         eval_task=eval_task,
         forward_fn=make_forward_fn(beta=beta),
         model_factory=make_model_factory(),
-        model_config=ModelConfig(
+        model_config=model_lib.ModelConfig(
             base_ch=base_ch, latent_channels=latent_channels,
         ),
         training_config=exp_lib.TrainingConfig(

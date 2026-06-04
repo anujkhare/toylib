@@ -76,9 +76,9 @@ import numpy as np
 import optax
 import orbax.checkpoint as ocp
 
-from . import logger
-from . import metrics as metrics_module
-from .dataloader import Hdf5FramesDataset
+from toylib_projects.wm.vision_encoder import dataloader as dataloader_lib
+from toylib_projects.wm.vision_encoder import logger
+from toylib_projects.wm.vision_encoder import metrics as metrics_module
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ class EvalConfig:
 @dataclasses.dataclass
 class Task:
     name: str
-    dataset: Hdf5FramesDataset
+    dataset: dataloader_lib.Hdf5FramesDataset
     metrics: list[metrics_module.Metric] = dataclasses.field(
         default_factory=lambda: [metrics_module.Loss()]
     )
