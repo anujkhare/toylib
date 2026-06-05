@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 # ============================================================
 # External Imports
 # ============================================================
 
 from PIL import Image as PILImage
-from __future__ import annotations
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from pathlib import Path
 import abc
@@ -2136,7 +2137,7 @@ def vae_loss(
 
 
 # ============================================================
-# None - ../wm/vision_encoder/train.py
+# None - toylib_projects/wm/vision_encoder/train.py
 # ============================================================
 
 """Training entry point for the Track A1 KL-VAE vision codec.

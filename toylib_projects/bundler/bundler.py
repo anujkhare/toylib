@@ -225,9 +225,17 @@ class Bundler:
 
         final_code = []
 
+        # `from __future__` imports must be the first statement in the file, so
+        # hoist them ahead of the section header and the other external imports.
+        external_imports = sorted(set(self.external_import_statements))
+        future_imports = [s for s in external_imports if s.startswith("from __future__")]
+        other_imports = [s for s in external_imports if not s.startswith("from __future__")]
+        if future_imports:
+            final_code.append("\n".join(future_imports))
+
         # Add all the external imports
         final_code.append(self._section_header("External Imports"))
-        final_code.append("\n".join(sorted(set(self.external_import_statements))))
+        final_code.append("\n".join(other_imports))
 
         # Add the code from the bundled modules in topological order
         for mod_id in self.topologically_sorted_modules:
