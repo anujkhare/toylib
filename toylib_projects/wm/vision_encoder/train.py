@@ -70,6 +70,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from toylib_projects.wm.vision_encoder import analyze as analyze_lib
 from toylib_projects.wm.vision_encoder import dataloader as dataloader_lib
 from toylib_projects.wm.vision_encoder import experiment as exp_lib
 from toylib_projects.wm.vision_encoder import metrics as metrics_lib
@@ -368,6 +369,8 @@ def main() -> exp_lib.Experiment:
         jit_computations=not args.no_jit,
     )
     exp.init_state()
+    # Print model / dataset / capacity stats once the model is built.
+    analyze_lib.print_all(exp, depth=2)
     try:
         exp.outer_loop()
     finally:

@@ -24,6 +24,7 @@ dependencies = [
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",
     "flax>=0.10.0",       # NNX modules for the VAE / DiT
+    "pandas>=2.0.0",      # param/dataset stats reporting in analyze.py
 ]
 
 [project.optional-dependencies]

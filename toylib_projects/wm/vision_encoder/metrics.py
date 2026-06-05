@@ -89,6 +89,7 @@ class ReconstructionVisualization:
 
     recon_aux_key: str = "recon"
     num_images: int = 8
+    gap_px: int = 4
 
     def __call__(
         self,
@@ -97,10 +98,13 @@ class ReconstructionVisualization:
         batch: jt.PyTree,
     ) -> dict[str, jt.Array]:
         del loss
-        inputs = batch[: self.num_images]  # already uint8 [0, 255]
+        inputs = batch[: self.num_images]  # (N, H, W, 3) uint8
         recon_f32 = aux[self.recon_aux_key][: self.num_images]  # float32 [-1, 1]
         recons = ((recon_f32 + 1.0) * 127.5).clip(0, 255).astype(jnp.uint8)
-        return {"input_images": inputs, "recon_images": recons}
+        n, h = inputs.shape[:2]
+        gap = jnp.full((n, h, self.gap_px, 3), 128, dtype=jnp.uint8)
+        comparison = jnp.concatenate([inputs, gap, recons], axis=2)
+        return {"recon_comparison": comparison}
 
 
 @dataclasses.dataclass
