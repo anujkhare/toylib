@@ -148,6 +148,9 @@ class Task:
     metrics: list[metrics_module.Metric] = dataclasses.field(
         default_factory=lambda: [metrics_module.Loss()]
     )
+    visualization_metrics: list[metrics_module.VisualizationMetric] = dataclasses.field(
+        default_factory=list
+    )
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -233,6 +236,10 @@ class Experiment:
 
     # Optional
     eval_task: Task | None = None
+    # If set, used instead of forward_fn for eval steps. Lets the eval pass
+    # return extra tensors (e.g. reconstructions for visualization) without
+    # bloating the training scan with large aux arrays.
+    eval_forward_fn: typing.Callable[..., tuple[jt.Array, jt.PyTree]] | None = None
     model_config: typing.Any = None
 
     training_config: TrainingConfig = dataclasses.field(default_factory=TrainingConfig)
@@ -375,9 +382,10 @@ class Experiment:
         return model, opt_state, averaged_metrics
 
     def _eval_step(self, model, batch):
-        """One sharded eval step. ``forward_fn`` is assumed to return ``(loss, aux)``."""
+        """One sharded eval step. Uses eval_forward_fn if set, else forward_fn."""
+        fwd = self.eval_forward_fn if self.eval_forward_fn is not None else self.forward_fn
         with jax.profiler.TraceAnnotation("eval_forward"):
-            loss_val, aux = self.forward_fn(model, batch)
+            loss_val, aux = fwd(model, batch)
         return self._compute_metrics(
             task=self.eval_task, loss=loss_val, aux=aux, batch=batch
         )
@@ -507,42 +515,67 @@ class Experiment:
     # ---- eval --------------------------------------------------------------
 
     def run_validation(self) -> dict[str, float]:
-        """Run validation and return averaged metrics (with ``val/`` prefix)."""
+        """Run validation and return averaged scalar metrics (with ``val/`` prefix).
+
+        Metric values with ndim == 0 are accumulated and averaged across batches.
+        Values with ndim > 0 are treated as image batches: those from the first
+        eval step are logged once via ``log_images`` and not averaged.
+        """
         self._assert_initialized()
         if self.eval_task is None:
             print("No eval task defined, skipping validation.")
             return {}
 
-        accumulated_metrics: dict | None = None
+        accumulated_scalars: dict | None = None
+        first_batch_images: dict | None = None
         num_batches = 0
+
         for ix, batch in enumerate(self.eval_task.dataset):
             batch_metrics = self.eval_step_fn(self.model, batch)
-            if accumulated_metrics is None:
-                accumulated_metrics = batch_metrics
+
+            scalars = {k: v for k, v in batch_metrics.items() if v.ndim == 0}
+            images = {k: v for k, v in batch_metrics.items() if v.ndim > 0}
+
+            if accumulated_scalars is None:
+                accumulated_scalars = scalars
             else:
-                accumulated_metrics = jax.tree.map(
-                    lambda x, y: x + y, accumulated_metrics, batch_metrics
+                accumulated_scalars = jax.tree.map(
+                    lambda x, y: x + y, accumulated_scalars, scalars
                 )
+            if first_batch_images is None and images:
+                first_batch_images = images
+
             num_batches += 1
             if ix >= self.eval_config.num_eval_steps:
                 break
 
         avg_metrics = jax.tree.map(
-            lambda x: float(x) / num_batches, accumulated_metrics
+            lambda x: float(x) / num_batches, accumulated_scalars
         )
         avg_metrics = {f"val/{k}": v for k, v in avg_metrics.items()}
         self.logger_obj.log(self.step, metrics=avg_metrics)
+
+        if first_batch_images:
+            for k, imgs in first_batch_images.items():
+                self.logger_obj.log_images(self.step, f"val/{k}", np.asarray(imgs))
+
         return avg_metrics
 
     def sampling_evaluation(self) -> None:
-        """Hook for image-domain sampling/reconstruction logging.
+        """Run generative VisualizationMetrics (outside JIT) and log resulting images.
 
-        No-op by default. Subclass and override to e.g. encode a fixed batch
-        of validation frames, decode, and log reconstructions to wandb. Kept
-        as a method on the base class so subclasses can call ``super().eval()``
-        without surprises.
+        These metrics don't consume an input batch — they generate images from the
+        model directly (e.g. decoding random prior latents). Reconstruction metrics
+        that read from ``aux`` belong in the regular ``metrics`` list on the task and
+        run inside the JIT-compiled eval step instead.
         """
-        return
+        if self.eval_task is None or not self.eval_task.visualization_metrics:
+            return
+
+        for metric in self.eval_task.visualization_metrics:
+            images = metric(self.model)
+            for key, imgs in images.items():
+                self.logger_obj.log_images(self.step, f"val/{key}", np.asarray(imgs))
 
     def eval(self):
         self._assert_initialized()

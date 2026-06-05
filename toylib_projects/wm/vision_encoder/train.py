@@ -93,24 +93,48 @@ def make_model_factory() -> typing.Callable:
 
 
 def make_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
-    """Build a ``(model, batch) -> (loss, aux)`` closure for ``Experiment``.
+    """Build a ``(model, batch) -> (loss, aux)`` closure for training.
 
-    Normalizes uint8 frames to ``[-1, 1]`` float32 before calling
-    ``vae_loss``. ``beta`` is the constant KL weight applied at every step
-    (see the module docstring for why we don't yet do warmup here).
+    Strips all large tensors from aux — only scalar losses pass through the
+    microbatch scan to keep memory flat.
     """
     fixed_key = jax.random.key(rng_seed)
 
     def forward_fn(model: model_lib.VAE, batch):
-        # batch shape: (B, H, W, 3) uint8. Normalize to (B, H, W, 3) float32 in [-1, 1].
         frames = batch.astype(jnp.float32) / 127.5 - 1.0
         loss, aux = model_lib.vae_loss(model, frames, rng_key=fixed_key, beta=beta)
-        # Only return the scalar pieces the metric/log layer cares about —
-        # passing the full recon/mu/log_sigma_sq tensors through the metric
-        # accumulator would explode batch * shape memory needlessly.
         return loss, {"l_rec": aux["l_rec"], "l_kl": aux["l_kl"]}
 
     return forward_fn
+
+
+def make_eval_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
+    """Like ``make_forward_fn`` but also returns ``recon`` in aux for visualization."""
+    fixed_key = jax.random.key(rng_seed)
+
+    def eval_forward_fn(model: model_lib.VAE, batch):
+        frames = batch.astype(jnp.float32) / 127.5 - 1.0
+        loss, aux = model_lib.vae_loss(model, frames, rng_key=fixed_key, beta=beta)
+        return loss, {"l_rec": aux["l_rec"], "l_kl": aux["l_kl"], "recon": aux["recon"]}
+
+    return eval_forward_fn
+
+
+def make_sample_fn(latent_channels: int) -> typing.Callable:
+    """Return a ``(model, key, n) -> uint8 images`` function for prior sampling.
+
+    Samples ``n`` latents from ``N(0, I)`` at the encoder's output spatial size
+    (16×16 for 128×128 inputs with 8× downsampling), decodes them, and converts
+    the float32 ``[-1, 1]`` output to uint8 ``[0, 255]``.
+    """
+    latent_spatial = 16  # 128 / 8x encoder downsampling
+
+    def sample_fn(model: model_lib.VAE, key, n: int):
+        z = jax.random.normal(key, shape=(n, latent_spatial, latent_spatial, latent_channels))
+        recon = model.decode(z)  # (n, 128, 128, 3) float32 in [-1, 1]
+        return jnp.clip((recon + 1.0) * 127.5, 0, 255).astype(jnp.uint8)
+
+    return sample_fn
 
 
 @dataclasses.dataclass
@@ -150,6 +174,9 @@ def create_experiment(
     checkpoint_dir: str = "/tmp/wm_vae_ckpt",
     log_dir: str = "/tmp/wm_vae_logs",
     run_id: str | None = None,
+    # Visualization
+    num_recon_images: int = 8,
+    num_prior_samples: int = 16,
     # Logger selection: if ``wandb_project`` is set, log to W&B; otherwise
     # fall back to the local JSONL FileLogger. Smoke tests and CI typically
     # leave ``wandb_project`` unset.
@@ -192,7 +219,17 @@ def create_experiment(
         eval_task = exp_lib.Task(
             name="val",
             dataset=val_ds,
-            metrics=[metrics_lib.Loss(), VaeAuxMetric()],
+            metrics=[
+                metrics_lib.Loss(),
+                VaeAuxMetric(),
+                metrics_lib.ReconstructionVisualization(num_images=num_recon_images),
+            ],
+            visualization_metrics=[
+                metrics_lib.PriorSamplingVisualization(
+                    sample_fn=make_sample_fn(latent_channels),
+                    num_samples=num_prior_samples,
+                ),
+            ],
         )
 
     # ── Optimizer ───────────────────────────────────────────────────────
@@ -225,6 +262,7 @@ def create_experiment(
         train_task=train_task,
         eval_task=eval_task,
         forward_fn=make_forward_fn(beta=beta),
+        eval_forward_fn=make_eval_forward_fn(beta=beta) if eval_task is not None else None,
         model_factory=make_model_factory(),
         model_config=model_lib.ModelConfig(
             base_ch=base_ch,

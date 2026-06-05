@@ -18,6 +18,8 @@ import datetime
 import json
 import os
 
+import numpy as np
+
 
 class Logger(abc.ABC):
     """Interface for logging training metrics."""
@@ -28,6 +30,10 @@ class Logger(abc.ABC):
     @abc.abstractmethod
     def log(self, step: int, metrics: dict) -> None:
         """Log the given metrics at the specified step."""
+        pass
+
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        """Log a uint8 (N, H, W, 3) image batch. No-op if not overridden."""
         pass
 
     @abc.abstractmethod
@@ -70,6 +76,10 @@ class WandBLogger(Logger):
         metrics["global_step"] = step
         self.run.log(metrics)
 
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        import wandb
+        self.run.log({key: [wandb.Image(img) for img in images], "global_step": step})
+
     def close(self) -> None:
         self.run.finish()
 
@@ -98,6 +108,23 @@ class FileLogger(Logger):
         self.file_ptr.write(json.dumps(metrics, default=str) + "\n")
         self.file_ptr.flush()
 
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        try:
+            import math
+            from PIL import Image as PILImage
+            n, h, w, c = images.shape
+            ncols = min(n, 4)
+            nrows = math.ceil(n / ncols)
+            grid = np.zeros((nrows * h, ncols * w, c), dtype=np.uint8)
+            for i, img in enumerate(images):
+                r, col = divmod(i, ncols)
+                grid[r * h:(r + 1) * h, col * w:(col + 1) * w] = img
+            out_dir = os.path.dirname(self.file_ptr.name)
+            fname = f"step{step:07d}_{key.replace('/', '_')}.png"
+            PILImage.fromarray(grid).save(os.path.join(out_dir, fname))
+        except ImportError:
+            pass
+
     def close(self) -> None:
         self.file_ptr.close()
 
@@ -111,6 +138,9 @@ class StdoutLogger(Logger):
     def log(self, step: int, metrics: dict) -> None:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp}] Step {step}: {metrics}")
+
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        print(f"[Step {step}] {key}: {images.shape} uint8 images")
 
     def close(self) -> None:
         pass

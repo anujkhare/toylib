@@ -2,6 +2,7 @@
 # External Imports
 # ============================================================
 
+from PIL import Image as PILImage
 from __future__ import annotations
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from pathlib import Path
@@ -262,6 +263,10 @@ class Logger(abc.ABC):
         """Log the given metrics at the specified step."""
         pass
 
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        """Log a uint8 (N, H, W, 3) image batch. No-op if not overridden."""
+        pass
+
     @abc.abstractmethod
     def close(self) -> None:
         """Close any resources held by the logger."""
@@ -300,6 +305,9 @@ class WandBLogger(Logger):
         metrics["global_step"] = step
         self.run.log(metrics)
 
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        self.run.log({key: [wandb.Image(img) for img in images], "global_step": step})
+
     def close(self) -> None:
         self.run.finish()
 
@@ -328,6 +336,21 @@ class FileLogger(Logger):
         self.file_ptr.write(json.dumps(metrics, default=str) + "\n")
         self.file_ptr.flush()
 
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        try:
+            n, h, w, c = images.shape
+            ncols = min(n, 4)
+            nrows = math.ceil(n / ncols)
+            grid = np.zeros((nrows * h, ncols * w, c), dtype=np.uint8)
+            for i, img in enumerate(images):
+                r, col = divmod(i, ncols)
+                grid[r * h : (r + 1) * h, col * w : (col + 1) * w] = img
+            out_dir = os.path.dirname(self.file_ptr.name)
+            fname = f"step{step:07d}_{key.replace('/', '_')}.png"
+            PILImage.fromarray(grid).save(os.path.join(out_dir, fname))
+        except ImportError:
+            pass
+
     def close(self) -> None:
         self.file_ptr.close()
 
@@ -341,6 +364,9 @@ class StdoutLogger(Logger):
     def log(self, step: int, metrics: dict) -> None:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp}] Step {step}: {metrics}")
+
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        print(f"[Step {step}] {key}: {images.shape} uint8 images")
 
     def close(self) -> None:
         pass
@@ -389,6 +415,73 @@ class Loss:
     ) -> dict[str, jt.Array]:
         del aux, batch
         return {"loss": loss}
+
+
+class VisualizationMetric(typing.Protocol):
+    """Protocol for generative image metrics that run outside JIT.
+
+    Unlike ``Metric``, these don't consume an input batch — they generate images
+    directly from the model (e.g. decoding random latents). Each call returns a
+    dict of ``{name: (N, H, W, 3) uint8 ndarray}`` logged via ``logger.log_images``.
+
+    For reconstruction visualization (encoding then decoding real frames), use
+    ``ReconstructionVisualization`` which implements the standard ``Metric``
+    protocol and runs inside the JIT-compiled eval step via ``aux``.
+    """
+
+    def __call__(self, model: typing.Any) -> dict[str, np.ndarray]: ...
+
+
+@dataclasses.dataclass
+class ReconstructionVisualization:
+    """Return input frames and their VAE reconstructions from the eval forward pass.
+
+    Implements the standard ``Metric`` protocol so it runs inside the JIT-compiled
+    eval step. The eval ``forward_fn`` must include ``"recon"`` in the returned
+    ``aux`` dict (float32, ``[-1, 1]``). Both outputs are converted to uint8
+    ``[0, 255]`` before being returned for logging.
+
+    Args:
+        recon_aux_key: Key in ``aux`` where the eval forward_fn stores reconstructed
+            frames as float32 in ``[-1, 1]``.
+        num_images: How many images from the batch to return.
+    """
+
+    recon_aux_key: str = "recon"
+    num_images: int = 8
+
+    def __call__(
+        self, loss: float, aux: jt.PyTree, batch: jt.PyTree
+    ) -> dict[str, jt.Array]:
+        del loss
+        inputs = batch[: self.num_images]
+        recon_f32 = aux[self.recon_aux_key][: self.num_images]
+        recons = ((recon_f32 + 1.0) * 127.5).clip(0, 255).astype(jnp.uint8)
+        return {"input_images": inputs, "recon_images": recons}
+
+
+@dataclasses.dataclass
+class PriorSamplingVisualization:
+    """Log images decoded from randomly sampled latents.
+
+    The PRNG key is derived from ``seed`` and held fixed across evals so
+    outputs are directly comparable over the course of training.
+
+    Args:
+        sample_fn: ``(model, key, n) -> images`` where ``images`` is
+            ``(n, H, W, 3)`` uint8.
+        num_samples: Number of images to generate.
+        seed: Fixed seed for the sampling key.
+    """
+
+    sample_fn: typing.Callable[..., np.ndarray]
+    num_samples: int = 16
+    seed: int = 42
+
+    def __call__(self, model: typing.Any) -> dict[str, np.ndarray]:
+        key = jax.random.key(self.seed)
+        samples = self.sample_fn(model, key, self.num_samples)
+        return {"prior_samples": np.asarray(samples)}
 
 
 # ============================================================
@@ -514,6 +607,9 @@ class Task:
     name: str
     dataset: Hdf5FramesDataset
     metrics: list[Metric] = dataclasses.field(default_factory=lambda: [Loss()])
+    visualization_metrics: list[VisualizationMetric] = dataclasses.field(
+        default_factory=list
+    )
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -590,6 +686,7 @@ class Experiment:
     forward_fn: typing.Callable[..., tuple[jt.Array, jt.PyTree]]
     model_factory: typing.Callable[..., typing.Any]
     eval_task: Task | None = None
+    eval_forward_fn: typing.Callable[..., tuple[jt.Array, jt.PyTree]] | None = None
     model_config: typing.Any = None
     training_config: TrainingConfig = dataclasses.field(default_factory=TrainingConfig)
     eval_config: EvalConfig = dataclasses.field(default_factory=EvalConfig)
@@ -702,9 +799,14 @@ class Experiment:
         return (model, opt_state, averaged_metrics)
 
     def _eval_step(self, model, batch):
-        """One sharded eval step. ``forward_fn`` is assumed to return ``(loss, aux)``."""
+        """One sharded eval step. Uses eval_forward_fn if set, else forward_fn."""
+        fwd = (
+            self.eval_forward_fn
+            if self.eval_forward_fn is not None
+            else self.forward_fn
+        )
         with jax.profiler.TraceAnnotation("eval_forward"):
-            loss_val, aux = self.forward_fn(model, batch)
+            loss_val, aux = fwd(model, batch)
         return self._compute_metrics(
             task=self.eval_task, loss=loss_val, aux=aux, batch=batch
         )
@@ -809,40 +911,58 @@ class Experiment:
         self.step = step
 
     def run_validation(self) -> dict[str, float]:
-        """Run validation and return averaged metrics (with ``val/`` prefix)."""
+        """Run validation and return averaged scalar metrics (with ``val/`` prefix).
+
+        Metric values with ndim == 0 are accumulated and averaged across batches.
+        Values with ndim > 0 are treated as image batches: those from the first
+        eval step are logged once via ``log_images`` and not averaged.
+        """
         self._assert_initialized()
         if self.eval_task is None:
             print("No eval task defined, skipping validation.")
             return {}
-        accumulated_metrics: dict | None = None
+        accumulated_scalars: dict | None = None
+        first_batch_images: dict | None = None
         num_batches = 0
         for ix, batch in enumerate(self.eval_task.dataset):
             batch_metrics = self.eval_step_fn(self.model, batch)
-            if accumulated_metrics is None:
-                accumulated_metrics = batch_metrics
+            scalars = {k: v for k, v in batch_metrics.items() if v.ndim == 0}
+            images = {k: v for k, v in batch_metrics.items() if v.ndim > 0}
+            if accumulated_scalars is None:
+                accumulated_scalars = scalars
             else:
-                accumulated_metrics = jax.tree.map(
-                    lambda x, y: x + y, accumulated_metrics, batch_metrics
+                accumulated_scalars = jax.tree.map(
+                    lambda x, y: x + y, accumulated_scalars, scalars
                 )
+            if first_batch_images is None and images:
+                first_batch_images = images
             num_batches += 1
             if ix >= self.eval_config.num_eval_steps:
                 break
         avg_metrics = jax.tree.map(
-            lambda x: float(x) / num_batches, accumulated_metrics
+            lambda x: float(x) / num_batches, accumulated_scalars
         )
         avg_metrics = {f"val/{k}": v for k, v in avg_metrics.items()}
         self.logger_obj.log(self.step, metrics=avg_metrics)
+        if first_batch_images:
+            for k, imgs in first_batch_images.items():
+                self.logger_obj.log_images(self.step, f"val/{k}", np.asarray(imgs))
         return avg_metrics
 
     def sampling_evaluation(self) -> None:
-        """Hook for image-domain sampling/reconstruction logging.
+        """Run generative VisualizationMetrics (outside JIT) and log resulting images.
 
-        No-op by default. Subclass and override to e.g. encode a fixed batch
-        of validation frames, decode, and log reconstructions to wandb. Kept
-        as a method on the base class so subclasses can call ``super().eval()``
-        without surprises.
+        These metrics don't consume an input batch — they generate images from the
+        model directly (e.g. decoding random prior latents). Reconstruction metrics
+        that read from ``aux`` belong in the regular ``metrics`` list on the task and
+        run inside the JIT-compiled eval step instead.
         """
-        return
+        if self.eval_task is None or not self.eval_task.visualization_metrics:
+            return
+        for metric in self.eval_task.visualization_metrics:
+            images = metric(self.model)
+            for key, imgs in images.items():
+                self.logger_obj.log_images(self.step, f"val/{key}", np.asarray(imgs))
 
     def eval(self):
         self._assert_initialized()
@@ -2092,11 +2212,10 @@ def make_model_factory() -> typing.Callable:
 
 
 def make_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
-    """Build a ``(model, batch) -> (loss, aux)`` closure for ``Experiment``.
+    """Build a ``(model, batch) -> (loss, aux)`` closure for training.
 
-    Normalizes uint8 frames to ``[-1, 1]`` float32 before calling
-    ``vae_loss``. ``beta`` is the constant KL weight applied at every step
-    (see the module docstring for why we don't yet do warmup here).
+    Strips all large tensors from aux — only scalar losses pass through the
+    microbatch scan to keep memory flat.
     """
     fixed_key = jax.random.key(rng_seed)
 
@@ -2106,6 +2225,40 @@ def make_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
         return (loss, {"l_rec": aux["l_rec"], "l_kl": aux["l_kl"]})
 
     return forward_fn
+
+
+def make_eval_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
+    """Like ``make_forward_fn`` but also returns ``recon`` in aux for visualization."""
+    fixed_key = jax.random.key(rng_seed)
+
+    def eval_forward_fn(model: VAE, batch):
+        frames = batch.astype(jnp.float32) / 127.5 - 1.0
+        loss, aux = vae_loss(model, frames, rng_key=fixed_key, beta=beta)
+        return (
+            loss,
+            {"l_rec": aux["l_rec"], "l_kl": aux["l_kl"], "recon": aux["recon"]},
+        )
+
+    return eval_forward_fn
+
+
+def make_sample_fn(latent_channels: int) -> typing.Callable:
+    """Return a ``(model, key, n) -> uint8 images`` function for prior sampling.
+
+    Samples ``n`` latents from ``N(0, I)`` at the encoder's output spatial size
+    (16×16 for 128×128 inputs with 8× downsampling), decodes them, and converts
+    the float32 ``[-1, 1]`` output to uint8 ``[0, 255]``.
+    """
+    latent_spatial = 16
+
+    def sample_fn(model: VAE, key, n: int):
+        z = jax.random.normal(
+            key, shape=(n, latent_spatial, latent_spatial, latent_channels)
+        )
+        recon = model.decode(z)
+        return jnp.clip((recon + 1.0) * 127.5, 0, 255).astype(jnp.uint8)
+
+    return sample_fn
 
 
 @dataclasses.dataclass
@@ -2137,6 +2290,8 @@ def create_experiment(
     checkpoint_dir: str = "/tmp/wm_vae_ckpt",
     log_dir: str = "/tmp/wm_vae_logs",
     run_id: str | None = None,
+    num_recon_images: int = 8,
+    num_prior_samples: int = 16,
     wandb_project: str | None = None,
     wandb_user: str | None = None,
     seed: int = 0,
@@ -2166,7 +2321,21 @@ def create_experiment(
             drop_remainder=True,
             repeat=False,
         )
-        eval_task = Task(name="val", dataset=val_ds, metrics=[Loss(), VaeAuxMetric()])
+        eval_task = Task(
+            name="val",
+            dataset=val_ds,
+            metrics=[
+                Loss(),
+                VaeAuxMetric(),
+                ReconstructionVisualization(num_images=num_recon_images),
+            ],
+            visualization_metrics=[
+                PriorSamplingVisualization(
+                    sample_fn=make_sample_fn(latent_channels),
+                    num_samples=num_prior_samples,
+                )
+            ],
+        )
     optimizer_config = MultiOptimizerConfig(
         optimizer_configs=[
             OptimizerConfig(
@@ -2190,6 +2359,9 @@ def create_experiment(
         train_task=train_task,
         eval_task=eval_task,
         forward_fn=make_forward_fn(beta=beta),
+        eval_forward_fn=make_eval_forward_fn(beta=beta)
+        if eval_task is not None
+        else None,
         model_factory=make_model_factory(),
         model_config=ModelConfig(base_ch=base_ch, latent_channels=latent_channels),
         training_config=TrainingConfig(
