@@ -130,7 +130,9 @@ def make_sample_fn(latent_channels: int) -> typing.Callable:
     latent_spatial = 16  # 128 / 8x encoder downsampling
 
     def sample_fn(model: model_lib.VAE, key, n: int):
-        z = jax.random.normal(key, shape=(n, latent_spatial, latent_spatial, latent_channels))
+        z = jax.random.normal(
+            key, shape=(n, latent_spatial, latent_spatial, latent_channels)
+        )
         recon = model.decode(z)  # (n, 128, 128, 3) float32 in [-1, 1]
         return jnp.clip((recon + 1.0) * 127.5, 0, 255).astype(jnp.uint8)
 
@@ -216,7 +218,7 @@ def create_experiment(
             # Keep the final partial batch so small val splits (fewer frames than
             # batch_size) still produce a batch instead of an empty iterator.
             drop_remainder=False,
-            repeat=False,
+            repeat=True,
         )
         eval_task = exp_lib.Task(
             name="val",
@@ -264,7 +266,9 @@ def create_experiment(
         train_task=train_task,
         eval_task=eval_task,
         forward_fn=make_forward_fn(beta=beta),
-        eval_forward_fn=make_eval_forward_fn(beta=beta) if eval_task is not None else None,
+        eval_forward_fn=make_eval_forward_fn(beta=beta)
+        if eval_task is not None
+        else None,
         model_factory=make_model_factory(),
         model_config=model_lib.ModelConfig(
             base_ch=base_ch,

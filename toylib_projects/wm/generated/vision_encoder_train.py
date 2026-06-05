@@ -55,13 +55,10 @@ text loader doesn't apply to images. We only share the ``DatasetState``
 checkpointing protocol.
 """
 
-
 @dataclasses.dataclass
 class DatasetState:
     """Serializable state for dataset checkpointing."""
-
     pass
-
 
 @dataclasses.dataclass
 class Hdf5FramesDatasetState(DatasetState):
@@ -71,9 +68,7 @@ class Hdf5FramesDatasetState(DatasetState):
     shuffled stream). Kept as a dict — Grain's get/set_state already returns
     a dict — so this trivially round-trips through json/orbax.
     """
-
     sampler_state: dict = dataclasses.field(default_factory=dict)
-
 
 class _Hdf5FramesSource:
     """Grain RandomAccessDataSource backed by one compiled vae_*.h5 file.
@@ -92,10 +87,10 @@ class _Hdf5FramesSource:
     def __init__(self, dataset_path: str) -> None:
         self._path = str(dataset_path)
         self._f: typing.Optional[h5py.File] = None
-        with h5py.File(self._path, "r") as f:
-            self._n = int(f.attrs["n_frames"])
-            self._height = int(f.attrs["height"])
-            self._width = int(f.attrs["width"])
+        with h5py.File(self._path, 'r') as f:
+            self._n = int(f.attrs['n_frames'])
+            self._height = int(f.attrs['height'])
+            self._width = int(f.attrs['width'])
 
     @property
     def frame_shape(self) -> tuple[int, int, int]:
@@ -103,27 +98,20 @@ class _Hdf5FramesSource:
 
     def _ensure_open(self) -> None:
         if self._f is None:
-            self._f = h5py.File(self._path, "r")
+            self._f = h5py.File(self._path, 'r')
 
     def __len__(self) -> int:
         return self._n
 
     def __getitem__(self, idx: int) -> np.ndarray:
         self._ensure_open()
-        return self._f["frames"][idx]
+        return self._f['frames'][idx]
 
     def __getstate__(self) -> dict:
-        return {
-            "_path": self._path,
-            "_f": None,
-            "_n": self._n,
-            "_height": self._height,
-            "_width": self._width,
-        }
+        return {'_path': self._path, '_f': None, '_n': self._n, '_height': self._height, '_width': self._width}
 
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
-
 
 @dataclasses.dataclass
 class Hdf5FramesDataset:
@@ -155,7 +143,6 @@ class Hdf5FramesDataset:
         Drop the last partial batch (so every batch has exactly
         ``batch_size`` frames).
     """
-
     dataset_path: str
     batch_size: int = 64
     seed: int = 0
@@ -208,7 +195,7 @@ class Hdf5FramesDataset:
                 break
             epoch += 1
 
-    def __iter__(self) -> "Hdf5FramesDataset":
+    def __iter__(self) -> 'Hdf5FramesDataset':
         return self
 
     def __next__(self) -> jnp.ndarray:
@@ -217,7 +204,7 @@ class Hdf5FramesDataset:
     def get_state(self) -> dict[str, typing.Any]:
         """Capture the current shuffled-iterator position for checkpointing."""
         if self._grain_iterator is None:
-            raise RuntimeError("Iterator not initialized; call __post_init__ first.")
+            raise RuntimeError('Iterator not initialized; call __post_init__ first.')
         self._state.sampler_state = self._grain_iterator.get_state()
         return dataclasses.asdict(self._state)
 
@@ -231,7 +218,6 @@ class Hdf5FramesDataset:
         """
         self._state = Hdf5FramesDatasetState(**state)
         self.dataset_iter = self._make_iterator()
-
 
 # ============================================================
 # toylib_projects.wm.vision_encoder.logger - /Users/anuj/Desktop/code/toylib/toylib_projects/wm/vision_encoder/logger.py
@@ -251,7 +237,6 @@ Three sinks are provided:
 All three share the ``Logger`` ABC so the experiment can swap them via
 config without touching the training loop.
 """
-
 
 class Logger(abc.ABC):
     """Interface for logging training metrics."""
@@ -279,62 +264,39 @@ class Logger(abc.ABC):
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-
 class WandBLogger(Logger):
     """Logger implementation using Weights and Biases (wandb)."""
 
-    def __init__(
-        self,
-        config_dict: dict,
-        project_name: str,
-        user_name: str,
-        run_id: str | None = None,
-        *args,
-        **kwargs,
-    ) -> None:
+    def __init__(self, config_dict: dict, project_name: str, user_name: str, run_id: str | None=None, *args, **kwargs) -> None:
         self.config_dict = config_dict
-        self.run = wandb.init(
-            entity=user_name,
-            project=project_name,
-            config=self.config_dict,
-            id=run_id,
-            resume="allow",
-        )
-        self.run.define_metric("*", step_metric="global_step")
+        self.run = wandb.init(entity=user_name, project=project_name, config=self.config_dict, id=run_id, resume='allow')
+        self.run.define_metric('*', step_metric='global_step')
 
     def log(self, step: int, metrics: dict) -> None:
-        metrics["global_step"] = step
+        metrics['global_step'] = step
         self.run.log(metrics)
 
     def log_images(self, step: int, key: str, images: np.ndarray) -> None:
-        self.run.log({key: [wandb.Image(img) for img in images], "global_step": step})
+        self.run.log({key: [wandb.Image(img) for img in images], 'global_step': step})
 
     def close(self) -> None:
         self.run.finish()
 
-
 class FileLogger(Logger):
     """Logger implementation that logs metrics to a local file."""
 
-    def __init__(
-        self,
-        config_dict: dict,
-        output_path: str,
-        run_id: str | None = None,
-        *args,
-        **kwargs,
-    ) -> None:
+    def __init__(self, config_dict: dict, output_path: str, run_id: str | None=None, *args, **kwargs) -> None:
         self.config_dict = config_dict
-        label = run_id or datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        label = run_id or datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
         os.makedirs(output_path, exist_ok=True)
-        self.file_ptr = open(os.path.join(output_path, f"logs_{label}.txt"), "w")
-        self.file_ptr.write("\n")
+        self.file_ptr = open(os.path.join(output_path, f'logs_{label}.txt'), 'w')
+        self.file_ptr.write('\n')
 
     def log(self, step: int, metrics: dict) -> None:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        metrics["timestamp"] = timestamp
-        metrics["step"] = step
-        self.file_ptr.write(json.dumps(metrics, default=str) + "\n")
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        metrics['timestamp'] = timestamp
+        metrics['step'] = step
+        self.file_ptr.write(json.dumps(metrics, default=str) + '\n')
         self.file_ptr.flush()
 
     def log_images(self, step: int, key: str, images: np.ndarray) -> None:
@@ -345,7 +307,7 @@ class FileLogger(Logger):
             grid = np.zeros((nrows * h, ncols * w, c), dtype=np.uint8)
             for i, img in enumerate(images):
                 r, col = divmod(i, ncols)
-                grid[r * h : (r + 1) * h, col * w : (col + 1) * w] = img
+                grid[r * h:(r + 1) * h, col * w:(col + 1) * w] = img
             out_dir = os.path.dirname(self.file_ptr.name)
             fname = f"step{step:07d}_{key.replace('/', '_')}.png"
             PILImage.fromarray(grid).save(os.path.join(out_dir, fname))
@@ -355,7 +317,6 @@ class FileLogger(Logger):
     def close(self) -> None:
         self.file_ptr.close()
 
-
 class StdoutLogger(Logger):
     """Logger implementation that logs metrics to standard output."""
 
@@ -363,15 +324,14 @@ class StdoutLogger(Logger):
         self.config_dict = config_dict
 
     def log(self, step: int, metrics: dict) -> None:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{timestamp}] Step {step}: {metrics}")
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f'[{timestamp}] Step {step}: {metrics}')
 
     def log_images(self, step: int, key: str, images: np.ndarray) -> None:
-        print(f"[Step {step}] {key}: {images.shape} uint8 images")
+        print(f'[Step {step}] {key}: {images.shape} uint8 images')
 
     def close(self) -> None:
         pass
-
 
 # ============================================================
 # toylib_projects.wm.vision_encoder.metrics - /Users/anuj/Desktop/code/toylib/toylib_projects/wm/vision_encoder/metrics.py
@@ -390,13 +350,10 @@ metrics (PSNR, SSIM, reconstruction MSE per pixel, per-mode FID, etc.) are
 deferred to the model-author — they're not infrastructure.
 """
 
-
 class Metric(typing.Protocol):
     """Protocol for computing and accumulating metrics."""
 
-    def __call__(
-        self, loss: float, aux: jt.PyTree, batch: jt.PyTree
-    ) -> dict[str, jt.Array]:
+    def __call__(self, loss: float, aux: jt.PyTree, batch: jt.PyTree) -> dict[str, jt.Array]:
         """Compute final metric value(s) for the given inputs.
 
         Args:
@@ -406,17 +363,13 @@ class Metric(typing.Protocol):
         """
         pass
 
-
 @dataclasses.dataclass
 class Loss:
     """Pass-through metric that returns the loss value."""
 
-    def __call__(
-        self, loss: float, aux: jt.PyTree, batch: jt.PyTree
-    ) -> dict[str, jt.Array]:
+    def __call__(self, loss: float, aux: jt.PyTree, batch: jt.PyTree) -> dict[str, jt.Array]:
         del aux, batch
-        return {"loss": loss}
-
+        return {'loss': loss}
 
 class VisualizationMetric(typing.Protocol):
     """Protocol for generative image metrics that run outside JIT.
@@ -430,8 +383,8 @@ class VisualizationMetric(typing.Protocol):
     protocol and runs inside the JIT-compiled eval step via ``aux``.
     """
 
-    def __call__(self, model: typing.Any) -> dict[str, np.ndarray]: ...
-
+    def __call__(self, model: typing.Any) -> dict[str, np.ndarray]:
+        ...
 
 @dataclasses.dataclass
 class ReconstructionVisualization:
@@ -447,19 +400,15 @@ class ReconstructionVisualization:
             frames as float32 in ``[-1, 1]``.
         num_images: How many images from the batch to return.
     """
-
-    recon_aux_key: str = "recon"
+    recon_aux_key: str = 'recon'
     num_images: int = 8
 
-    def __call__(
-        self, loss: float, aux: jt.PyTree, batch: jt.PyTree
-    ) -> dict[str, jt.Array]:
+    def __call__(self, loss: float, aux: jt.PyTree, batch: jt.PyTree) -> dict[str, jt.Array]:
         del loss
-        inputs = batch[: self.num_images]
-        recon_f32 = aux[self.recon_aux_key][: self.num_images]
+        inputs = batch[:self.num_images]
+        recon_f32 = aux[self.recon_aux_key][:self.num_images]
         recons = ((recon_f32 + 1.0) * 127.5).clip(0, 255).astype(jnp.uint8)
-        return {"input_images": inputs, "recon_images": recons}
-
+        return {'input_images': inputs, 'recon_images': recons}
 
 @dataclasses.dataclass
 class PriorSamplingVisualization:
@@ -474,7 +423,6 @@ class PriorSamplingVisualization:
         num_samples: Number of images to generate.
         seed: Fixed seed for the sampling key.
     """
-
     sample_fn: typing.Callable[..., np.ndarray]
     num_samples: int = 16
     seed: int = 42
@@ -482,8 +430,7 @@ class PriorSamplingVisualization:
     def __call__(self, model: typing.Any) -> dict[str, np.ndarray]:
         key = jax.random.key(self.seed)
         samples = self.sample_fn(model, key, self.num_samples)
-        return {"prior_samples": np.asarray(samples)}
-
+        return {'prior_samples': np.asarray(samples)}
 
 # ============================================================
 # toylib_projects.wm.vision_encoder.experiment - /Users/anuj/Desktop/code/toylib/toylib_projects/wm/vision_encoder/experiment.py
@@ -555,39 +502,31 @@ Intended usage (sketch)
     exp.cleanup()
 """
 
-
 @dataclasses.dataclass
 class CheckpointConfig:
     save_interval_steps: int = 5000
     max_to_keep: typing.Optional[int] = 10
-    checkpoint_dir: str = "/tmp/checkpoints"
+    checkpoint_dir: str = '/tmp/checkpoints'
     checkpoint_dataset_iterator: bool = False
-
 
 @dataclasses.dataclass
 class OptimizerConfig:
     """Configuration for a single optimizer."""
-
     name: str
     optimizer: optax.GradientTransformation
-
 
 @dataclasses.dataclass
 class MultiOptimizerConfig:
     """Configuration for multi-optimizer training (e.g. different lr for VAE encoder vs decoder)."""
-
     optimizer_configs: list[OptimizerConfig]
     optimizer_for_param: typing.Callable[[tuple], str]
 
     def build_optimizer_map(self) -> dict[str, optax.GradientTransformation]:
         if not self.optimizer_configs:
-            raise ValueError("multi_optimizer_config.optimizer_configs cannot be empty")
-        optimizer_map = {
-            config.name: config.optimizer for config in self.optimizer_configs
-        }
+            raise ValueError('multi_optimizer_config.optimizer_configs cannot be empty')
+        optimizer_map = {config.name: config.optimizer for config in self.optimizer_configs}
         assert len(optimizer_map) == len(self.optimizer_configs)
         return optimizer_map
-
 
 @dataclasses.dataclass
 class TrainingConfig:
@@ -596,51 +535,36 @@ class TrainingConfig:
     num_microbatches: int = 1
     max_grad_norm: float = 0.0
 
-
 @dataclasses.dataclass
 class EvalConfig:
     eval_interval_steps: int = 500
     num_eval_steps: int = 1
-
 
 @dataclasses.dataclass
 class Task:
     name: str
     dataset: Hdf5FramesDataset
     metrics: list[Metric] = dataclasses.field(default_factory=lambda: [Loss()])
-    visualization_metrics: list[VisualizationMetric] = dataclasses.field(
-        default_factory=list
-    )
-
+    visualization_metrics: list[VisualizationMetric] = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass(kw_only=True)
 class LoggerConfig:
     logger_cls: type[Logger] = FileLogger
-    log_dir: str = "/tmp/"
+    log_dir: str = '/tmp/'
     run_id: str | None = None
     train_log_interval_steps: int = 1
 
     def build_logger(self, config_dict: dict) -> Logger:
-        return self.logger_cls(
-            config_dict=config_dict, output_path=self.log_dir, run_id=self.run_id
-        )
-
+        return self.logger_cls(config_dict=config_dict, output_path=self.log_dir, run_id=self.run_id)
 
 @dataclasses.dataclass
 class WandBLoggerConfig(LoggerConfig):
     logger_cls: type[Logger] = WandBLogger
-    project_name: str = ""
-    user_name: str = ""
+    project_name: str = ''
+    user_name: str = ''
 
     def build_logger(self, config_dict: dict) -> Logger:
-        return self.logger_cls(
-            config_dict=config_dict,
-            output_path=self.log_dir,
-            project_name=self.project_name,
-            user_name=self.user_name,
-            run_id=self.run_id,
-        )
-
+        return self.logger_cls(config_dict=config_dict, output_path=self.log_dir, project_name=self.project_name, user_name=self.user_name, run_id=self.run_id)
 
 def _serialize_dataclass_config(config) -> dict:
     """Recursively convert dataclasses to dicts, leaving non-dataclass values alone.
@@ -666,7 +590,6 @@ def _serialize_dataclass_config(config) -> dict:
         return config
     return repr(config)
 
-
 @dataclasses.dataclass
 class Experiment:
     """Generic training harness for the vision-encoder pipeline.
@@ -682,7 +605,6 @@ class Experiment:
 
     Optional fields default to sensible scaffolding values.
     """
-
     train_task: Task
     forward_fn: typing.Callable[..., tuple[jt.Array, jt.PyTree]]
     model_factory: typing.Callable[..., typing.Any]
@@ -691,47 +613,30 @@ class Experiment:
     model_config: typing.Any = None
     training_config: TrainingConfig = dataclasses.field(default_factory=TrainingConfig)
     eval_config: EvalConfig = dataclasses.field(default_factory=EvalConfig)
-    checkpoint_config: CheckpointConfig = dataclasses.field(
-        default_factory=CheckpointConfig
-    )
+    checkpoint_config: CheckpointConfig = dataclasses.field(default_factory=CheckpointConfig)
     logger_config: LoggerConfig = dataclasses.field(default_factory=LoggerConfig)
     seed: int = 0
     jit_computations: bool = True
 
     def _validate_configs(self) -> None:
         train_batch_size = self.train_task.dataset.batch_size
-        eval_batch_size = (
-            self.eval_task.dataset.batch_size if self.eval_task is not None else 0
-        )
+        eval_batch_size = self.eval_task.dataset.batch_size if self.eval_task is not None else 0
         if train_batch_size % self.num_devices != 0:
-            raise ValueError(
-                f"Train batch size {train_batch_size} not divisible by number of devices {self.num_devices}"
-            )
+            raise ValueError(f'Train batch size {train_batch_size} not divisible by number of devices {self.num_devices}')
         if eval_batch_size % self.num_devices != 0 and eval_batch_size != 0:
-            raise ValueError(
-                f"Eval batch size {eval_batch_size} not divisible by number of devices {self.num_devices}"
-            )
-        if (
-            train_batch_size // self.num_devices % self.training_config.num_microbatches
-            != 0
-        ):
-            raise ValueError(
-                f"Number of microbatches {self.training_config.num_microbatches} does not evenly divide per-device batch size {train_batch_size // self.num_devices}"
-            )
+            raise ValueError(f'Eval batch size {eval_batch_size} not divisible by number of devices {self.num_devices}')
+        if train_batch_size // self.num_devices % self.training_config.num_microbatches != 0:
+            raise ValueError(f'Number of microbatches {self.training_config.num_microbatches} does not evenly divide per-device batch size {train_batch_size // self.num_devices}')
 
     def _setup_sharding(self) -> None:
         self.num_devices = jax.local_device_count()
         devices = np.array(jax.local_devices())
-        self.mesh = Mesh(devices, axis_names=("data",))
+        self.mesh = Mesh(devices, axis_names=('data',))
         self.replicated_sharding = NamedSharding(self.mesh, P())
-        self.data_sharding = NamedSharding(self.mesh, P("data"))
-        print(
-            f"Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}"
-        )
+        self.data_sharding = NamedSharding(self.mesh, P('data'))
+        print(f'Initialized mesh {self.mesh} with {self.num_devices} devices: {devices}')
 
-    def _compute_metrics(
-        self, task: Task, loss: float, aux: jt.PyTree, batch: jt.PyTree
-    ) -> dict[str, jt.Array]:
+    def _compute_metrics(self, task: Task, loss: float, aux: jt.PyTree, batch: jt.PyTree) -> dict[str, jt.Array]:
         all_metrics: dict[str, jt.Array] = {}
         for metric in task.metrics:
             metric_results = metric(loss=loss, aux=aux, batch=batch)
@@ -742,26 +647,17 @@ class Experiment:
         """Build the optimizer chain: optional grad-clip then a single or multi-optimizer."""
         optimizer_chain: list[optax.GradientTransformation] = []
         if self.training_config.max_grad_norm > 0.0:
-            optimizer_chain.append(
-                optax.clip_by_global_norm(self.training_config.max_grad_norm)
-            )
+            optimizer_chain.append(optax.clip_by_global_norm(self.training_config.max_grad_norm))
         if self.training_config.optimizer_config is None:
-            print("Using default optimizer: Adam, lr=1e-3")
+            print('Using default optimizer: Adam, lr=1e-3')
             optimizer_chain.append(optax.adam(learning_rate=0.001))
         else:
             optimizer_map = self.training_config.optimizer_config.build_optimizer_map()
-            optimizer_for_param = (
-                self.training_config.optimizer_config.optimizer_for_param
-            )
+            optimizer_for_param = self.training_config.optimizer_config.optimizer_for_param
 
             def label_fn(params):
-                return jax.tree_util.tree_map_with_path(
-                    lambda path, _: optimizer_for_param(path), params
-                )
-
-            optimizer_chain.append(
-                optax.multi_transform(transforms=optimizer_map, param_labels=label_fn)
-            )
+                return jax.tree_util.tree_map_with_path(lambda path, _: optimizer_for_param(path), params)
+            optimizer_chain.append(optax.multi_transform(transforms=optimizer_map, param_labels=label_fn))
         if len(optimizer_chain) == 1:
             return optimizer_chain[0]
         return optax.chain(*optimizer_chain)
@@ -771,81 +667,41 @@ class Experiment:
         sharded_batch_size = jax.tree.leaves(batch)[0].shape[0]
         num_microbatches = self.training_config.num_microbatches
         microbatch_size = sharded_batch_size // num_microbatches
-        microbatches = jax.tree.map(
-            lambda x: x.reshape(num_microbatches, microbatch_size, *x.shape[1:]), batch
-        )
+        microbatches = jax.tree.map(lambda x: x.reshape(num_microbatches, microbatch_size, *x.shape[1:]), batch)
 
         def scan_fn(carry_grads, microbatch):
-            (loss_val, aux), grads = jax.value_and_grad(self.forward_fn, has_aux=True)(
-                model, microbatch
-            )
+            (loss_val, aux), grads = jax.value_and_grad(self.forward_fn, has_aux=True)(model, microbatch)
             new_carry_grads = jax.tree.map(lambda c, g: c + g, carry_grads, grads)
-            microbatch_metrics = self._compute_metrics(
-                task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
-            )
+            microbatch_metrics = self._compute_metrics(task=self.train_task, loss=loss_val, aux=aux, batch=microbatch)
             return (new_carry_grads, microbatch_metrics)
-
         init_carry_grads = jax.tree.map(jnp.zeros_like, model)
-        with jax.profiler.TraceAnnotation("microbatch_loop"):
-            total_grads, all_metrics = jax.lax.scan(
-                scan_fn, init_carry_grads, microbatches
-            )
-        total_grads = jax.tree.map(
-            lambda g: g / self.num_devices / num_microbatches, total_grads
-        )
+        with jax.profiler.TraceAnnotation('microbatch_loop'):
+            total_grads, all_metrics = jax.lax.scan(scan_fn, init_carry_grads, microbatches)
+        total_grads = jax.tree.map(lambda g: g / self.num_devices / num_microbatches, total_grads)
         averaged_metrics = jax.tree.map(lambda x: jnp.mean(x, axis=0), all_metrics)
-        with jax.profiler.TraceAnnotation("optimizer_update"):
+        with jax.profiler.TraceAnnotation('optimizer_update'):
             updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
             model = optax.apply_updates(model, updates)
         return (model, opt_state, averaged_metrics)
 
     def _eval_step(self, model, batch):
         """One sharded eval step. Uses eval_forward_fn if set, else forward_fn."""
-        fwd = (
-            self.eval_forward_fn
-            if self.eval_forward_fn is not None
-            else self.forward_fn
-        )
-        with jax.profiler.TraceAnnotation("eval_forward"):
+        fwd = self.eval_forward_fn if self.eval_forward_fn is not None else self.forward_fn
+        with jax.profiler.TraceAnnotation('eval_forward'):
             loss_val, aux = fwd(model, batch)
-        return self._compute_metrics(
-            task=self.eval_task, loss=loss_val, aux=aux, batch=batch
-        )
+        return self._compute_metrics(task=self.eval_task, loss=loss_val, aux=aux, batch=batch)
 
     def __post_init__(self):
         self._setup_sharding()
         self._validate_configs()
-        self.logger_obj = self.logger_config.build_logger(
-            config_dict=_serialize_dataclass_config(self)
-        )
+        self.logger_obj = self.logger_config.build_logger(config_dict=_serialize_dataclass_config(self))
         self.optimizer: optax.GradientTransformation | None = None
         self.opt_state = None
         self.model = None
-        self.ckpt_manager = ocp.CheckpointManager(
-            self.checkpoint_config.checkpoint_dir,
-            options=ocp.CheckpointManagerOptions(
-                max_to_keep=self.checkpoint_config.max_to_keep
-            ),
-        )
+        self.ckpt_manager = ocp.CheckpointManager(self.checkpoint_config.checkpoint_dir, options=ocp.CheckpointManagerOptions(max_to_keep=self.checkpoint_config.max_to_keep))
         if self.jit_computations:
-            self.train_step_fn = jax.jit(
-                self._train_step,
-                in_shardings=(
-                    self.replicated_sharding,
-                    self.replicated_sharding,
-                    self.data_sharding,
-                ),
-                out_shardings=(
-                    self.replicated_sharding,
-                    self.replicated_sharding,
-                    self.replicated_sharding,
-                ),
-            )
-            self.eval_step_fn = jax.jit(
-                self._eval_step,
-                in_shardings=(self.replicated_sharding, self.data_sharding),
-                out_shardings=self.replicated_sharding,
-            )
+            self.train_step_fn = jax.jit(self._train_step, in_shardings=(self.replicated_sharding, self.replicated_sharding, self.data_sharding), out_shardings=(self.replicated_sharding, self.replicated_sharding, self.replicated_sharding))
+            self.eval_step_fn = jax.jit(self._eval_step, in_shardings=(self.replicated_sharding, self.data_sharding), out_shardings=self.replicated_sharding)
         else:
             self.train_step_fn = self._train_step
             self.eval_step_fn = self._eval_step
@@ -853,20 +709,16 @@ class Experiment:
     def init_state(self):
         """Construct the model + optimizer state. Must be called before ``outer_loop``."""
         with jax.set_mesh(self.mesh):
-            self.model = self.model_factory(
-                self.model_config, jax.random.key(self.seed)
-            )
+            self.model = self.model_factory(self.model_config, jax.random.key(self.seed))
         self.optimizer = self._create_optimizer()
         with jax.set_mesh(self.mesh):
             self.opt_state = self.optimizer.init(self.model)
         self.step = 0
         self._train_start_time = time.monotonic()
-        print(f"Model initialized and replicated across {self.num_devices} devices")
+        print(f'Model initialized and replicated across {self.num_devices} devices')
 
     def _assert_initialized(self) -> None:
-        assert self.model is not None and self.opt_state is not None, (
-            "Experiment state not initialized. Call init_state() first."
-        )
+        assert self.model is not None and self.opt_state is not None, 'Experiment state not initialized. Call init_state() first.'
 
     def _unreplicate_for_checkpoint(self, pytree):
         """Pull a single host-side copy of replicated state for serialization."""
@@ -876,39 +728,29 @@ class Experiment:
         self._assert_initialized()
         model_to_save = self._unreplicate_for_checkpoint(self.model)
         opt_state_to_save = self._unreplicate_for_checkpoint(self.opt_state)
-        args = {
-            "model": ocp.args.StandardSave(model_to_save),
-            "opt_state": ocp.args.StandardSave(opt_state_to_save),
-        }
+        args = {'model': ocp.args.StandardSave(model_to_save), 'opt_state': ocp.args.StandardSave(opt_state_to_save)}
         if self.checkpoint_config.checkpoint_dataset_iterator:
-            args["dataset_iterator"] = ocp.args.StandardSave(
-                self.train_task.dataset.get_state()
-            )
+            args['dataset_iterator'] = ocp.args.StandardSave(self.train_task.dataset.get_state())
         self.ckpt_manager.save(self.step, args=ocp.args.Composite(**args))
         self.ckpt_manager.wait_until_finished()
 
     def _resolve_latest_saved_checkpoint_step(self) -> int:
-        raise NotImplementedError("provide a step explicitly!")
+        raise NotImplementedError('provide a step explicitly!')
 
-    def restore_checkpoint(self, step: int | None = None):
+    def restore_checkpoint(self, step: int | None=None):
         self._assert_initialized()
         if step is None:
             step = self._resolve_latest_saved_checkpoint_step()
         model_template = self._unreplicate_for_checkpoint(self.model)
         opt_state_template = self._unreplicate_for_checkpoint(self.opt_state)
-        args = {
-            "model": ocp.args.StandardRestore(model_template),
-            "opt_state": ocp.args.StandardRestore(opt_state_template),
-        }
+        args = {'model': ocp.args.StandardRestore(model_template), 'opt_state': ocp.args.StandardRestore(opt_state_template)}
         if self.checkpoint_config.checkpoint_dataset_iterator:
-            args["dataset_iterator"] = ocp.args.StandardRestore(
-                self.train_task.dataset.get_state()
-            )
+            args['dataset_iterator'] = ocp.args.StandardRestore(self.train_task.dataset.get_state())
         restored = self.ckpt_manager.restore(step, args=ocp.args.Composite(**args))
-        self.model = jax.device_put(restored["model"], self.replicated_sharding)
-        self.opt_state = jax.device_put(restored["opt_state"], self.replicated_sharding)
+        self.model = jax.device_put(restored['model'], self.replicated_sharding)
+        self.opt_state = jax.device_put(restored['opt_state'], self.replicated_sharding)
         if self.checkpoint_config.checkpoint_dataset_iterator:
-            self.train_task.dataset.restore_state(restored["dataset_iterator"])
+            self.train_task.dataset.restore_state(restored['dataset_iterator'])
         self.step = step
 
     def run_validation(self) -> dict[str, float]:
@@ -920,7 +762,7 @@ class Experiment:
         """
         self._assert_initialized()
         if self.eval_task is None:
-            print("No eval task defined, skipping validation.")
+            print('No eval task defined, skipping validation.')
             return {}
         accumulated_scalars: dict | None = None
         first_batch_images: dict | None = None
@@ -932,25 +774,21 @@ class Experiment:
             if accumulated_scalars is None:
                 accumulated_scalars = scalars
             else:
-                accumulated_scalars = jax.tree.map(
-                    lambda x, y: x + y, accumulated_scalars, scalars
-                )
+                accumulated_scalars = jax.tree.map(lambda x, y: x + y, accumulated_scalars, scalars)
             if first_batch_images is None and images:
                 first_batch_images = images
             num_batches += 1
             if ix >= self.eval_config.num_eval_steps:
                 break
         if num_batches == 0:
-            print("Eval dataset yielded no batches, skipping validation.")
+            print('Eval dataset yielded no batches, skipping validation.')
             return {}
-        avg_metrics = jax.tree.map(
-            lambda x: float(x) / num_batches, accumulated_scalars
-        )
-        avg_metrics = {f"val/{k}": v for k, v in avg_metrics.items()}
+        avg_metrics = jax.tree.map(lambda x: float(x) / num_batches, accumulated_scalars)
+        avg_metrics = {f'val/{k}': v for k, v in avg_metrics.items()}
         self.logger_obj.log(self.step, metrics=avg_metrics)
         if first_batch_images:
             for k, imgs in first_batch_images.items():
-                self.logger_obj.log_images(self.step, f"val/{k}", np.asarray(imgs))
+                self.logger_obj.log_images(self.step, f'val/{k}', np.asarray(imgs))
         return avg_metrics
 
     def sampling_evaluation(self) -> None:
@@ -966,7 +804,7 @@ class Experiment:
         for metric in self.eval_task.visualization_metrics:
             images = metric(self.model)
             for key, imgs in images.items():
-                self.logger_obj.log_images(self.step, f"val/{key}", np.asarray(imgs))
+                self.logger_obj.log_images(self.step, f'val/{key}', np.asarray(imgs))
 
     def eval(self):
         self._assert_initialized()
@@ -975,16 +813,12 @@ class Experiment:
 
     def inner_loop(self, batch: jt.PyTree):
         self._assert_initialized()
-        self.model, self.opt_state, train_metrics = self.train_step_fn(
-            self.model, self.opt_state, batch
-        )
+        self.model, self.opt_state, train_metrics = self.train_step_fn(self.model, self.opt_state, batch)
         if self.step % self.logger_config.train_log_interval_steps == 0:
-            train_metrics_with_prefix = {
-                f"train/{k}": float(v) for k, v in train_metrics.items()
-            }
+            train_metrics_with_prefix = {f'train/{k}': float(v) for k, v in train_metrics.items()}
             elapsed = time.monotonic() - self._train_start_time
             if elapsed > 0 and self.step > 0:
-                train_metrics_with_prefix["train/steps_per_sec"] = self.step / elapsed
+                train_metrics_with_prefix['train/steps_per_sec'] = self.step / elapsed
             self.logger_obj.log(self.step, metrics=train_metrics_with_prefix)
 
     def outer_loop(self):
@@ -992,7 +826,7 @@ class Experiment:
         while True:
             epoch_start_step = self.step
             for batch in self.train_task.dataset:
-                with jax.profiler.StepTraceAnnotation("inner_loop", step_num=self.step):
+                with jax.profiler.StepTraceAnnotation('inner_loop', step_num=self.step):
                     self.inner_loop(batch)
                 if self.step % self.checkpoint_config.save_interval_steps == 0:
                     self.save_checkpoint()
@@ -1005,52 +839,41 @@ class Experiment:
             if finished:
                 break
             if self.step == epoch_start_step:
-                raise ValueError(f"Dataset for task {self.train_task.name} is empty.")
+                raise ValueError(f'Dataset for task {self.train_task.name} is empty.')
 
     def cleanup(self):
         """Release logger + checkpoint manager. Call once after training."""
         self.logger_obj.close()
         self.ckpt_manager.close()
 
-
 # ============================================================
 # toylib.nn.module - /Users/anuj/Desktop/code/toylib/toylib/nn/module.py
 # ============================================================
 
-
 def _is_array(x: typing.Any) -> bool:
-    return isinstance(x, (jax.Array, np.ndarray, np.generic)) or hasattr(
-        x, "__jax_array__"
-    )
-
+    return isinstance(x, (jax.Array, np.ndarray, np.generic)) or hasattr(x, '__jax_array__')
 
 def _is_random_key(x: str) -> bool:
-    return x == "key"
-
+    return x == 'key'
 
 def _is_supported_container(x: typing.Any) -> bool:
     return isinstance(x, (list, tuple))
-
 
 def _wrap_init(orig: typing.Callable) -> typing.Callable:
 
     def wrapped(self) -> None:
         orig(self)
         for v in self.__dict__.values():
-            if isinstance(v, Module) and (not hasattr(v, "_trainable_param_keys")):
+            if isinstance(v, Module) and (not hasattr(v, '_trainable_param_keys')):
                 v.init()
             elif _is_supported_container(v):
                 for elem in v:
-                    if isinstance(elem, Module) and (
-                        not hasattr(elem, "_trainable_param_keys")
-                    ):
+                    if isinstance(elem, Module) and (not hasattr(elem, '_trainable_param_keys')):
                         elem.init()
         self._trainable_param_keys = self._get_trainable_param_keys()
-        if hasattr(self, "key"):
+        if hasattr(self, 'key'):
             self.key = None
-
     return wrapped
-
 
 @dataclasses.dataclass
 class Module(abc.ABC):
@@ -1070,7 +893,6 @@ class Module(abc.ABC):
         param_dtype: storage dtype for trainable parameters (default float32).
         dtype: compute dtype for forward-pass operations (default float32).
     """
-
     param_dtype: np.dtype | type = jnp.float32
     dtype: np.dtype | type = jnp.float32
 
@@ -1087,8 +909,8 @@ class Module(abc.ABC):
         super().__init_subclass__(**kwargs)
         cls = dataclasses.dataclass(cls, kw_only=True)
         cls = jax.tree_util.register_pytree_with_keys_class(cls)
-        if "init" in cls.__dict__:
-            original_init = cls.__dict__["init"]
+        if 'init' in cls.__dict__:
+            original_init = cls.__dict__['init']
             cls.init = _wrap_init(original_init)
 
     @abc.abstractmethod
@@ -1105,15 +927,7 @@ class Module(abc.ABC):
         """Get the list of attribute names that are trainable parameters."""
         param_keys = []
         for k, v in self.__dict__.items():
-            if (
-                _is_array(v)
-                and (not _is_random_key(k))
-                or isinstance(v, Module)
-                or (
-                    _is_supported_container(v)
-                    and all((isinstance(elem, Module) for elem in v))
-                )
-            ):
+            if _is_array(v) and (not _is_random_key(k)) or isinstance(v, Module) or (_is_supported_container(v) and all((isinstance(elem, Module) for elem in v))):
                 param_keys.append(k)
         return param_keys
 
@@ -1129,31 +943,28 @@ class Module(abc.ABC):
         return (params_with_keys, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, static, dynamic) -> "Module":
+    def tree_unflatten(cls, static, dynamic) -> 'Module':
         obj = object.__new__(cls)
-        param_keys = static["_trainable_param_keys"]
+        param_keys = static['_trainable_param_keys']
         for k, v in zip(param_keys, dynamic):
             obj.__setattr__(k, v)
         for k, v in static.items():
             obj.__setattr__(k, v)
         return obj
 
-
 # ============================================================
 # toylib.nn.layers - /Users/anuj/Desktop/code/toylib/toylib/nn/layers.py
 # ============================================================
 
-
 class Linear(Module):
     """Defines a simple feedforward layer: which is a linear transformation."""
-
     in_features: int
     out_features: int
     key: jt.PRNGKeyArray
     use_bias: bool = False
     init_std: typing.Optional[float] = None
-    weights: typing.Optional[jt.Float[jt.Array, "in_features out_features"]] = None
-    bias: typing.Optional[jt.Float[jt.Array, " out_features"]] = None
+    weights: typing.Optional[jt.Float[jt.Array, 'in_features out_features']] = None
+    bias: typing.Optional[jt.Float[jt.Array, ' out_features']] = None
 
     def init(self) -> None:
         w_key = self.key
@@ -1162,49 +973,30 @@ class Linear(Module):
         if self.init_std is not None:
             std = self.init_std
             s = std * math.sqrt(3)
-            self.weights = jax.random.uniform(
-                key=w_key, shape=(in_features, out_features), minval=-s, maxval=s
-            ).astype(self.param_dtype)
+            self.weights = jax.random.uniform(key=w_key, shape=(in_features, out_features), minval=-s, maxval=s).astype(self.param_dtype)
         else:
-            std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(
-                in_features
-            )
-            self.weights = (
-                jax.random.normal(key=w_key, shape=(in_features, out_features)) * std
-            ).astype(self.param_dtype)
-        self.bias = (
-            jax.numpy.zeros((out_features,), dtype=self.param_dtype)
-            if self.use_bias
-            else None
-        )
+            std = min(1.0, math.sqrt(out_features / in_features)) / math.sqrt(in_features)
+            self.weights = (jax.random.normal(key=w_key, shape=(in_features, out_features)) * std).astype(self.param_dtype)
+        self.bias = jax.numpy.zeros((out_features,), dtype=self.param_dtype) if self.use_bias else None
 
-    def __call__(
-        self, x: jt.Float[jt.Array, "... in_features"]
-    ) -> jt.Float[jt.Array, "... out_features"]:
+    def __call__(self, x: jt.Float[jt.Array, '... in_features']) -> jt.Float[jt.Array, '... out_features']:
         x = jax.numpy.dot(x.astype(self.dtype), self.weights.astype(self.dtype))
         if self.use_bias:
             x = x + self.bias.astype(self.dtype)
         return x
 
-
 class Embedding(Module):
     """Defines an embedding layer that stores an embedding matrix for discrete tokens."""
-
     vocab_size: int
     embedding_dim: int
     key: jt.PRNGKeyArray
-    weights: typing.Optional[jt.Float[jt.Array, "vocab_size embedding_dim"]] = None
+    weights: typing.Optional[jt.Float[jt.Array, 'vocab_size embedding_dim']] = None
 
     def init(self) -> None:
-        self.weights = jax.random.normal(
-            self.key, (self.vocab_size, self.embedding_dim)
-        ).astype(self.param_dtype)
+        self.weights = jax.random.normal(self.key, (self.vocab_size, self.embedding_dim)).astype(self.param_dtype)
 
-    def __call__(
-        self, tokens: jt.Integer[jt.Array, "... seq_len"]
-    ) -> jt.Float[jt.Array, "... seq_len embedding_dim"]:
+    def __call__(self, tokens: jt.Integer[jt.Array, '... seq_len']) -> jt.Float[jt.Array, '... seq_len embedding_dim']:
         return jax.numpy.take(self.weights, tokens, axis=0).astype(self.dtype)
-
 
 class Conv2D(Module):
     """2D convolution with NHWC layout, optional bias, and 'SAME' or integer padding.
@@ -1219,19 +1011,16 @@ class Conv2D(Module):
     used (matching arXiv:2310.17813), where ``in/out`` here are the effective
     fan-in / fan-out of the conv (``kernel_size^2 * channels``).
     """
-
     in_channels: int
     out_channels: int
     key: jt.PRNGKeyArray
     kernel_size: int = 3
     stride: int = 1
-    padding: typing.Union[int, str] = "SAME"
+    padding: typing.Union[int, str] = 'SAME'
     use_bias: bool = True
     init_std: typing.Optional[float] = None
-    weights: typing.Optional[jt.Float[jt.Array, "kh kw in_channels out_channels"]] = (
-        None
-    )
-    bias: typing.Optional[jt.Float[jt.Array, " out_channels"]] = None
+    weights: typing.Optional[jt.Float[jt.Array, 'kh kw in_channels out_channels']] = None
+    bias: typing.Optional[jt.Float[jt.Array, ' out_channels']] = None
 
     def init(self) -> None:
         k = self.kernel_size
@@ -1240,25 +1029,11 @@ class Conv2D(Module):
         if self.init_std is not None:
             std = self.init_std
             s = std * math.sqrt(3)
-            self.weights = jax.random.uniform(
-                key=self.key,
-                shape=(k, k, self.in_channels, self.out_channels),
-                minval=-s,
-                maxval=s,
-            ).astype(self.param_dtype)
+            self.weights = jax.random.uniform(key=self.key, shape=(k, k, self.in_channels, self.out_channels), minval=-s, maxval=s).astype(self.param_dtype)
         else:
             std = min(1.0, math.sqrt(fan_out / fan_in)) / math.sqrt(fan_in)
-            self.weights = (
-                jax.random.normal(
-                    key=self.key, shape=(k, k, self.in_channels, self.out_channels)
-                )
-                * std
-            ).astype(self.param_dtype)
-        self.bias = (
-            jnp.zeros((self.out_channels,), dtype=self.param_dtype)
-            if self.use_bias
-            else None
-        )
+            self.weights = (jax.random.normal(key=self.key, shape=(k, k, self.in_channels, self.out_channels)) * std).astype(self.param_dtype)
+        self.bias = jnp.zeros((self.out_channels,), dtype=self.param_dtype) if self.use_bias else None
 
     def _resolved_padding(self) -> typing.Union[str, list[tuple[int, int]]]:
         if isinstance(self.padding, str):
@@ -1266,20 +1041,11 @@ class Conv2D(Module):
         p = int(self.padding)
         return [(p, p), (p, p)]
 
-    def __call__(
-        self, x: jt.Float[jt.Array, "B H W in_channels"]
-    ) -> jt.Float[jt.Array, "B H_out W_out out_channels"]:
-        x = jax.lax.conv_general_dilated(
-            x.astype(self.dtype),
-            self.weights.astype(self.dtype),
-            window_strides=(self.stride, self.stride),
-            padding=self._resolved_padding(),
-            dimension_numbers=("NHWC", "HWIO", "NHWC"),
-        )
+    def __call__(self, x: jt.Float[jt.Array, 'B H W in_channels']) -> jt.Float[jt.Array, 'B H_out W_out out_channels']:
+        x = jax.lax.conv_general_dilated(x.astype(self.dtype), self.weights.astype(self.dtype), window_strides=(self.stride, self.stride), padding=self._resolved_padding(), dimension_numbers=('NHWC', 'HWIO', 'NHWC'))
         if self.use_bias:
             x = x + self.bias.astype(self.dtype)
         return x
-
 
 class GroupNorm(Module):
     """Group Normalization over the channel dimension of an NHWC tensor.
@@ -1292,24 +1058,19 @@ class GroupNorm(Module):
     to ``self.dtype`` on the way out. Matches the convention used by
     ``rms_norm`` below.
     """
-
     num_features: int
     num_groups: int = 32
     eps: float = 1e-05
-    scale: typing.Optional[jt.Float[jt.Array, " num_features"]] = None
-    bias: typing.Optional[jt.Float[jt.Array, " num_features"]] = None
+    scale: typing.Optional[jt.Float[jt.Array, ' num_features']] = None
+    bias: typing.Optional[jt.Float[jt.Array, ' num_features']] = None
 
     def init(self) -> None:
         if self.num_features % self.num_groups != 0:
-            raise ValueError(
-                f"num_features ({self.num_features}) must be divisible by num_groups ({self.num_groups})"
-            )
+            raise ValueError(f'num_features ({self.num_features}) must be divisible by num_groups ({self.num_groups})')
         self.scale = jnp.ones((self.num_features,), dtype=self.param_dtype)
         self.bias = jnp.zeros((self.num_features,), dtype=self.param_dtype)
 
-    def __call__(
-        self, x: jt.Float[jt.Array, "B H W num_features"]
-    ) -> jt.Float[jt.Array, "B H W num_features"]:
+    def __call__(self, x: jt.Float[jt.Array, 'B H W num_features']) -> jt.Float[jt.Array, 'B H W num_features']:
         orig_dtype = x.dtype
         B, H, W, C = x.shape
         G = self.num_groups
@@ -1322,10 +1083,7 @@ class GroupNorm(Module):
         bias = self.bias.astype(jnp.float32).reshape(1, 1, 1, C)
         return (x32 * scale + bias).astype(orig_dtype)
 
-
-def upsample_nearest(
-    x: jt.Float[jt.Array, "B H W C"], factor: int = 2
-) -> jt.Float[jt.Array, "B H_out W_out C"]:
+def upsample_nearest(x: jt.Float[jt.Array, 'B H W C'], factor: int=2) -> jt.Float[jt.Array, 'B H_out W_out C']:
     """Nearest-neighbor upsample of an NHWC image by ``factor`` along H and W.
 
     Pure function — no trainable parameters. Used in the VAE decoder to expand
@@ -1333,10 +1091,9 @@ def upsample_nearest(
     artifacts that transposed convolutions exhibit.
     """
     B, H, W, C = x.shape
-    return jax.image.resize(x, (B, H * factor, W * factor, C), method="nearest")
+    return jax.image.resize(x, (B, H * factor, W * factor, C), method='nearest')
 
-
-def rms_norm(x: jt.Float[jt.Array, "... dim"]) -> jt.Float[jt.Array, "... dim"]:
+def rms_norm(x: jt.Float[jt.Array, '... dim']) -> jt.Float[jt.Array, '... dim']:
     """Applies RMS Normalization over the last dimension of the input tensor.
 
     The mean-square computation is done in float32 for numerical stability,
@@ -1353,15 +1110,12 @@ def rms_norm(x: jt.Float[jt.Array, "... dim"]) -> jt.Float[jt.Array, "... dim"]:
     rms = jnp.sqrt(jnp.mean(jnp.square(x), axis=-1, keepdims=True) + 1e-09)
     return (x / rms).astype(orig_dtype)
 
-
 # ============================================================
 # toylib.nn.attention - /Users/anuj/Desktop/code/toylib/toylib/nn/attention.py
 # ============================================================
 
-
 class RotaryPositionalEmbedding(Module):
     """Implements Rotary Positional Embeddings (RoPE) as described in https://arxiv.org/abs/2104.09864."""
-
     seq_len: int = 1024
     qkv_dim: int = 128
     base: int = 100000
@@ -1369,38 +1123,23 @@ class RotaryPositionalEmbedding(Module):
     def init(self) -> None:
         positions = jnp.arange(0, self.seq_len)
         freqs = self.base ** (jnp.arange(0, self.qkv_dim, 2) / self.qkv_dim)
-        self.gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
+        self.gamma = einops.einsum(positions, 1.0 / freqs, 't, d -> t d')
         self.cos = jnp.cos(self.gamma).astype(self.param_dtype)
         self.sin = jnp.sin(self.gamma).astype(self.param_dtype)
 
-    def __call__(
-        self, x: jt.Float[jt.Array, "... seq_len qkv_dim"], t0: int = 0
-    ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
+    def __call__(self, x: jt.Float[jt.Array, '... seq_len qkv_dim'], t0: int=0) -> jt.Float[jt.Array, '... seq_len qkv_dim']:
         t, d = x.shape[-2:]
         if t0 + t > self.seq_len:
-            raise ValueError(
-                f"Position index out of range of RoPE cache:t0 ({t0}) + t ({t}) > seq_len ({self.seq_len})"
-            )
-        sin = self.sin[t0 : t0 + t, :].astype(self.dtype)
-        cos = self.cos[t0 : t0 + t, :].astype(self.dtype)
-        x1, x2 = (
-            x[..., : d // 2].astype(self.dtype),
-            x[..., d // 2 :].astype(self.dtype),
-        )
-        es_shape = "... t d, t d -> ... t d"
+            raise ValueError(f'Position index out of range of RoPE cache:t0 ({t0}) + t ({t}) > seq_len ({self.seq_len})')
+        sin = self.sin[t0:t0 + t, :].astype(self.dtype)
+        cos = self.cos[t0:t0 + t, :].astype(self.dtype)
+        x1, x2 = (x[..., :d // 2].astype(self.dtype), x[..., d // 2:].astype(self.dtype))
+        es_shape = '... t d, t d -> ... t d'
         y1 = einops.einsum(x1, cos, es_shape) + einops.einsum(x2, sin, es_shape)
         y2 = -einops.einsum(x1, sin, es_shape) + einops.einsum(x2, cos, es_shape)
         return jnp.concatenate([y1, y2], axis=-1)
 
-
-def scaled_dot_product_attention(
-    q: jt.Float[jt.Array, "... seq_len qkv_dim"],
-    k: jt.Float[jt.Array, "... seq_len qkv_dim"],
-    v: jt.Float[jt.Array, "... seq_len qkv_dim"],
-    mask: typing.Optional[jt.Float[jt.Array, "... seq_len seq_len"]],
-) -> tuple[
-    jt.Float[jt.Array, "... seq_len qkv_dim"], jt.Float[jt.Array, "... seq_len seq_len"]
-]:
+def scaled_dot_product_attention(q: jt.Float[jt.Array, '... seq_len qkv_dim'], k: jt.Float[jt.Array, '... seq_len qkv_dim'], v: jt.Float[jt.Array, '... seq_len qkv_dim'], mask: typing.Optional[jt.Float[jt.Array, '... seq_len seq_len']]) -> tuple[jt.Float[jt.Array, '... seq_len qkv_dim'], jt.Float[jt.Array, '... seq_len seq_len']]:
     """Compute scaled dot product attention.
 
     Given query (`q`), key (`k`), and value (`v`) tensors, this function first computes the
@@ -1423,16 +1162,13 @@ def scaled_dot_product_attention(
 
     """
     d_k = q.shape[-1]
-    assert q.shape[-1] == k.shape[-1], "q and k must have the same feature dimension"
+    assert q.shape[-1] == k.shape[-1], 'q and k must have the same feature dimension'
     attention_logits = jnp.matmul(q, k.swapaxes(-1, -2)) / jnp.sqrt(d_k)
     if mask is not None:
         attention_logits = jnp.where(mask, attention_logits, -1000000000.0)
-    attention_weights = jax.nn.softmax(
-        attention_logits.astype(jnp.float32), axis=-1
-    ).astype(q.dtype)
+    attention_weights = jax.nn.softmax(attention_logits.astype(jnp.float32), axis=-1).astype(q.dtype)
     values = jnp.matmul(attention_weights, v)
     return (values, attention_weights)
-
 
 class MultiHeadAttention(Module):
     """
@@ -1443,7 +1179,6 @@ class MultiHeadAttention(Module):
     weighted average of the values are then concatenated from the various heads to produce a
     single output value vector. A final linear layer is applied on top of this with non-linearity.
     """
-
     qkv_dim: int
     num_heads: int
     key: jt.PRNGKeyArray
@@ -1453,98 +1188,32 @@ class MultiHeadAttention(Module):
         qkv_dim = self.qkv_dim
         keys = jax.random.split(self.key, 4)
         init_std = 1 / math.sqrt(qkv_dim)
-        self.q_projection = Linear(
-            in_features=qkv_dim,
-            out_features=qkv_dim,
-            use_bias=False,
-            key=keys[0],
-            init_std=init_std,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.k_projection = Linear(
-            in_features=qkv_dim,
-            out_features=qkv_dim,
-            use_bias=False,
-            key=keys[1],
-            init_std=init_std,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.v_projection = Linear(
-            in_features=qkv_dim,
-            out_features=qkv_dim,
-            use_bias=False,
-            key=keys[2],
-            init_std=init_std,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.linear = Linear(
-            in_features=qkv_dim,
-            out_features=qkv_dim,
-            use_bias=False,
-            key=keys[3],
-            init_std=0.0,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
+        self.q_projection = Linear(in_features=qkv_dim, out_features=qkv_dim, use_bias=False, key=keys[0], init_std=init_std, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.k_projection = Linear(in_features=qkv_dim, out_features=qkv_dim, use_bias=False, key=keys[1], init_std=init_std, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.v_projection = Linear(in_features=qkv_dim, out_features=qkv_dim, use_bias=False, key=keys[2], init_std=init_std, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.linear = Linear(in_features=qkv_dim, out_features=qkv_dim, use_bias=False, key=keys[3], init_std=0.0, param_dtype=self.param_dtype, dtype=self.dtype)
 
-    def __call__(
-        self,
-        Q: jt.Float[jt.Array, "... seq_len qkv_dim"],
-        K: jt.Float[jt.Array, "... seq_len qkv_dim"],
-        V: jt.Float[jt.Array, "... seq_len qkv_dim"],
-        mask: typing.Optional[jt.Float[jt.Array, "... seq_len seq_len"]] = None,
-        *,
-        rope: typing.Optional[RotaryPositionalEmbedding] = None,
-        return_attention_weights: bool = False,
-    ) -> typing.Union[
-        tuple[
-            jt.Float[jt.Array, "... seq_len qkv_dim"],
-            jt.Float[jt.Array, "... seq_len seq_len"],
-        ],
-        jt.Float[jt.Array, "... seq_len qkv_dim"],
-    ]:
+    def __call__(self, Q: jt.Float[jt.Array, '... seq_len qkv_dim'], K: jt.Float[jt.Array, '... seq_len qkv_dim'], V: jt.Float[jt.Array, '... seq_len qkv_dim'], mask: typing.Optional[jt.Float[jt.Array, '... seq_len seq_len']]=None, *, rope: typing.Optional[RotaryPositionalEmbedding]=None, return_attention_weights: bool=False) -> typing.Union[tuple[jt.Float[jt.Array, '... seq_len qkv_dim'], jt.Float[jt.Array, '... seq_len seq_len']], jt.Float[jt.Array, '... seq_len qkv_dim']]:
         Q = self.q_projection(Q)
         K = self.k_projection(K)
         V = self.v_projection(V)
-        Q = einops.rearrange(
-            Q,
-            "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim",
-            num_heads=self.num_heads,
-        )
-        K = einops.rearrange(
-            K,
-            "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim",
-            num_heads=self.num_heads,
-        )
-        V = einops.rearrange(
-            V,
-            "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim",
-            num_heads=self.num_heads,
-        )
+        Q = einops.rearrange(Q, '... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim', num_heads=self.num_heads)
+        K = einops.rearrange(K, '... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim', num_heads=self.num_heads)
+        V = einops.rearrange(V, '... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim', num_heads=self.num_heads)
         if mask is not None:
-            mask = einops.rearrange(
-                mask, "... seq_len1 seq_len2 -> ... 1 seq_len1 seq_len2"
-            )
+            mask = einops.rearrange(mask, '... seq_len1 seq_len2 -> ... 1 seq_len1 seq_len2')
         if rope is not None:
             Q = rope(Q)
             K = rope(K)
         if self.use_qk_norm:
             Q = rms_norm(Q)
             K = rms_norm(K)
-        values, attention_weights = scaled_dot_product_attention(
-            q=Q, k=K, v=V, mask=mask
-        )
-        values = einops.rearrange(
-            values, "... num_heads seq_len d -> ... seq_len (num_heads d)"
-        )
+        values, attention_weights = scaled_dot_product_attention(q=Q, k=K, v=V, mask=mask)
+        values = einops.rearrange(values, '... num_heads seq_len d -> ... seq_len (num_heads d)')
         values = self.linear(values)
         if return_attention_weights:
             return (values, attention_weights)
         return values
-
 
 # ============================================================
 # toylib_projects.wm.vision_encoder.model - /Users/anuj/Desktop/code/toylib/toylib_projects/wm/vision_encoder/model.py
@@ -1589,7 +1258,6 @@ left out of this file — add them in a wrapper once base reconstruction is
 stable.
 """
 
-
 @dataclasses.dataclass(frozen=True)
 class ModelConfig:
     """Hyperparameters for the Track A1 VAE.
@@ -1597,7 +1265,6 @@ class ModelConfig:
     Defaults match the walkthrough: 64×64 input, 8×8×4 latent, base_ch=64
     (so 4×base_ch = 256 channels at the bottleneck).
     """
-
     base_ch: int = 64
     latent_channels: int = 4
     input_channels: int = 3
@@ -1606,7 +1273,6 @@ class ModelConfig:
     log_sigma_sq_clip_min: float = -30.0
     log_sigma_sq_clip_max: float = 20.0
 
-
 class ResBlock(Module):
     """Two-conv pre-activation residual block.
 
@@ -1614,7 +1280,6 @@ class ResBlock(Module):
     connection. When ``in_channels != out_channels`` the skip path goes
     through a 1×1 conv to match shapes (otherwise the skip is identity).
     """
-
     in_channels: int
     out_channels: int
     key: jt.PRNGKeyArray
@@ -1622,59 +1287,22 @@ class ResBlock(Module):
 
     def init(self) -> None:
         keys = jax.random.split(self.key, 3)
-        self.norm1 = GroupNorm(
-            num_features=self.in_channels,
-            num_groups=self.num_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.conv1 = Conv2D(
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[0],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.norm2 = GroupNorm(
-            num_features=self.out_channels,
-            num_groups=self.num_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.conv2 = Conv2D(
-            in_channels=self.out_channels,
-            out_channels=self.out_channels,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[1],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
+        self.norm1 = GroupNorm(num_features=self.in_channels, num_groups=self.num_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.conv1 = Conv2D(in_channels=self.in_channels, out_channels=self.out_channels, kernel_size=3, padding='SAME', key=keys[0], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.norm2 = GroupNorm(num_features=self.out_channels, num_groups=self.num_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.conv2 = Conv2D(in_channels=self.out_channels, out_channels=self.out_channels, kernel_size=3, padding='SAME', key=keys[1], param_dtype=self.param_dtype, dtype=self.dtype)
         if self.in_channels != self.out_channels:
-            self.skip = Conv2D(
-                in_channels=self.in_channels,
-                out_channels=self.out_channels,
-                kernel_size=1,
-                padding="SAME",
-                key=keys[2],
-                param_dtype=self.param_dtype,
-                dtype=self.dtype,
-            )
+            self.skip = Conv2D(in_channels=self.in_channels, out_channels=self.out_channels, kernel_size=1, padding='SAME', key=keys[2], param_dtype=self.param_dtype, dtype=self.dtype)
         else:
             self.skip = None
 
-    def __call__(
-        self, x: jt.Float[jt.Array, "B H W in_channels"]
-    ) -> jt.Float[jt.Array, "B H W out_channels"]:
+    def __call__(self, x: jt.Float[jt.Array, 'B H W in_channels']) -> jt.Float[jt.Array, 'B H W out_channels']:
         h = jax.nn.silu(self.norm1(x))
         h = self.conv1(h)
         h = jax.nn.silu(self.norm2(h))
         h = self.conv2(h)
         skip = x if self.skip is None else self.skip(x)
         return h + skip
-
 
 class AttentionBlock(Module):
     """Single self-attention block at the spatial bottleneck.
@@ -1686,37 +1314,22 @@ class AttentionBlock(Module):
     inside it is zero-initialized, so this block is the identity at init
     (helpful for training stability).
     """
-
     channels: int
     key: jt.PRNGKeyArray
     num_heads: int = 1
     num_groups: int = 32
 
     def init(self) -> None:
-        self.norm = GroupNorm(
-            num_features=self.channels,
-            num_groups=self.num_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.attn = MultiHeadAttention(
-            qkv_dim=self.channels,
-            num_heads=self.num_heads,
-            key=self.key,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
+        self.norm = GroupNorm(num_features=self.channels, num_groups=self.num_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.attn = MultiHeadAttention(qkv_dim=self.channels, num_heads=self.num_heads, key=self.key, param_dtype=self.param_dtype, dtype=self.dtype)
 
-    def __call__(
-        self, x: jt.Float[jt.Array, "B H W C"]
-    ) -> jt.Float[jt.Array, "B H W C"]:
+    def __call__(self, x: jt.Float[jt.Array, 'B H W C']) -> jt.Float[jt.Array, 'B H W C']:
         B, H, W, C = x.shape
         h = self.norm(x)
         h_seq = h.reshape(B, H * W, C)
         h_seq = self.attn(h_seq, h_seq, h_seq)
         h = h_seq.reshape(B, H, W, C)
         return x + h
-
 
 class Encoder(Module):
     """Down-3× conv encoder producing per-spatial Gaussian parameters.
@@ -1725,7 +1338,6 @@ class Encoder(Module):
     channel axis into ``μ`` and ``log σ²``. ``log σ²`` is clipped before
     any downstream ``exp`` to avoid NaNs at init.
     """
-
     config: ModelConfig
     key: jt.PRNGKeyArray
 
@@ -1733,115 +1345,20 @@ class Encoder(Module):
         cfg = self.config
         ch = cfg.base_ch
         keys = jax.random.split(self.key, 12)
-        self.conv_in = Conv2D(
-            in_channels=cfg.input_channels,
-            out_channels=ch,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[0],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res1 = ResBlock(
-            in_channels=ch,
-            out_channels=ch,
-            key=keys[1],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.down1 = Conv2D(
-            in_channels=ch,
-            out_channels=2 * ch,
-            kernel_size=3,
-            stride=2,
-            padding="SAME",
-            key=keys[2],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res2 = ResBlock(
-            in_channels=2 * ch,
-            out_channels=2 * ch,
-            key=keys[3],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.down2 = Conv2D(
-            in_channels=2 * ch,
-            out_channels=4 * ch,
-            kernel_size=3,
-            stride=2,
-            padding="SAME",
-            key=keys[4],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res3 = ResBlock(
-            in_channels=4 * ch,
-            out_channels=4 * ch,
-            key=keys[5],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.down3 = Conv2D(
-            in_channels=4 * ch,
-            out_channels=4 * ch,
-            kernel_size=3,
-            stride=2,
-            padding="SAME",
-            key=keys[6],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res4 = ResBlock(
-            in_channels=4 * ch,
-            out_channels=4 * ch,
-            key=keys[7],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.attn = AttentionBlock(
-            channels=4 * ch,
-            num_heads=cfg.num_attn_heads,
-            key=keys[8],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res5 = ResBlock(
-            in_channels=4 * ch,
-            out_channels=4 * ch,
-            key=keys[9],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.norm_out = GroupNorm(
-            num_features=4 * ch,
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.conv_out = Conv2D(
-            in_channels=4 * ch,
-            out_channels=2 * cfg.latent_channels,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[10],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
+        self.conv_in = Conv2D(in_channels=cfg.input_channels, out_channels=ch, kernel_size=3, padding='SAME', key=keys[0], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res1 = ResBlock(in_channels=ch, out_channels=ch, key=keys[1], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.down1 = Conv2D(in_channels=ch, out_channels=2 * ch, kernel_size=3, stride=2, padding='SAME', key=keys[2], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res2 = ResBlock(in_channels=2 * ch, out_channels=2 * ch, key=keys[3], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.down2 = Conv2D(in_channels=2 * ch, out_channels=4 * ch, kernel_size=3, stride=2, padding='SAME', key=keys[4], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res3 = ResBlock(in_channels=4 * ch, out_channels=4 * ch, key=keys[5], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.down3 = Conv2D(in_channels=4 * ch, out_channels=4 * ch, kernel_size=3, stride=2, padding='SAME', key=keys[6], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res4 = ResBlock(in_channels=4 * ch, out_channels=4 * ch, key=keys[7], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.attn = AttentionBlock(channels=4 * ch, num_heads=cfg.num_attn_heads, key=keys[8], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res5 = ResBlock(in_channels=4 * ch, out_channels=4 * ch, key=keys[9], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.norm_out = GroupNorm(num_features=4 * ch, num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.conv_out = Conv2D(in_channels=4 * ch, out_channels=2 * cfg.latent_channels, kernel_size=3, padding='SAME', key=keys[10], param_dtype=self.param_dtype, dtype=self.dtype)
 
-    def __call__(
-        self, x: jt.Float[jt.Array, "B 128 128 3"]
-    ) -> tuple[
-        jt.Float[jt.Array, "B 16 16 latent_channels"],
-        jt.Float[jt.Array, "B 16 16 latent_channels"],
-    ]:
+    def __call__(self, x: jt.Float[jt.Array, 'B 128 128 3']) -> tuple[jt.Float[jt.Array, 'B 16 16 latent_channels'], jt.Float[jt.Array, 'B 16 16 latent_channels']]:
         h = self.conv_in(x)
         h = self.res1(h)
         h = self.down1(h)
@@ -1855,13 +1372,8 @@ class Encoder(Module):
         h = jax.nn.silu(self.norm_out(h))
         h = self.conv_out(h)
         mu, log_sigma_sq = jnp.split(h, 2, axis=-1)
-        log_sigma_sq = jnp.clip(
-            log_sigma_sq,
-            self.config.log_sigma_sq_clip_min,
-            self.config.log_sigma_sq_clip_max,
-        )
+        log_sigma_sq = jnp.clip(log_sigma_sq, self.config.log_sigma_sq_clip_min, self.config.log_sigma_sq_clip_max)
         return (mu, log_sigma_sq)
-
 
 class Decoder(Module):
     """Mirror decoder: bottleneck attention then 3× nearest-neighbor upsample.
@@ -1871,7 +1383,6 @@ class Decoder(Module):
     the channel reduction. This avoids the checkerboard artifacts of
     transposed convolutions.
     """
-
     config: ModelConfig
     key: jt.PRNGKeyArray
 
@@ -1879,109 +1390,20 @@ class Decoder(Module):
         cfg = self.config
         ch = cfg.base_ch
         keys = jax.random.split(self.key, 12)
-        self.conv_in = Conv2D(
-            in_channels=cfg.latent_channels,
-            out_channels=4 * ch,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[0],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res1 = ResBlock(
-            in_channels=4 * ch,
-            out_channels=4 * ch,
-            key=keys[1],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.attn = AttentionBlock(
-            channels=4 * ch,
-            num_heads=cfg.num_attn_heads,
-            key=keys[2],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res2 = ResBlock(
-            in_channels=4 * ch,
-            out_channels=4 * ch,
-            key=keys[3],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.up1_conv = Conv2D(
-            in_channels=4 * ch,
-            out_channels=4 * ch,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[4],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res3 = ResBlock(
-            in_channels=4 * ch,
-            out_channels=2 * ch,
-            key=keys[5],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.up2_conv = Conv2D(
-            in_channels=2 * ch,
-            out_channels=2 * ch,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[6],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res4 = ResBlock(
-            in_channels=2 * ch,
-            out_channels=ch,
-            key=keys[7],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.up3_conv = Conv2D(
-            in_channels=ch,
-            out_channels=ch,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[8],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.res5 = ResBlock(
-            in_channels=ch,
-            out_channels=ch,
-            key=keys[9],
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.norm_out = GroupNorm(
-            num_features=ch,
-            num_groups=cfg.num_norm_groups,
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.conv_out = Conv2D(
-            in_channels=ch,
-            out_channels=cfg.input_channels,
-            kernel_size=3,
-            padding="SAME",
-            key=keys[10],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
+        self.conv_in = Conv2D(in_channels=cfg.latent_channels, out_channels=4 * ch, kernel_size=3, padding='SAME', key=keys[0], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res1 = ResBlock(in_channels=4 * ch, out_channels=4 * ch, key=keys[1], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.attn = AttentionBlock(channels=4 * ch, num_heads=cfg.num_attn_heads, key=keys[2], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res2 = ResBlock(in_channels=4 * ch, out_channels=4 * ch, key=keys[3], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.up1_conv = Conv2D(in_channels=4 * ch, out_channels=4 * ch, kernel_size=3, padding='SAME', key=keys[4], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res3 = ResBlock(in_channels=4 * ch, out_channels=2 * ch, key=keys[5], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.up2_conv = Conv2D(in_channels=2 * ch, out_channels=2 * ch, kernel_size=3, padding='SAME', key=keys[6], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res4 = ResBlock(in_channels=2 * ch, out_channels=ch, key=keys[7], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.up3_conv = Conv2D(in_channels=ch, out_channels=ch, kernel_size=3, padding='SAME', key=keys[8], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.res5 = ResBlock(in_channels=ch, out_channels=ch, key=keys[9], num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.norm_out = GroupNorm(num_features=ch, num_groups=cfg.num_norm_groups, param_dtype=self.param_dtype, dtype=self.dtype)
+        self.conv_out = Conv2D(in_channels=ch, out_channels=cfg.input_channels, kernel_size=3, padding='SAME', key=keys[10], param_dtype=self.param_dtype, dtype=self.dtype)
 
-    def __call__(
-        self, z: jt.Float[jt.Array, "B 16 16 latent_channels"]
-    ) -> jt.Float[jt.Array, "B 128 128 3"]:
+    def __call__(self, z: jt.Float[jt.Array, 'B 16 16 latent_channels']) -> jt.Float[jt.Array, 'B 128 128 3']:
         h = self.conv_in(z)
         h = self.res1(h)
         h = self.attn(h)
@@ -1999,12 +1421,7 @@ class Decoder(Module):
         h = self.conv_out(h)
         return jnp.tanh(h)
 
-
-def reparameterize(
-    mu: jt.Float[jt.Array, "B h w C"],
-    log_sigma_sq: jt.Float[jt.Array, "B h w C"],
-    rng_key: jt.PRNGKeyArray,
-) -> jt.Float[jt.Array, "B h w C"]:
+def reparameterize(mu: jt.Float[jt.Array, 'B h w C'], log_sigma_sq: jt.Float[jt.Array, 'B h w C'], rng_key: jt.PRNGKeyArray) -> jt.Float[jt.Array, 'B h w C']:
     """Reparameterization trick: ``z = μ + σ · ε`` with ``ε ~ N(0, I)``.
 
     Differentiable in both ``μ`` and ``log σ²``; the only non-differentiable
@@ -2017,10 +1434,7 @@ def reparameterize(
     eps = jax.random.normal(rng_key, mu.shape, dtype=mu.dtype)
     return mu + sigma * eps
 
-
-def kl_divergence(
-    mu: jt.Float[jt.Array, "B h w C"], log_sigma_sq: jt.Float[jt.Array, "B h w C"]
-) -> jt.Float[jt.Array, ""]:
+def kl_divergence(mu: jt.Float[jt.Array, 'B h w C'], log_sigma_sq: jt.Float[jt.Array, 'B h w C']) -> jt.Float[jt.Array, '']:
     """Closed-form KL( N(μ, σ²) || N(0, I) ), summed over latent dims.
 
     ``L_KL = 0.5 · mean_B( sum_{h,w,C} (μ² + σ² − log σ² − 1) )``.
@@ -2030,20 +1444,14 @@ def kl_divergence(
     loss magnitude by ``h*w*C`` (256 for the default config).
     """
     sigma_sq = jnp.exp(log_sigma_sq)
-    per_sample = 0.5 * jnp.sum(mu**2 + sigma_sq - log_sigma_sq - 1.0, axis=(1, 2, 3))
+    per_sample = 0.5 * jnp.sum(mu ** 2 + sigma_sq - log_sigma_sq - 1.0, axis=(1, 2, 3))
     return jnp.mean(per_sample)
 
-
-def recon_loss_l1(
-    recon: jt.Float[jt.Array, "B H W C"], target: jt.Float[jt.Array, "B H W C"]
-) -> jt.Float[jt.Array, ""]:
+def recon_loss_l1(recon: jt.Float[jt.Array, 'B H W C'], target: jt.Float[jt.Array, 'B H W C']) -> jt.Float[jt.Array, '']:
     """Mean L1 over pixels. Both args are assumed in ``[-1, 1]``."""
     return jnp.mean(jnp.abs(recon - target))
 
-
-def beta_warmup(
-    step: int | jt.Array, warmup_steps: int, beta_max: float
-) -> jt.Float[jt.Array, ""]:
+def beta_warmup(step: int | jt.Array, warmup_steps: int, beta_max: float) -> jt.Float[jt.Array, '']:
     """Linear KL warmup: ``β(step) = (step / warmup_steps) · β_max``, capped.
 
     Steps 0..warmup_steps ramp from 0 → β_max; thereafter β stays at β_max.
@@ -2056,7 +1464,6 @@ def beta_warmup(
     frac = jnp.minimum(jnp.asarray(step, jnp.float32) / warmup_steps, 1.0)
     return (frac * beta_max).astype(jnp.float32)
 
-
 class VAE(Module):
     """Encoder + decoder bundled together.
 
@@ -2065,55 +1472,30 @@ class VAE(Module):
     ``aux`` contains ``mu``, ``log_sigma_sq``, and ``z`` for downstream
     loss computation.
     """
-
     config: ModelConfig
     key: jt.PRNGKeyArray
 
     def init(self) -> None:
         keys = jax.random.split(self.key, 2)
-        self.encoder = Encoder(
-            config=self.config,
-            key=keys[0],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
-        self.decoder = Decoder(
-            config=self.config,
-            key=keys[1],
-            param_dtype=self.param_dtype,
-            dtype=self.dtype,
-        )
+        self.encoder = Encoder(config=self.config, key=keys[0], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.decoder = Decoder(config=self.config, key=keys[1], param_dtype=self.param_dtype, dtype=self.dtype)
 
-    def encode(
-        self, x: jt.Float[jt.Array, "B 128 128 3"]
-    ) -> tuple[jt.Float[jt.Array, "B 16 16 C"], jt.Float[jt.Array, "B 16 16 C"]]:
+    def encode(self, x: jt.Float[jt.Array, 'B 128 128 3']) -> tuple[jt.Float[jt.Array, 'B 16 16 C'], jt.Float[jt.Array, 'B 16 16 C']]:
         return self.encoder(x)
 
-    def decode(
-        self, z: jt.Float[jt.Array, "B 16 16 C"]
-    ) -> jt.Float[jt.Array, "B 128 128 3"]:
+    def decode(self, z: jt.Float[jt.Array, 'B 16 16 C']) -> jt.Float[jt.Array, 'B 128 128 3']:
         return self.decoder(z)
 
-    def __call__(
-        self,
-        x: jt.Float[jt.Array, "B 128 128 3"],
-        rng_key: typing.Optional[jt.PRNGKeyArray] = None,
-    ) -> tuple[jt.Float[jt.Array, "B 128 128 3"], dict[str, jt.Array]]:
+    def __call__(self, x: jt.Float[jt.Array, 'B 128 128 3'], rng_key: typing.Optional[jt.PRNGKeyArray]=None) -> tuple[jt.Float[jt.Array, 'B 128 128 3'], dict[str, jt.Array]]:
         mu, log_sigma_sq = self.encode(x)
         if rng_key is None:
             z = mu
         else:
             z = reparameterize(mu, log_sigma_sq, rng_key)
         recon = self.decode(z)
-        return (recon, {"mu": mu, "log_sigma_sq": log_sigma_sq, "z": z})
+        return (recon, {'mu': mu, 'log_sigma_sq': log_sigma_sq, 'z': z})
 
-
-def vae_loss(
-    model: VAE,
-    batch: jt.Float[jt.Array, "B 128 128 3"],
-    rng_key: jt.PRNGKeyArray,
-    beta: jt.Float[jt.Array, ""] | float = 1e-06,
-) -> tuple[jt.Float[jt.Array, ""], dict[str, jt.Array]]:
+def vae_loss(model: VAE, batch: jt.Float[jt.Array, 'B 128 128 3'], rng_key: jt.PRNGKeyArray, beta: jt.Float[jt.Array, ''] | float=1e-06) -> tuple[jt.Float[jt.Array, ''], dict[str, jt.Array]]:
     """Base VAE training loss: ``L_rec + β · L_KL``.
 
     Inputs are expected in ``[-1, 1]`` float32. Returns ``(loss, aux)`` where
@@ -2127,20 +1509,13 @@ def vae_loss(
     """
     recon, model_aux = model(batch, rng_key=rng_key)
     l_rec = recon_loss_l1(recon, batch)
-    l_kl = kl_divergence(model_aux["mu"], model_aux["log_sigma_sq"])
+    l_kl = kl_divergence(model_aux['mu'], model_aux['log_sigma_sq'])
     total = l_rec + beta * l_kl
-    aux = {
-        "l_rec": l_rec,
-        "l_kl": l_kl,
-        "beta": jnp.asarray(beta, jnp.float32),
-        "recon": recon,
-        **model_aux,
-    }
+    aux = {'l_rec': l_rec, 'l_kl': l_kl, 'beta': jnp.asarray(beta, jnp.float32), 'recon': recon, **model_aux}
     return (total, aux)
 
-
 # ============================================================
-# None - toylib_projects/wm/vision_encoder/train.py
+# None - ../wm/vision_encoder/train.py
 # ============================================================
 
 """Training entry point for the Track A1 KL-VAE vision codec.
@@ -2203,7 +1578,6 @@ the schedule cleanly requires either passing ``step`` into ``forward_fn``
 or building it into a stateful model — TODO.
 """
 
-
 def make_model_factory() -> typing.Callable:
     """Return a factory that builds an initialized VAE from (config, key)."""
 
@@ -2211,11 +1585,9 @@ def make_model_factory() -> typing.Callable:
         vae = VAE(config=config, key=key)
         vae.init()
         return vae
-
     return factory
 
-
-def make_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
+def make_forward_fn(beta: float, rng_seed: int=0) -> typing.Callable:
     """Build a ``(model, batch) -> (loss, aux)`` closure for training.
 
     Strips all large tensors from aux — only scalar losses pass through the
@@ -2226,25 +1598,18 @@ def make_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
     def forward_fn(model: VAE, batch):
         frames = batch.astype(jnp.float32) / 127.5 - 1.0
         loss, aux = vae_loss(model, frames, rng_key=fixed_key, beta=beta)
-        return (loss, {"l_rec": aux["l_rec"], "l_kl": aux["l_kl"]})
-
+        return (loss, {'l_rec': aux['l_rec'], 'l_kl': aux['l_kl']})
     return forward_fn
 
-
-def make_eval_forward_fn(beta: float, rng_seed: int = 0) -> typing.Callable:
+def make_eval_forward_fn(beta: float, rng_seed: int=0) -> typing.Callable:
     """Like ``make_forward_fn`` but also returns ``recon`` in aux for visualization."""
     fixed_key = jax.random.key(rng_seed)
 
     def eval_forward_fn(model: VAE, batch):
         frames = batch.astype(jnp.float32) / 127.5 - 1.0
         loss, aux = vae_loss(model, frames, rng_key=fixed_key, beta=beta)
-        return (
-            loss,
-            {"l_rec": aux["l_rec"], "l_kl": aux["l_kl"], "recon": aux["recon"]},
-        )
-
+        return (loss, {'l_rec': aux['l_rec'], 'l_kl': aux['l_kl'], 'recon': aux['recon']})
     return eval_forward_fn
-
 
 def make_sample_fn(latent_channels: int) -> typing.Callable:
     """Return a ``(model, key, n) -> uint8 images`` function for prior sampling.
@@ -2256,132 +1621,37 @@ def make_sample_fn(latent_channels: int) -> typing.Callable:
     latent_spatial = 16
 
     def sample_fn(model: VAE, key, n: int):
-        z = jax.random.normal(
-            key, shape=(n, latent_spatial, latent_spatial, latent_channels)
-        )
+        z = jax.random.normal(key, shape=(n, latent_spatial, latent_spatial, latent_channels))
         recon = model.decode(z)
         return jnp.clip((recon + 1.0) * 127.5, 0, 255).astype(jnp.uint8)
-
     return sample_fn
-
 
 @dataclasses.dataclass
 class VaeAuxMetric:
     """Surface the per-step scalar VAE losses (``l_rec``, ``l_kl``) as named metrics."""
-
-    keys: tuple[str, ...] = ("l_rec", "l_kl")
+    keys: tuple[str, ...] = ('l_rec', 'l_kl')
 
     def __call__(self, loss, aux, batch):
         del loss, batch
         return {k: aux[k] for k in self.keys if k in aux}
 
-
-def create_experiment(
-    train_path: str | Path,
-    val_path: str | Path | None = None,
-    *,
-    base_ch: int = 64,
-    latent_channels: int = 4,
-    batch_size_per_device: int = 16,
-    num_microbatches: int = 1,
-    max_steps: int = 1000,
-    learning_rate: float = 0.0001,
-    max_grad_norm: float = 1.0,
-    beta: float = 1e-06,
-    eval_interval_steps: int = 100,
-    num_eval_steps: int = 4,
-    save_interval_steps: int = 1000,
-    checkpoint_dir: str = "/tmp/wm_vae_ckpt",
-    log_dir: str = "/tmp/wm_vae_logs",
-    run_id: str | None = None,
-    num_recon_images: int = 8,
-    num_prior_samples: int = 16,
-    wandb_project: str | None = None,
-    wandb_user: str | None = None,
-    seed: int = 0,
-    jit_computations: bool = True,
-) -> Experiment:
+def create_experiment(train_path: str | Path, val_path: str | Path | None=None, *, base_ch: int=64, latent_channels: int=4, batch_size_per_device: int=16, num_microbatches: int=1, max_steps: int=1000, learning_rate: float=0.0001, max_grad_norm: float=1.0, beta: float=1e-06, eval_interval_steps: int=100, num_eval_steps: int=4, save_interval_steps: int=1000, checkpoint_dir: str='/tmp/wm_vae_ckpt', log_dir: str='/tmp/wm_vae_logs', run_id: str | None=None, num_recon_images: int=8, num_prior_samples: int=16, wandb_project: str | None=None, wandb_user: str | None=None, seed: int=0, jit_computations: bool=True) -> Experiment:
     """Wire datasets, model, optimizer, logger and checkpointer into an Experiment."""
     if run_id is None:
-        run_id = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        run_id = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
     n_devices = jax.local_device_count()
     batch_size = batch_size_per_device * n_devices * num_microbatches
-    train_ds = Hdf5FramesDataset(
-        dataset_path=str(train_path),
-        batch_size=batch_size,
-        seed=seed,
-        shuffle=True,
-        drop_remainder=True,
-        repeat=True,
-    )
-    train_task = Task(name="train", dataset=train_ds, metrics=[Loss(), VaeAuxMetric()])
+    train_ds = Hdf5FramesDataset(dataset_path=str(train_path), batch_size=batch_size, seed=seed, shuffle=True, drop_remainder=True, repeat=True)
+    train_task = Task(name='train', dataset=train_ds, metrics=[Loss(), VaeAuxMetric()])
     eval_task = None
     if val_path is not None:
-        val_ds = Hdf5FramesDataset(
-            dataset_path=str(val_path),
-            batch_size=batch_size,
-            seed=seed,
-            shuffle=False,
-            drop_remainder=False,
-            repeat=False,
-        )
-        eval_task = Task(
-            name="val",
-            dataset=val_ds,
-            metrics=[
-                Loss(),
-                VaeAuxMetric(),
-                ReconstructionVisualization(num_images=num_recon_images),
-            ],
-            visualization_metrics=[
-                PriorSamplingVisualization(
-                    sample_fn=make_sample_fn(latent_channels),
-                    num_samples=num_prior_samples,
-                )
-            ],
-        )
-    optimizer_config = MultiOptimizerConfig(
-        optimizer_configs=[
-            OptimizerConfig(
-                name="adam_all", optimizer=optax.adam(learning_rate=learning_rate)
-            )
-        ],
-        optimizer_for_param=lambda path: "adam_all",
-    )
+        val_ds = Hdf5FramesDataset(dataset_path=str(val_path), batch_size=batch_size, seed=seed, shuffle=False, drop_remainder=False, repeat=True)
+        eval_task = Task(name='val', dataset=val_ds, metrics=[Loss(), VaeAuxMetric(), ReconstructionVisualization(num_images=num_recon_images)], visualization_metrics=[PriorSamplingVisualization(sample_fn=make_sample_fn(latent_channels), num_samples=num_prior_samples)])
+    optimizer_config = MultiOptimizerConfig(optimizer_configs=[OptimizerConfig(name='adam_all', optimizer=optax.adam(learning_rate=learning_rate))], optimizer_for_param=lambda path: 'adam_all')
     if wandb_project is not None:
         if wandb_user is None:
-            raise ValueError("--wandb-user is required when --wandb-project is set")
-        logger_config = WandBLoggerConfig(
-            project_name=wandb_project,
-            user_name=wandb_user,
-            log_dir=log_dir,
-            run_id=run_id,
-        )
+            raise ValueError('--wandb-user is required when --wandb-project is set')
+        logger_config = WandBLoggerConfig(project_name=wandb_project, user_name=wandb_user, log_dir=log_dir, run_id=run_id)
     else:
         logger_config = LoggerConfig(log_dir=log_dir, run_id=run_id)
-    return Experiment(
-        train_task=train_task,
-        eval_task=eval_task,
-        forward_fn=make_forward_fn(beta=beta),
-        eval_forward_fn=make_eval_forward_fn(beta=beta)
-        if eval_task is not None
-        else None,
-        model_factory=make_model_factory(),
-        model_config=ModelConfig(base_ch=base_ch, latent_channels=latent_channels),
-        training_config=TrainingConfig(
-            max_steps=max_steps,
-            num_microbatches=num_microbatches,
-            max_grad_norm=max_grad_norm,
-            optimizer_config=optimizer_config,
-        ),
-        eval_config=EvalConfig(
-            eval_interval_steps=eval_interval_steps, num_eval_steps=num_eval_steps
-        ),
-        checkpoint_config=CheckpointConfig(
-            save_interval_steps=save_interval_steps,
-            checkpoint_dir=f"{checkpoint_dir}/{run_id}",
-        ),
-        logger_config=logger_config,
-        seed=seed,
-        jit_computations=jit_computations,
-    )
+    return Experiment(train_task=train_task, eval_task=eval_task, forward_fn=make_forward_fn(beta=beta), eval_forward_fn=make_eval_forward_fn(beta=beta) if eval_task is not None else None, model_factory=make_model_factory(), model_config=ModelConfig(base_ch=base_ch, latent_channels=latent_channels), training_config=TrainingConfig(max_steps=max_steps, num_microbatches=num_microbatches, max_grad_norm=max_grad_norm, optimizer_config=optimizer_config), eval_config=EvalConfig(eval_interval_steps=eval_interval_steps, num_eval_steps=num_eval_steps), checkpoint_config=CheckpointConfig(save_interval_steps=save_interval_steps, checkpoint_dir=f'{checkpoint_dir}/{run_id}'), logger_config=logger_config, seed=seed, jit_computations=jit_computations)
