@@ -167,8 +167,12 @@ def create_experiment(
 
     # ── Datasets ────────────────────────────────────────────────────────
     train_ds = dataloader_lib.Hdf5FramesDataset(
-        dataset_path=str(train_path), batch_size=batch_size,
-        seed=seed, shuffle=True, drop_remainder=True,
+        dataset_path=str(train_path),
+        batch_size=batch_size,
+        seed=seed,
+        shuffle=True,
+        drop_remainder=True,
+        repeat=True,
     )
     train_task = exp_lib.Task(
         name="train",
@@ -178,8 +182,12 @@ def create_experiment(
     eval_task = None
     if val_path is not None:
         val_ds = dataloader_lib.Hdf5FramesDataset(
-            dataset_path=str(val_path), batch_size=batch_size,
-            seed=seed, shuffle=False, drop_remainder=True,
+            dataset_path=str(val_path),
+            batch_size=batch_size,
+            seed=seed,
+            shuffle=False,
+            drop_remainder=True,
+            repeat=False,
         )
         eval_task = exp_lib.Task(
             name="val",
@@ -219,7 +227,8 @@ def create_experiment(
         forward_fn=make_forward_fn(beta=beta),
         model_factory=make_model_factory(),
         model_config=model_lib.ModelConfig(
-            base_ch=base_ch, latent_channels=latent_channels,
+            base_ch=base_ch,
+            latent_channels=latent_channels,
         ),
         training_config=exp_lib.TrainingConfig(
             max_steps=max_steps,
@@ -248,10 +257,18 @@ def create_experiment(
 
 def main() -> exp_lib.Experiment:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--train-path", type=Path, required=True,
-                        help="Path to compiled vae_train.h5 file.")
-    parser.add_argument("--val-path", type=Path, default=None,
-                        help="Path to compiled vae_val.h5 file (optional).")
+    parser.add_argument(
+        "--train-path",
+        type=Path,
+        required=True,
+        help="Path to compiled vae_train.h5 file.",
+    )
+    parser.add_argument(
+        "--val-path",
+        type=Path,
+        default=None,
+        help="Path to compiled vae_val.h5 file (optional).",
+    )
     parser.add_argument("--base-ch", type=int, default=64)
     parser.add_argument("--latent-channels", type=int, default=4)
     parser.add_argument("--batch-size-per-device", type=int, default=16)
@@ -267,16 +284,21 @@ def main() -> exp_lib.Experiment:
     parser.add_argument("--log-dir", default="/tmp/wm_vae_logs")
     parser.add_argument("--run-id", default=None)
     parser.add_argument(
-        "--wandb-project", default=None,
+        "--wandb-project",
+        default=None,
         help="W&B project name. If set, metrics go to wandb instead of a local file.",
     )
     parser.add_argument(
-        "--wandb-user", default=None,
+        "--wandb-user",
+        default=None,
         help="W&B entity/username. Required when --wandb-project is set.",
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--no-jit", action="store_true",
-                        help="Disable JIT (useful for debugging with pdb).")
+    parser.add_argument(
+        "--no-jit",
+        action="store_true",
+        help="Disable JIT (useful for debugging with pdb).",
+    )
     args = parser.parse_args()
 
     exp = create_experiment(

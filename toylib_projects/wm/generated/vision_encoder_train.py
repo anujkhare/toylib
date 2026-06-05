@@ -2153,6 +2153,7 @@ def create_experiment(
         seed=seed,
         shuffle=True,
         drop_remainder=True,
+        repeat=True,
     )
     train_task = Task(name="train", dataset=train_ds, metrics=[Loss(), VaeAuxMetric()])
     eval_task = None
@@ -2163,6 +2164,7 @@ def create_experiment(
             seed=seed,
             shuffle=False,
             drop_remainder=True,
+            repeat=False,
         )
         eval_task = Task(name="val", dataset=val_ds, metrics=[Loss(), VaeAuxMetric()])
     optimizer_config = MultiOptimizerConfig(
