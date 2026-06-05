@@ -159,6 +159,7 @@ class Hdf5FramesDataset:
     seed: int = 0
     shuffle: bool = True
     drop_remainder: bool = True
+    repeat: bool = False
 
     def __post_init__(self) -> None:
         self._state = Hdf5FramesDatasetState()
@@ -184,17 +185,26 @@ class Hdf5FramesDataset:
         return n
 
     def _make_iterator(self) -> typing.Iterator[jnp.ndarray]:
-        """Build the Grain pipeline and yield (batch_size, H, W, 3) batches."""
-        dataset = grain.MapDataset.source(self._source)
-        if self.shuffle:
-            dataset = dataset.shuffle(seed=self.seed)
-        dataset = dataset.batch(self.batch_size, drop_remainder=self.drop_remainder)
-        iterator = iter(dataset)
-        if self._state.sampler_state:
-            iterator.set_state(self._state.sampler_state)
-        self._grain_iterator = iterator
-        for batch in iterator:
-            yield jnp.asarray(batch)
+        """Build the Grain pipeline and yield (batch_size, H, W, 3) batches.
+
+        When ``repeat=True`` the pipeline loops indefinitely; each epoch uses
+        ``seed + epoch`` so the shuffle order differs across epochs.
+        """
+        epoch = 0
+        while True:
+            dataset = grain.MapDataset.source(self._source)
+            if self.shuffle:
+                dataset = dataset.shuffle(seed=self.seed + epoch)
+            dataset = dataset.batch(self.batch_size, drop_remainder=self.drop_remainder)
+            iterator = iter(dataset)
+            if epoch == 0 and self._state.sampler_state:
+                iterator.set_state(self._state.sampler_state)
+            self._grain_iterator = iterator
+            for batch in iterator:
+                yield jnp.asarray(batch)
+            if not self.repeat:
+                break
+            epoch += 1
 
     def __iter__(self) -> "Hdf5FramesDataset":
         return self
