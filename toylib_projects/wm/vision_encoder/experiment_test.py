@@ -203,6 +203,45 @@ def test_trivial_loop_completes_and_logs(tmp_path: Path, train_ds, val_ds) -> No
     assert len(val_rows) >= 1, f"expected ≥1 val row, got {len(val_rows)}"
 
 
+class _EmptyDataset:
+    """Iterable dataset stub that yields no batches (e.g. an empty eval split)."""
+
+    def __init__(self) -> None:
+        self.batch_size = jax.local_device_count()
+
+    def __iter__(self):
+        return iter(())
+
+
+def test_run_validation_empty_eval_dataset_returns_empty(tmp_path: Path, train_ds) -> None:
+    """An eval dataset that yields zero batches must not crash run_validation.
+
+    Regression: an empty eval iterator left ``accumulated_scalars`` as None, so
+    ``jax.tree.map(..., None)`` produced None and the subsequent ``.items()``
+    raised ``AttributeError: 'NoneType' object has no attribute 'items'``.
+    """
+    exp = Experiment(
+        train_task=Task("train", train_ds),
+        eval_task=Task("val", _EmptyDataset()),
+        forward_fn=_trivial_forward_fn,
+        model_factory=_trivial_model_factory,
+        training_config=TrainingConfig(max_steps=2, num_microbatches=1),
+        eval_config=EvalConfig(eval_interval_steps=1, num_eval_steps=1),
+        checkpoint_config=CheckpointConfig(
+            checkpoint_dir=str(tmp_path / "ckpts"),
+            save_interval_steps=10_000,
+        ),
+        logger_config=LoggerConfig(log_dir=str(tmp_path), run_id="empty_eval"),
+        jit_computations=False,
+    )
+    exp.init_state()
+
+    assert exp.run_validation() == {}
+    # eval() chains run_validation + sampling_evaluation and must also survive.
+    exp.eval()
+    exp.cleanup()
+
+
 def test_checkpoint_roundtrip(tmp_path: Path, train_ds) -> None:
     """save_checkpoint then restore_checkpoint must round-trip model + opt state."""
     exp = Experiment(

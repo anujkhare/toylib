@@ -213,7 +213,9 @@ def create_experiment(
             batch_size=batch_size,
             seed=seed,
             shuffle=False,
-            drop_remainder=True,
+            # Keep the final partial batch so small val splits (fewer frames than
+            # batch_size) still produce a batch instead of an empty iterator.
+            drop_remainder=False,
             repeat=False,
         )
         eval_task = exp_lib.Task(

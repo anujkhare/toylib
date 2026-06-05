@@ -940,6 +940,9 @@ class Experiment:
             num_batches += 1
             if ix >= self.eval_config.num_eval_steps:
                 break
+        if num_batches == 0:
+            print("Eval dataset yielded no batches, skipping validation.")
+            return {}
         avg_metrics = jax.tree.map(
             lambda x: float(x) / num_batches, accumulated_scalars
         )
@@ -2319,7 +2322,7 @@ def create_experiment(
             batch_size=batch_size,
             seed=seed,
             shuffle=False,
-            drop_remainder=True,
+            drop_remainder=False,
             repeat=False,
         )
         eval_task = Task(

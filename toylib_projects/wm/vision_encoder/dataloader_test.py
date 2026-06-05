@@ -89,6 +89,36 @@ def test_drop_remainder_false_yields_partial(tmp_path: Path) -> None:
     assert [b.shape[0] for b in batches] == [4, 4, 2]
 
 
+def test_fewer_frames_than_batch_size(tmp_path: Path) -> None:
+    """When num_frames < batch_size, drop_remainder controls empty vs partial.
+
+    Regression: a small val split (e.g. 16 frames) with the default
+    drop_remainder=True produced *zero* batches, so validation iterated nothing.
+    drop_remainder=False yields a single partial batch holding all frames.
+    """
+    _write_fake_vae_h5(tmp_path / "v.h5", n=16)
+
+    dropped = Hdf5FramesDataset(
+        dataset_path=str(tmp_path / "v.h5"),
+        batch_size=64,
+        drop_remainder=True,
+        shuffle=False,
+    )
+    assert len(dropped) == 0  # 16 // 64
+    assert list(dropped) == []
+
+    kept = Hdf5FramesDataset(
+        dataset_path=str(tmp_path / "v.h5"),
+        batch_size=64,
+        drop_remainder=False,
+        shuffle=False,
+    )
+    assert len(kept) == 1
+    batches = list(kept)
+    assert len(batches) == 1
+    assert batches[0].shape[0] == 16
+
+
 def test_no_shuffle_returns_storage_order(tmp_path: Path) -> None:
     _write_fake_vae_h5(tmp_path / "v.h5", n=12)
     ds = Hdf5FramesDataset(
