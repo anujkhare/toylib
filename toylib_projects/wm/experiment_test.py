@@ -22,8 +22,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from toylib_projects.wm.vision_encoder.dataloader import Hdf5FramesDataset
-from toylib_projects.wm.vision_encoder.experiment import (
+from toylib_projects.wm.dataloader import Hdf5FramesDataset
+from toylib_projects.wm.experiment import (
     CheckpointConfig,
     EvalConfig,
     Experiment,

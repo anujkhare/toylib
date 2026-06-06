@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from toylib_projects.wm.vision_encoder.dataloader import (
+from toylib_projects.wm.dataloader import (
     DatasetState,
     Hdf5FramesDataset,
     Hdf5FramesDatasetState,
@@ -74,6 +74,66 @@ def test_basic_iteration_shape_and_dtype(tmp_path: Path) -> None:
     batch = next(iter(ds))
     assert batch.shape == (8, 16, 16, 3)
     assert batch.dtype == jnp.uint8
+
+
+def _write_labelled_vae_h5(path: Path, n: int = 16, h: int = 8, w: int = 8) -> Path:
+    """Synthetic compiled file with a ``source/`` group of per-frame state.
+
+    Each state value equals the frame index so we can verify ordering and the
+    frame↔target correspondence after shuffling.
+    """
+    frames = np.zeros((n, h, w, 3), dtype=np.uint8)
+    for i in range(n):
+        frames[i, :, :, 0] = i
+    with h5py.File(path, "w") as f:
+        f.attrs["n_frames"] = np.int32(n)
+        f.attrs["height"] = np.int32(h)
+        f.attrs["width"] = np.int32(w)
+        f.create_dataset("frames", data=frames, chunks=(1, h, w, 3), **hdf5plugin.LZ4())
+        src = f.create_group("source")
+        idx = np.arange(n, dtype=np.float32)
+        src.create_dataset("ball_x", data=idx)
+        src.create_dataset("ball_y", data=idx + 100.0)
+        src.create_dataset("paddle_x", data=idx + 200.0)
+    return path
+
+
+def test_label_keys_yields_dict_batches(tmp_path: Path) -> None:
+    _write_labelled_vae_h5(tmp_path / "v.h5", n=16, h=8, w=8)
+    ds = Hdf5FramesDataset(
+        dataset_path=str(tmp_path / "v.h5"),
+        batch_size=4,
+        shuffle=False,
+        label_keys=("ball_x", "ball_y", "paddle_x"),
+    )
+    batch = next(iter(ds))
+    assert set(batch.keys()) == {"frames", "targets"}
+    assert batch["frames"].shape == (4, 8, 8, 3)
+    assert batch["targets"].shape == (4, 3)
+    assert batch["targets"].dtype == jnp.float32
+
+    # Targets must line up with their frames (state == frame index, +100, +200).
+    frame_idx = np.asarray(batch["frames"])[:, 0, 0, 0].astype(np.float32)
+    targets = np.asarray(batch["targets"])
+    np.testing.assert_allclose(targets[:, 0], frame_idx)
+    np.testing.assert_allclose(targets[:, 1], frame_idx + 100.0)
+    np.testing.assert_allclose(targets[:, 2], frame_idx + 200.0)
+
+
+def test_label_keys_order_is_respected(tmp_path: Path) -> None:
+    _write_labelled_vae_h5(tmp_path / "v.h5", n=8, h=8, w=8)
+    ds = Hdf5FramesDataset(
+        dataset_path=str(tmp_path / "v.h5"),
+        batch_size=4,
+        shuffle=False,
+        label_keys=("paddle_x", "ball_x"),  # reversed-ish subset
+    )
+    batch = next(iter(ds))
+    frame_idx = np.asarray(batch["frames"])[:, 0, 0, 0].astype(np.float32)
+    targets = np.asarray(batch["targets"])
+    assert targets.shape == (4, 2)
+    np.testing.assert_allclose(targets[:, 0], frame_idx + 200.0)  # paddle_x first
+    np.testing.assert_allclose(targets[:, 1], frame_idx)  # ball_x second
 
 
 def test_drop_remainder_false_yields_partial(tmp_path: Path) -> None:
@@ -223,7 +283,7 @@ def test_source_survives_pickle(tmp_path: Path) -> None:
     """_Hdf5FramesSource must pickle cleanly even after a read (drops live handle)."""
     import pickle
 
-    from toylib_projects.wm.vision_encoder.dataloader import _Hdf5FramesSource
+    from toylib_projects.wm.dataloader import _Hdf5FramesSource
 
     _write_fake_vae_h5(tmp_path / "v.h5", n=8)
     src = _Hdf5FramesSource(str(tmp_path / "v.h5"))

@@ -56,8 +56,12 @@ class _Hdf5FramesSource:
     """Grain RandomAccessDataSource backed by one compiled vae_*.h5 file.
 
     Implements the protocol Grain expects of a random-access source:
-    ``__len__`` + ``__getitem__``. Each ``__getitem__`` returns a single
-    frame as ``(H, W, 3)`` uint8.
+    ``__len__`` + ``__getitem__``. With ``label_keys=None`` each
+    ``__getitem__`` returns a single frame as ``(H, W, 3)`` uint8. With
+    ``label_keys`` set, it returns a dict ``{"frames": (H, W, 3) uint8,
+    "targets": (K,) float32}`` where ``targets`` stacks the requested
+    ``source/<key>`` per-frame state values (e.g. ball_x / ball_y / paddle_x)
+    in the given order.
 
     The HDF5 file handle is opened **lazily** on first access. This matters
     because Grain may pickle this source to send to worker processes; an
@@ -66,8 +70,13 @@ class _Hdf5FramesSource:
     worker opens its own descriptor.
     """
 
-    def __init__(self, dataset_path: str) -> None:
+    def __init__(
+        self,
+        dataset_path: str,
+        label_keys: typing.Optional[tuple[str, ...]] = None,
+    ) -> None:
         self._path = str(dataset_path)
+        self._label_keys = tuple(label_keys) if label_keys else None
         self._f: typing.Optional[h5py.File] = None
         # Read the small attrs eagerly so __len__ and frame_shape are cheap
         # and don't require an open file handle on the main process.
@@ -87,16 +96,24 @@ class _Hdf5FramesSource:
     def __len__(self) -> int:
         return self._n
 
-    def __getitem__(self, idx: int) -> np.ndarray:
+    def __getitem__(self, idx: int):
         self._ensure_open()
         # h5py random access on the first axis decompresses exactly one chunk
         # — our compiled file uses chunks=(1, H, W, 3), so this is per-frame.
-        return self._f["frames"][idx]  # type: ignore[index]
+        frame = self._f["frames"][idx]  # type: ignore[index]
+        if self._label_keys is None:
+            return frame
+        targets = np.array(
+            [self._f[f"source/{k}"][idx] for k in self._label_keys],  # type: ignore[index]
+            dtype=np.float32,
+        )
+        return {"frames": frame, "targets": targets}
 
     def __getstate__(self) -> dict:
         # Drop the live file handle before pickling; recipient re-opens lazily.
         return {
             "_path": self._path,
+            "_label_keys": self._label_keys,
             "_f": None,
             "_n": self._n,
             "_height": self._height,
@@ -111,9 +128,14 @@ class _Hdf5FramesSource:
 class Hdf5FramesDataset:
     """Stream batches of frames from a compiled vae_*.h5 file.
 
-    Yields ``jnp.ndarray`` batches of shape ``(batch_size, H, W, 3)`` with
-    dtype ``uint8``. Normalization (uint8 → float32 / [-1, 1]) is left to
-    the training loop so this loader stays pure and easy to inspect in tests.
+    With ``label_keys=None`` (the default) this yields ``jnp.ndarray`` batches
+    of shape ``(batch_size, H, W, 3)`` with dtype ``uint8``. With ``label_keys``
+    set it instead yields dict batches ``{"frames": (B, H, W, 3) uint8,
+    "targets": (B, K) float32}`` where each column of ``targets`` is the
+    corresponding ``source/<key>`` per-frame state value (e.g. ball_x / ball_y
+    / paddle_x). Normalization (uint8 → float32 / [-1, 1] for frames, and any
+    target scaling) is left to the training loop so this loader stays pure and
+    easy to inspect in tests.
 
     Checkpointing follows the same ``DatasetState`` / ``get_state`` /
     ``restore_state`` protocol used elsewhere in the project. The state
@@ -136,6 +158,10 @@ class Hdf5FramesDataset:
     drop_remainder :
         Drop the last partial batch (so every batch has exactly
         ``batch_size`` frames).
+    label_keys :
+        If set, also load these ``source/<key>`` per-frame state arrays and
+        yield dict batches ``{"frames": ..., "targets": ...}`` (see above).
+        ``None`` (default) yields plain frame batches.
     """
 
     dataset_path: str  # e.g. data/compiled/vae_train.h5
@@ -144,10 +170,11 @@ class Hdf5FramesDataset:
     shuffle: bool = True
     drop_remainder: bool = True
     repeat: bool = False
+    label_keys: typing.Optional[tuple[str, ...]] = None
 
     def __post_init__(self) -> None:
         self._state = Hdf5FramesDatasetState()
-        self._source = _Hdf5FramesSource(self.dataset_path)
+        self._source = _Hdf5FramesSource(self.dataset_path, label_keys=self.label_keys)
         self._grain_iterator: typing.Optional[typing.Any] = None
         self.dataset_iter = self._make_iterator()
 
@@ -193,8 +220,12 @@ class Hdf5FramesDataset:
             self._grain_iterator = iterator
 
             for batch in iterator:
-                # Grain returns numpy uint8 of shape (batch_size, H, W, 3).
-                yield jnp.asarray(batch)
+                # Plain frames: numpy uint8 (batch_size, H, W, 3). With labels,
+                # Grain stacks the per-key dict leaves into a dict of arrays.
+                if isinstance(batch, dict):
+                    yield {k: jnp.asarray(v) for k, v in batch.items()}
+                else:
+                    yield jnp.asarray(batch)
 
             if not self.repeat:
                 break

@@ -23,6 +23,7 @@ dependencies = [
     # training loop infrastructure (forked from tinystories)
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",
+    "gcsfs>=2024.0.0",    # lets orbax restore checkpoints from gs:// URIs
     "flax>=0.10.0",       # NNX modules for the VAE / DiT
     "pandas>=2.0.0",      # param/dataset stats reporting in analyze.py
 ]

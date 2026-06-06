@@ -2,15 +2,10 @@
 
 Implements the architecture specified in
 ``docs/walkthroughs/a1_vision_codec.md`` (which is the actionable
-distillation of ``docs/designs/vision_codec.md``), with one deliberate
-deviation from the walkthrough: we run on the Stage 2 default
-**128×128** frames rather than the walkthrough's 64×64 spec. The
-architecture is unchanged (still 3 stride-2 downsample stages); this
-just keeps the latent grid at ``H / 8``, so the new shapes are:
+distillation of ``docs/designs/vision_codec.md``).
 
-  - Input  : (B, 128, 128, 3) float32 in [-1, 1]
-  - Latent : (B,  16,  16, 4) float32  — 256 tokens per frame for downstream models
-  - Output : (B, 128, 128, 3) float32 in (-1, 1)   (Tanh head)
+3 stride-2 downsample stages give an 8× spatial reduction, so for an
+input of ``(B, H, W, 3)`` the latent grid is ``(B, H/8, W/8, latent_channels)``.
 
 Encoder pipeline (per the walkthrough — unchanged):
     Conv → ResBlock → Down → ResBlock → Down → ResBlock → Down →
@@ -199,9 +194,8 @@ class AttentionBlock(module.Module):
 class Encoder(module.Module):
     """Down-3× conv encoder producing per-spatial Gaussian parameters.
 
-    Output is a single tensor of ``(B, 8, 8, 2C)`` which is split along the
-    channel axis into ``μ`` and ``log σ²``. ``log σ²`` is clipped before
-    any downstream ``exp`` to avoid NaNs at init.
+    Output is split along the channel axis into ``μ`` and ``log σ²``.
+    ``log σ²`` is clipped before any downstream ``exp`` to avoid NaNs at init.
     """
 
     config: ModelConfig
@@ -223,7 +217,7 @@ class Encoder(module.Module):
             dtype=self.dtype,
         )
 
-        # ── 64×64, ch ───────────────────────────────────────────────────
+        # ── stage 1, ch ─────────────────────────────────────────────────
         self.res1 = ResBlock(
             in_channels=ch,
             out_channels=ch,
@@ -232,7 +226,7 @@ class Encoder(module.Module):
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
-        # 64 → 32, ch → 2ch (stride-2 conv).
+        # stride-2, ch → 2ch.
         self.down1 = layers.Conv2D(
             in_channels=ch,
             out_channels=2 * ch,
@@ -244,7 +238,7 @@ class Encoder(module.Module):
             dtype=self.dtype,
         )
 
-        # ── 32×32, 2ch ──────────────────────────────────────────────────
+        # ── stage 2, 2ch ────────────────────────────────────────────────
         self.res2 = ResBlock(
             in_channels=2 * ch,
             out_channels=2 * ch,
@@ -253,7 +247,7 @@ class Encoder(module.Module):
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
-        # 32 → 16, 2ch → 4ch.
+        # stride-2, 2ch → 4ch.
         self.down2 = layers.Conv2D(
             in_channels=2 * ch,
             out_channels=4 * ch,
@@ -265,7 +259,7 @@ class Encoder(module.Module):
             dtype=self.dtype,
         )
 
-        # ── 16×16, 4ch ──────────────────────────────────────────────────
+        # ── stage 3, 4ch ────────────────────────────────────────────────
         self.res3 = ResBlock(
             in_channels=4 * ch,
             out_channels=4 * ch,
@@ -274,7 +268,7 @@ class Encoder(module.Module):
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
-        # 16 → 8, channels stay at 4ch.
+        # stride-2, channels stay at 4ch.
         self.down3 = layers.Conv2D(
             in_channels=4 * ch,
             out_channels=4 * ch,
@@ -286,7 +280,7 @@ class Encoder(module.Module):
             dtype=self.dtype,
         )
 
-        # ── 8×8 bottleneck ──────────────────────────────────────────────
+        # ── bottleneck ──────────────────────────────────────────────────
         self.res4 = ResBlock(
             in_channels=4 * ch,
             out_channels=4 * ch,
@@ -330,10 +324,10 @@ class Encoder(module.Module):
         )
 
     def __call__(
-        self, x: jt.Float[jt.Array, "B 128 128 3"]
+        self, x: jt.Float[jt.Array, "B H W 3"]
     ) -> tuple[
-        jt.Float[jt.Array, "B 16 16 latent_channels"],
-        jt.Float[jt.Array, "B 16 16 latent_channels"],
+        jt.Float[jt.Array, "B h w latent_channels"],
+        jt.Float[jt.Array, "B h w latent_channels"],
     ]:
         h = self.conv_in(x)
         h = self.res1(h)
@@ -373,7 +367,7 @@ class Decoder(module.Module):
         ch = cfg.base_ch
         keys = jax.random.split(self.key, 12)
 
-        # ── 8×8 bottleneck ──────────────────────────────────────────────
+        # ── bottleneck ──────────────────────────────────────────────────
         self.conv_in = layers.Conv2D(
             in_channels=cfg.latent_channels,
             out_channels=4 * ch,
@@ -408,7 +402,7 @@ class Decoder(module.Module):
             dtype=self.dtype,
         )
 
-        # ── 8 → 16, 4ch → 2ch ───────────────────────────────────────────
+        # ── upsample 1, 4ch → 2ch ───────────────────────────────────────
         self.up1_conv = layers.Conv2D(
             in_channels=4 * ch,
             out_channels=4 * ch,
@@ -427,7 +421,7 @@ class Decoder(module.Module):
             dtype=self.dtype,
         )
 
-        # ── 16 → 32, 2ch → ch ───────────────────────────────────────────
+        # ── upsample 2, 2ch → ch ────────────────────────────────────────
         self.up2_conv = layers.Conv2D(
             in_channels=2 * ch,
             out_channels=2 * ch,
@@ -446,7 +440,7 @@ class Decoder(module.Module):
             dtype=self.dtype,
         )
 
-        # ── 32 → 64, ch → ch ────────────────────────────────────────────
+        # ── upsample 3, ch → ch ─────────────────────────────────────────
         self.up3_conv = layers.Conv2D(
             in_channels=ch,
             out_channels=ch,
@@ -483,22 +477,22 @@ class Decoder(module.Module):
         )
 
     def __call__(
-        self, z: jt.Float[jt.Array, "B 16 16 latent_channels"]
-    ) -> jt.Float[jt.Array, "B 128 128 3"]:
+        self, z: jt.Float[jt.Array, "B h w latent_channels"]
+    ) -> jt.Float[jt.Array, "B H W 3"]:
         h = self.conv_in(z)
         h = self.res1(h)
         h = self.attn(h)
         h = self.res2(h)
 
-        h = layers.upsample_nearest(h, factor=2)  # 8 → 16
+        h = layers.upsample_nearest(h, factor=2)
         h = self.up1_conv(h)
         h = self.res3(h)
 
-        h = layers.upsample_nearest(h, factor=2)  # 16 → 32
+        h = layers.upsample_nearest(h, factor=2)
         h = self.up2_conv(h)
         h = self.res4(h)
 
-        h = layers.upsample_nearest(h, factor=2)  # 32 → 64
+        h = layers.upsample_nearest(h, factor=2)
         h = self.up3_conv(h)
         h = self.res5(h)
 
@@ -604,20 +598,20 @@ class VAE(module.Module):
         )
 
     def encode(
-        self, x: jt.Float[jt.Array, "B 128 128 3"]
-    ) -> tuple[jt.Float[jt.Array, "B 16 16 C"], jt.Float[jt.Array, "B 16 16 C"]]:
+        self, x: jt.Float[jt.Array, "B H W 3"]
+    ) -> tuple[jt.Float[jt.Array, "B h w C"], jt.Float[jt.Array, "B h w C"]]:
         return self.encoder(x)
 
     def decode(
-        self, z: jt.Float[jt.Array, "B 16 16 C"]
-    ) -> jt.Float[jt.Array, "B 128 128 3"]:
+        self, z: jt.Float[jt.Array, "B h w C"]
+    ) -> jt.Float[jt.Array, "B H W 3"]:
         return self.decoder(z)
 
     def __call__(
         self,
-        x: jt.Float[jt.Array, "B 128 128 3"],
+        x: jt.Float[jt.Array, "B H W 3"],
         rng_key: typing.Optional[jt.PRNGKeyArray] = None,
-    ) -> tuple[jt.Float[jt.Array, "B 128 128 3"], dict[str, jt.Array]]:
+    ) -> tuple[jt.Float[jt.Array, "B H W 3"], dict[str, jt.Array]]:
         mu, log_sigma_sq = self.encode(x)
         if rng_key is None:
             # Deterministic / inference path.
@@ -630,7 +624,7 @@ class VAE(module.Module):
 
 def vae_loss(
     model: VAE,
-    batch: jt.Float[jt.Array, "B 128 128 3"],
+    batch: jt.Float[jt.Array, "B H W 3"],
     rng_key: jt.PRNGKeyArray,
     beta: jt.Float[jt.Array, ""] | float = 1e-6,
 ) -> tuple[jt.Float[jt.Array, ""], dict[str, jt.Array]]:

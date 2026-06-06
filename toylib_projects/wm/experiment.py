@@ -36,8 +36,8 @@ Intended usage (sketch)
 
 ::
 
-    from vision_encoder.dataloader import Hdf5FramesDataset
-    from vision_encoder.experiment import (
+    from toylib_projects.wm.dataloader import Hdf5FramesDataset
+    from toylib_projects.wm.experiment import (
         Experiment, Task, TrainingConfig, EvalConfig,
         CheckpointConfig, LoggerConfig,
     )
@@ -76,9 +76,9 @@ import numpy as np
 import optax
 import orbax.checkpoint as ocp
 
-from toylib_projects.wm.vision_encoder import dataloader as dataloader_lib
-from toylib_projects.wm.vision_encoder import logger
-from toylib_projects.wm.vision_encoder import metrics as metrics_module
+from toylib_projects.wm import dataloader as dataloader_lib
+from toylib_projects.wm import logger
+from toylib_projects.wm import metrics as metrics_module
 
 
 # ──────────────────────────────────────────────────────────────────────────

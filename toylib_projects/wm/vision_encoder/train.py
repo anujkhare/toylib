@@ -70,10 +70,11 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from toylib_projects.wm import dataloader as dataloader_lib
+from toylib_projects.wm import experiment as exp_lib
+from toylib_projects.wm import metrics as metrics_lib
 from toylib_projects.wm.vision_encoder import analyze as analyze_lib
-from toylib_projects.wm.vision_encoder import dataloader as dataloader_lib
-from toylib_projects.wm.vision_encoder import experiment as exp_lib
-from toylib_projects.wm.vision_encoder import metrics as metrics_lib
+from toylib_projects.wm.vision_encoder import metrics as ve_metrics_lib
 from toylib_projects.wm.vision_encoder import model as model_lib
 
 
@@ -128,7 +129,7 @@ def make_sample_fn(latent_channels: int) -> typing.Callable:
     (16×16 for 128×128 inputs with 8× downsampling), decodes them, and converts
     the float32 ``[-1, 1]`` output to uint8 ``[0, 255]``.
     """
-    latent_spatial = 16  # 128 / 8x encoder downsampling
+    latent_spatial = 16  # input_H / 8x encoder downsampling (3 stride-2 stages)
 
     def sample_fn(model: model_lib.VAE, key, n: int):
         z = jax.random.normal(
@@ -227,10 +228,10 @@ def create_experiment(
             metrics=[
                 metrics_lib.Loss(),
                 VaeAuxMetric(),
-                metrics_lib.ReconstructionVisualization(num_images=num_recon_images),
+                ve_metrics_lib.ReconstructionVisualization(num_images=num_recon_images),
             ],
             visualization_metrics=[
-                metrics_lib.PriorSamplingVisualization(
+                ve_metrics_lib.PriorSamplingVisualization(
                     sample_fn=make_sample_fn(latent_channels),
                     num_samples=num_prior_samples,
                 ),
