@@ -156,8 +156,15 @@ class AttributeStripper(ast.NodeTransformer):
 
         # Check if the root is a Name node with an imported name
         if isinstance(root.value, ast.Name) and root.value.id in self.imported_names:
-            # Replace the entire chain with just the final attribute
-            return ast.Name(id=attrs[-1], ctx=ast.Load())
+            # Drop the module prefix but keep the rest of the attribute chain,
+            # e.g. ``probe_model.Pooling.FLATTEN`` -> ``Pooling.FLATTEN``. Only
+            # keeping the final attribute breaks nested accesses like enum
+            # members (it would yield a bare ``FLATTEN``).
+            new_node: ast.expr = ast.Name(id=attrs[0], ctx=ast.Load())
+            for attr in attrs[1:]:
+                new_node = ast.Attribute(value=new_node, attr=attr, ctx=ast.Load())
+            new_node.ctx = node.ctx
+            return ast.copy_location(new_node, node)
 
         # If not matching our pattern, continue visiting children normally
         return self.generic_visit(node)

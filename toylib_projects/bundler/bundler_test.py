@@ -101,7 +101,13 @@ class TestAttributeStripper:
         assert "result = foo()" in result
 
     def test_nested_attribute_access(self):
-        """Test: mypackage.sub.func -> func."""
+        """Strip only the imported module alias, keep the rest of the chain.
+
+        Internal imports alias a *leaf module* (``from pkg import mod as alias``),
+        so the first attribute after the alias is already a top-level symbol and
+        anything beyond it is genuine attribute access (e.g. an enum member). We
+        must keep ``sub.func`` rather than collapsing to ``func``.
+        """
         source = "result = mypackage.sub.func()"
         tree = ast.parse(source)
 
@@ -110,7 +116,23 @@ class TestAttributeStripper:
 
         result = ast.unparse(tree)
         assert "mypackage" not in result
-        assert "result = func()" in result
+        assert "result = sub.func()" in result
+
+    def test_enum_member_access_keeps_class(self):
+        """Regression: ``probe_model.Pooling.FLATTEN`` -> ``Pooling.FLATTEN``.
+
+        Collapsing to a bare ``FLATTEN`` (the old behavior) produced an
+        undefined name in the bundled output.
+        """
+        source = "x = probe_model.Pooling.FLATTEN"
+        tree = ast.parse(source)
+
+        stripper = bundler.AttributeStripper({"probe_model"})
+        tree = stripper.visit(tree)
+
+        result = ast.unparse(tree)
+        assert "probe_model" not in result
+        assert "x = Pooling.FLATTEN" in result
 
 
 class TestBundlerV2:

@@ -1687,7 +1687,7 @@ class ProbeAuxMetric:
         del loss, batch
         return {k: aux[k] for k in self.keys if k in aux}
 
-def create_experiment(train_path: str | Path, val_path: str | Path | None, *, vae_checkpoint_dir: str | None=None, vae_checkpoint_step: int | None=None, base_ch: int=64, latent_channels: int=4, latent_spatial: int=16, hidden_dim: int=256, pooling: Pooling=FLATTEN, batch_size_per_device: int=32, num_microbatches: int=1, max_steps: int=2000, learning_rate: float=0.001, max_grad_norm: float=1.0, eval_interval_steps: int=100, num_eval_steps: int=4, save_interval_steps: int=1000, checkpoint_dir: str='/tmp/wm_probe_ckpt', log_dir: str='/tmp/wm_probe_logs', run_id: str | None=None, wandb_project: str | None=None, wandb_user: str | None=None, seed: int=0, jit_computations: bool=True) -> Experiment:
+def create_experiment(train_path: str | Path, val_path: str | Path | None, *, vae_checkpoint_dir: str | None=None, vae_checkpoint_step: int | None=None, base_ch: int=64, latent_channels: int=4, latent_spatial: int=16, hidden_dim: int=256, pooling: Pooling=Pooling.FLATTEN, batch_size_per_device: int=32, num_microbatches: int=1, max_steps: int=2000, learning_rate: float=0.001, max_grad_norm: float=1.0, eval_interval_steps: int=100, num_eval_steps: int=4, save_interval_steps: int=1000, checkpoint_dir: str='/tmp/wm_probe_ckpt', log_dir: str='/tmp/wm_probe_logs', run_id: str | None=None, wandb_project: str | None=None, wandb_user: str | None=None, seed: int=0, jit_computations: bool=True) -> Experiment:
     """Wire labelled datasets, the frozen-encoder probe, and the optimizer."""
     if run_id is None:
         run_id = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
