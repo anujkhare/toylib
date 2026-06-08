@@ -27,7 +27,6 @@ import jax.numpy as jnp
 import jaxtyping as jt
 
 from toylib.nn import layers, module
-from toylib_projects.wm.vision_encoder import model as vae_model
 
 
 class Pooling(enum.Enum):
@@ -40,6 +39,37 @@ class Pooling(enum.Enum):
 
     FLATTEN = "flatten"
     MEAN = "mean"
+
+
+class EncoderType(enum.Enum):
+    """Which "encoder" feeds the probe head.
+
+    ``VAE`` runs the pretrained (frozen) VAE encoder and probes its latent.
+    ``PASSTHROUGH`` skips the VAE entirely and feeds the raw image to the head
+    — a baseline / upper bound: the ball is trivially recoverable from pixels,
+    so a pass-through probe tells you how much positional info the latent
+    *could* carry. Compare its R² to the VAE probe's.
+    """
+
+    VAE = "vae"
+    PASSTHROUGH = "passthrough"
+
+
+class IdentityEncoder(module.Module):
+    """Pass-through "encoder": returns the input image as the latent.
+
+    Mirrors the VAE ``Encoder`` call signature ``(x) -> (mu, log_sigma_sq)`` so
+    it drops straight into ``MLPProbe``. It has no parameters, so the
+    optimizer-level encoder freeze is a harmless no-op.
+    """
+
+    def init(self) -> None:  # no parameters to build
+        pass
+
+    def __call__(
+        self, x: jt.Float[jt.Array, "B H W C"]
+    ) -> tuple[jt.Float[jt.Array, "B H W C"], jt.Float[jt.Array, "B H W C"]]:
+        return x, x  # second value is ignored by the probe (it uses mu only)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -74,7 +104,9 @@ class MLPProbe(module.Module):
     """
 
     config: ProbeConfig
-    encoder: vae_model.Encoder
+    # Either a VAE ``Encoder`` or an ``IdentityEncoder`` (pass-through baseline);
+    # both expose ``(frames) -> (mu, _)``.
+    encoder: module.Module
     key: jt.PRNGKeyArray
 
     def init(self) -> None:

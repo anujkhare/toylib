@@ -113,6 +113,27 @@ def test_probe_forward_shape() -> None:
     assert pred.shape == (5, len(probe_train.TARGET_KEYS))
 
 
+def test_passthrough_encoder_feeds_raw_pixels() -> None:
+    """IdentityEncoder returns the image as the latent, so the flattened feature
+    dim equals H*W*3 and the probe still produces (B, num_targets)."""
+    encoder = probe_model.IdentityEncoder()
+    encoder.init()
+    cfg = probe_model.ProbeConfig(
+        latent_channels=3,
+        latent_spatial=_H,
+        hidden_dim=16,
+        num_targets=len(probe_train.TARGET_KEYS),
+    )
+    assert cfg.feature_dim == _H * _W * 3
+    probe = probe_model.MLPProbe(config=cfg, encoder=encoder, key=jax.random.key(0))
+    probe.init()
+    # The pass-through encoder has no trainable parameters.
+    assert jax.tree_util.tree_leaves(probe.encoder) == []
+
+    frames = jnp.zeros((5, _H, _W, 3), dtype=jnp.float32)
+    assert probe(frames).shape == (5, len(probe_train.TARGET_KEYS))
+
+
 def test_probe_feature_dim_matches_pooling() -> None:
     flat = probe_model.ProbeConfig(
         latent_channels=_LATENT_CH,
@@ -215,3 +236,78 @@ def test_training_without_checkpoint_uses_random_encoder(tmp_path: Path) -> None
     for a, b in zip(enc_before, enc_after):
         np.testing.assert_array_equal(a, b)  # still frozen
     assert any(not np.allclose(a, b) for a, b in zip(fc1_before, fc1_after))
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# R² metric + pass-through baseline
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_forward_fn_emits_r2_matching_definition() -> None:
+    """``r2_{name}`` must equal 1 − MSE/Var for the supplied target variance."""
+    var = np.array([0.04, 0.09, 0.16], dtype=np.float32)  # normalized-scale var
+    forward = probe_train.make_forward_fn(target_var=var)
+
+    class _ConstModel:
+        def __call__(self, frames):
+            # Predict zero for every target regardless of input.
+            return jnp.zeros((frames.shape[0], len(probe_train.TARGET_KEYS)))
+
+    n = 8
+    frames = jnp.zeros((n, _H, _W, 3), dtype=jnp.float32)
+    # Targets in RAM units; forward divides by TARGET_SCALE internally.
+    targets = jnp.asarray(
+        np.tile(np.array([10.0, 20.0, 30.0], np.float32), (n, 1))
+    )
+    _, aux = forward(_ConstModel(), {"frames": frames, "targets": targets})
+
+    for i, name in enumerate(probe_train.TARGET_KEYS):
+        mse = float(aux[f"mse_{name}"])
+        np.testing.assert_allclose(
+            float(aux[f"r2_{name}"]), 1.0 - mse / var[i], rtol=1e-5
+        )
+
+
+def test_target_variance_matches_numpy(tmp_path: Path) -> None:
+    _write_labelled_h5(tmp_path / "train.h5", n=64)
+    var = probe_train.target_variance(tmp_path / "train.h5", probe_train.TARGET_KEYS)
+    assert var.shape == (len(probe_train.TARGET_KEYS),)
+    assert np.all(var > 0)  # synthetic targets are non-constant
+
+
+def test_passthrough_experiment_trains_and_logs_r2(tmp_path: Path) -> None:
+    """End-to-end pass-through baseline: no checkpoint needed, the probe trains
+    on raw pixels, and the eval/train aux exposes R² per target."""
+    _write_labelled_h5(tmp_path / "train.h5", n=64)
+
+    bspd = jax.local_device_count()
+    exp = probe_train.create_experiment(
+        train_path=tmp_path / "train.h5",
+        val_path=None,
+        encoder_type=probe_model.EncoderType.PASSTHROUGH,
+        hidden_dim=16,
+        batch_size_per_device=bspd,
+        max_steps=3,
+        learning_rate=1e-2,
+        save_interval_steps=10_000,
+        eval_interval_steps=10_000,
+        checkpoint_dir=str(tmp_path / "probe_ckpt"),
+        log_dir=str(tmp_path / "logs"),
+    )
+    exp.init_state()
+
+    # The pass-through "encoder" carries no parameters, and its feature dim is
+    # the flattened raw frame (H*W*3).
+    assert jax.tree_util.tree_leaves(exp.model.encoder) == []
+    assert exp.model.config.feature_dim == _H * _W * 3
+
+    fc1_before = [np.asarray(x) for x in jax.tree_util.tree_leaves(exp.model.fc1)]
+    exp.outer_loop()
+    exp.cleanup()
+    fc1_after = [np.asarray(x) for x in jax.tree_util.tree_leaves(exp.model.fc1)]
+
+    assert any(not np.allclose(a, b) for a, b in zip(fc1_before, fc1_after))
+
+    # The R² keys are surfaced by the metric.
+    metric = probe_train.ProbeAuxMetric()
+    assert all(f"r2_{k}" in metric.keys for k in probe_train.TARGET_KEYS)

@@ -39,12 +39,14 @@ import datetime
 import typing
 from pathlib import Path
 
+import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
 
+from toylib.nn import module as module_lib
 from toylib_projects.wm import dataloader as dataloader_lib
 from toylib_projects.wm import experiment as exp_lib
 from toylib_projects.wm import metrics as metrics_lib
@@ -59,6 +61,33 @@ TARGET_KEYS: tuple[str, ...] = ("ball_x", "ball_y", "paddle_x")
 # roughly [0, 1] so MSE is on a sane scale; multiply errors back by it to report
 # them in original RAM units.
 TARGET_SCALE: float = 255.0
+
+
+# Floor on each target's normalized variance, used as the R² denominator. Guards
+# against divide-by-zero for a (degenerate) constant target.
+_VAR_EPS: float = 1e-8
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Target statistics (for R²)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def target_variance(path: str | Path, keys: tuple[str, ...]) -> np.ndarray:
+    """Per-target variance of the labels, on the **normalized** scale.
+
+    R² compares the probe's error to the error of always predicting the target
+    mean (whose MSE *is* the variance). We read the variance once from the
+    training labels so R² can be computed cheaply inside the jitted forward pass.
+    The values are divided by ``TARGET_SCALE**2`` to match the normalized targets
+    used in the loss.
+    """
+    with h5py.File(path, "r") as f:
+        src = f["source"]
+        cols = [np.asarray(src[k][:], dtype=np.float64) for k in keys]
+    raw = np.stack(cols, axis=1)  # (N, K)
+    var = raw.var(axis=0) / (TARGET_SCALE**2)
+    return np.maximum(var, _VAR_EPS).astype(np.float32)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -102,31 +131,41 @@ def make_probe_factory(
     vae_config: vae_model.ModelConfig,
     vae_checkpoint_dir: str | None,
     vae_checkpoint_step: int | None,
+    encoder_type: probe_model.EncoderType = probe_model.EncoderType.VAE,
 ) -> typing.Callable:
     """Return a ``(ProbeConfig, key) -> MLPProbe`` factory.
 
-    With a checkpoint, loads the pretrained VAE encoder and builds a probe with
-    a fresh (random) MLP head on top of it.
+    The encoder feeding the probe head depends on ``encoder_type``:
 
-    With ``vae_checkpoint_dir=None`` the encoder is **randomly initialized**
-    instead of restored. The probe then trains against an untrained encoder —
-    only useful for smoke-testing the pipeline (and as a baseline: a random
-    encoder should probe *worse* than a trained one).
+      - ``VAE`` with a checkpoint: load the pretrained VAE encoder.
+      - ``VAE`` with ``vae_checkpoint_dir=None``: a **randomly initialized**
+        encoder — a smoke test / weak baseline (random features should probe
+        *worse* than trained ones).
+      - ``PASSTHROUGH``: an ``IdentityEncoder`` that feeds raw pixels to the
+        head — the upper-bound baseline (ignores the VAE entirely).
+
+    In every case the MLP head is freshly (randomly) initialized.
     """
 
     def factory(config: probe_model.ProbeConfig, key) -> probe_model.MLPProbe:
         vae_key, mlp_key = jax.random.split(key, 2)
-        if vae_checkpoint_dir is None:
+
+        if encoder_type is probe_model.EncoderType.PASSTHROUGH:
+            encoder: module_lib.Module = probe_model.IdentityEncoder()
+            encoder.init()
+        elif vae_checkpoint_dir is None:
             vae = vae_model.VAE(config=vae_config, key=vae_key)
             vae.init()
+            encoder = jax.tree.map(jnp.asarray, vae.encoder)
         else:
             if vae_checkpoint_step is None:
                 raise ValueError(
                     "vae_checkpoint_step is required when vae_checkpoint_dir is set"
                 )
             vae = load_vae(vae_checkpoint_dir, vae_checkpoint_step, vae_config, vae_key)
-        # Bring the restored (host) arrays onto the device/mesh in effect.
-        encoder = jax.tree.map(jnp.asarray, vae.encoder)
+            # Bring the restored (host) arrays onto the device/mesh in effect.
+            encoder = jax.tree.map(jnp.asarray, vae.encoder)
+
         probe = probe_model.MLPProbe(config=config, encoder=encoder, key=mlp_key)
         probe.init()
         return probe
@@ -139,14 +178,24 @@ def make_probe_factory(
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def make_forward_fn() -> typing.Callable:
+def make_forward_fn(target_var: np.ndarray | None = None) -> typing.Callable:
     """Build a ``(model, batch) -> (loss, aux)`` closure.
 
     ``batch`` is ``{"frames": (B, H, W, 3) uint8, "targets": (B, K) float32}``
     in RAM coordinates. Frames are mapped to ``[-1, 1]`` and targets to ``~[0,1]``
-    before an MSE regression loss. ``aux`` carries per-target MSE (normalized
-    units) and MAE (RAM units) for logging.
+    before an MSE regression loss. ``aux`` carries, per target:
+
+      - ``mse_{name}``    — MSE on the normalized scale.
+      - ``mae_raw_{name}``— MAE back in RAM units (multiply by ``TARGET_SCALE``).
+      - ``r2_{name}``     — R² = 1 − MSE / Var(target), if ``target_var`` is given.
+
+    R² is the interpretable signal: ≈0 means the latent carries no recoverable
+    info about that target (no better than predicting the mean); →1 means it is
+    fully recoverable. ``target_var`` is the per-target variance on the
+    normalized scale (see ``target_variance``); it is closed over as a constant
+    so R² stays cheap inside the jitted step.
     """
+    var = None if target_var is None else jnp.asarray(target_var)
 
     def forward_fn(model: probe_model.MLPProbe, batch):
         frames = batch["frames"].astype(jnp.float32) / 127.5 - 1.0
@@ -159,8 +208,11 @@ def make_forward_fn() -> typing.Callable:
         loss = jnp.mean(se)
         aux = {}
         for i, name in enumerate(TARGET_KEYS):
-            aux[f"mse_{name}"] = jnp.mean(se[:, i])
+            mse_i = jnp.mean(se[:, i])
+            aux[f"mse_{name}"] = mse_i
             aux[f"mae_raw_{name}"] = jnp.mean(jnp.abs(err[:, i])) * TARGET_SCALE
+            if var is not None:
+                aux[f"r2_{name}"] = 1.0 - mse_i / var[i]
         return loss, aux
 
     return forward_fn
@@ -171,7 +223,9 @@ class ProbeAuxMetric:
     """Surface the per-target probe errors (MSE + RAM-unit MAE) as named metrics."""
 
     keys: tuple[str, ...] = tuple(
-        [f"mse_{k}" for k in TARGET_KEYS] + [f"mae_raw_{k}" for k in TARGET_KEYS]
+        [f"mse_{k}" for k in TARGET_KEYS]
+        + [f"mae_raw_{k}" for k in TARGET_KEYS]
+        + [f"r2_{k}" for k in TARGET_KEYS]
     )
 
     def __call__(self, loss, aux, batch):
@@ -188,9 +242,11 @@ def create_experiment(
     train_path: str | Path,
     val_path: str | Path | None,
     *,
+    encoder_type: probe_model.EncoderType = probe_model.EncoderType.VAE,
     vae_checkpoint_dir: str | None = None,
     vae_checkpoint_step: int | None = None,
-    # VAE encoder shape (must match the checkpoint).
+    # VAE encoder shape (must match the checkpoint). Ignored for PASSTHROUGH,
+    # where the latent dims are taken from the raw frame shape instead.
     base_ch: int = 64,
     latent_channels: int = 4,
     latent_spatial: int = 16,
@@ -237,6 +293,19 @@ def create_experiment(
         dataset=train_ds,
         metrics=[metrics_lib.Loss(), ProbeAuxMetric()],
     )
+
+    # For the pass-through baseline the "latent" *is* the image, so its feature
+    # dims come from the frame shape rather than the (unused) VAE config.
+    if encoder_type is probe_model.EncoderType.PASSTHROUGH:
+        frame_h, frame_w, frame_c = train_ds.frame_shape
+        if frame_h != frame_w:
+            raise ValueError(
+                f"pass-through probe assumes square frames, got {frame_h}x{frame_w}"
+            )
+        latent_spatial, latent_channels = frame_h, frame_c
+
+    # Per-target variance → the R² denominator (computed from the train labels).
+    target_var = target_variance(train_path, TARGET_KEYS)
     eval_task = None
     if val_path is not None:
         val_ds = dataloader_lib.Hdf5FramesDataset(
@@ -294,11 +363,12 @@ def create_experiment(
     return exp_lib.Experiment(
         train_task=train_task,
         eval_task=eval_task,
-        forward_fn=make_forward_fn(),
+        forward_fn=make_forward_fn(target_var=target_var),
         model_factory=make_probe_factory(
             vae_config=vae_config,
             vae_checkpoint_dir=vae_checkpoint_dir,
             vae_checkpoint_step=vae_checkpoint_step,
+            encoder_type=encoder_type,
         ),
         model_config=probe_config,
         training_config=exp_lib.TrainingConfig(
@@ -330,6 +400,17 @@ def main() -> exp_lib.Experiment:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-path", type=Path, required=True)
     parser.add_argument("--val-path", type=Path, default=None)
+    parser.add_argument(
+        "--encoder-type",
+        type=probe_model.EncoderType,
+        default=probe_model.EncoderType.VAE,
+        choices=list(probe_model.EncoderType),
+        help=(
+            "vae: probe the (frozen) VAE latent. "
+            "passthrough: probe raw pixels directly (upper-bound baseline; "
+            "ignores --vae-checkpoint-dir)."
+        ),
+    )
     parser.add_argument(
         "--vae-checkpoint-dir",
         default=None,
@@ -369,6 +450,7 @@ def main() -> exp_lib.Experiment:
     exp = create_experiment(
         train_path=args.train_path,
         val_path=args.val_path,
+        encoder_type=args.encoder_type,
         vae_checkpoint_dir=args.vae_checkpoint_dir,
         vae_checkpoint_step=args.vae_checkpoint_step,
         base_ch=args.base_ch,

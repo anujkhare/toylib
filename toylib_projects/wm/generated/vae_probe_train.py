@@ -30,6 +30,112 @@ import typing
 import wandb
 
 # ============================================================
+# toylib.nn.module - /Users/anuj/Desktop/code/toylib/toylib/nn/module.py
+# ============================================================
+
+def _is_array(x: typing.Any) -> bool:
+    return isinstance(x, (jax.Array, np.ndarray, np.generic)) or hasattr(x, '__jax_array__')
+
+def _is_random_key(x: str) -> bool:
+    return x == 'key'
+
+def _is_supported_container(x: typing.Any) -> bool:
+    return isinstance(x, (list, tuple))
+
+def _wrap_init(orig: typing.Callable) -> typing.Callable:
+
+    def wrapped(self) -> None:
+        orig(self)
+        for v in self.__dict__.values():
+            if isinstance(v, Module) and (not hasattr(v, '_trainable_param_keys')):
+                v.init()
+            elif _is_supported_container(v):
+                for elem in v:
+                    if isinstance(elem, Module) and (not hasattr(elem, '_trainable_param_keys')):
+                        elem.init()
+        self._trainable_param_keys = self._get_trainable_param_keys()
+        if hasattr(self, 'key'):
+            self.key = None
+    return wrapped
+
+@dataclasses.dataclass
+class Module(abc.ABC):
+    """
+    Defines a base class to use for the neural network modules in toylib.
+
+    Assumes that all jax arrays are leaf nodes that are trainable and
+    everything else is a static param. Defines the flatten and unflatten methods
+    to make the modules compatible with jax `jit` and `grad` functions.
+
+    Refer https://jax.readthedocs.io/en/latest/pytrees.html#extending-pytrees
+
+    Inspired by equinox and the Custom PyTres and Initialization section in jax docs.
+
+    Every subclass automatically receives two dtype fields inherited from this base:
+
+        param_dtype: storage dtype for trainable parameters (default float32).
+        dtype: compute dtype for forward-pass operations (default float32).
+    """
+    param_dtype: np.dtype | type = jnp.float32
+    dtype: np.dtype | type = jnp.float32
+
+    def __init_subclass__(cls, **kwargs: typing.Any) -> None:
+        """Initialize subclass as a dataclass and register as a pytree node.
+
+        Sub-classes of dataclasses are not automatically dataclasses, so we need to explicitly convert them.
+        We also register the class as a pytree with jax so that it can be used with jax transformations like jit and grad.
+
+        Also wraps the subclass's init() to recursively initialize any sub-Module instances
+        created during init(), then compute _trainable_param_keys. This means calling init()
+        on the top-level module is sufficient to initialize the entire module tree.
+        """
+        super().__init_subclass__(**kwargs)
+        cls = dataclasses.dataclass(cls, kw_only=True)
+        cls = jax.tree_util.register_pytree_with_keys_class(cls)
+        if 'init' in cls.__dict__:
+            original_init = cls.__dict__['init']
+            cls.init = _wrap_init(original_init)
+
+    @abc.abstractmethod
+    def init(self) -> None:
+        """Initialize all the trainable parameters in the module."""
+        pass
+
+    @abc.abstractmethod
+    def __call__(self, *args, **kwargs) -> typing.Any:
+        """Run a forward pass of the module."""
+        pass
+
+    def _get_trainable_param_keys(self) -> list[str]:
+        """Get the list of attribute names that are trainable parameters."""
+        param_keys = []
+        for k, v in self.__dict__.items():
+            if _is_array(v) and (not _is_random_key(k)) or isinstance(v, Module) or (_is_supported_container(v) and all((isinstance(elem, Module) for elem in v))):
+                param_keys.append(k)
+        return param_keys
+
+    def tree_flatten_with_keys(self) -> tuple:
+        params_with_keys = []
+        aux_data = dict()
+        for k, v in self.__dict__.items():
+            if k not in self._trainable_param_keys:
+                aux_data[k] = v
+        for k in self._trainable_param_keys:
+            v = self.__dict__[k]
+            params_with_keys.append((jax.tree_util.GetAttrKey(k), v))
+        return (params_with_keys, aux_data)
+
+    @classmethod
+    def tree_unflatten(cls, static, dynamic) -> 'Module':
+        obj = object.__new__(cls)
+        param_keys = static['_trainable_param_keys']
+        for k, v in zip(param_keys, dynamic):
+            obj.__setattr__(k, v)
+        for k, v in static.items():
+            obj.__setattr__(k, v)
+        return obj
+
+# ============================================================
 # toylib_projects.wm.dataloader - /Users/anuj/Desktop/code/toylib/toylib_projects/wm/dataloader.py
 # ============================================================
 
@@ -827,112 +933,6 @@ class Experiment:
         self.ckpt_manager.close()
 
 # ============================================================
-# toylib.nn.module - /Users/anuj/Desktop/code/toylib/toylib/nn/module.py
-# ============================================================
-
-def _is_array(x: typing.Any) -> bool:
-    return isinstance(x, (jax.Array, np.ndarray, np.generic)) or hasattr(x, '__jax_array__')
-
-def _is_random_key(x: str) -> bool:
-    return x == 'key'
-
-def _is_supported_container(x: typing.Any) -> bool:
-    return isinstance(x, (list, tuple))
-
-def _wrap_init(orig: typing.Callable) -> typing.Callable:
-
-    def wrapped(self) -> None:
-        orig(self)
-        for v in self.__dict__.values():
-            if isinstance(v, Module) and (not hasattr(v, '_trainable_param_keys')):
-                v.init()
-            elif _is_supported_container(v):
-                for elem in v:
-                    if isinstance(elem, Module) and (not hasattr(elem, '_trainable_param_keys')):
-                        elem.init()
-        self._trainable_param_keys = self._get_trainable_param_keys()
-        if hasattr(self, 'key'):
-            self.key = None
-    return wrapped
-
-@dataclasses.dataclass
-class Module(abc.ABC):
-    """
-    Defines a base class to use for the neural network modules in toylib.
-
-    Assumes that all jax arrays are leaf nodes that are trainable and
-    everything else is a static param. Defines the flatten and unflatten methods
-    to make the modules compatible with jax `jit` and `grad` functions.
-
-    Refer https://jax.readthedocs.io/en/latest/pytrees.html#extending-pytrees
-
-    Inspired by equinox and the Custom PyTres and Initialization section in jax docs.
-
-    Every subclass automatically receives two dtype fields inherited from this base:
-
-        param_dtype: storage dtype for trainable parameters (default float32).
-        dtype: compute dtype for forward-pass operations (default float32).
-    """
-    param_dtype: np.dtype | type = jnp.float32
-    dtype: np.dtype | type = jnp.float32
-
-    def __init_subclass__(cls, **kwargs: typing.Any) -> None:
-        """Initialize subclass as a dataclass and register as a pytree node.
-
-        Sub-classes of dataclasses are not automatically dataclasses, so we need to explicitly convert them.
-        We also register the class as a pytree with jax so that it can be used with jax transformations like jit and grad.
-
-        Also wraps the subclass's init() to recursively initialize any sub-Module instances
-        created during init(), then compute _trainable_param_keys. This means calling init()
-        on the top-level module is sufficient to initialize the entire module tree.
-        """
-        super().__init_subclass__(**kwargs)
-        cls = dataclasses.dataclass(cls, kw_only=True)
-        cls = jax.tree_util.register_pytree_with_keys_class(cls)
-        if 'init' in cls.__dict__:
-            original_init = cls.__dict__['init']
-            cls.init = _wrap_init(original_init)
-
-    @abc.abstractmethod
-    def init(self) -> None:
-        """Initialize all the trainable parameters in the module."""
-        pass
-
-    @abc.abstractmethod
-    def __call__(self, *args, **kwargs) -> typing.Any:
-        """Run a forward pass of the module."""
-        pass
-
-    def _get_trainable_param_keys(self) -> list[str]:
-        """Get the list of attribute names that are trainable parameters."""
-        param_keys = []
-        for k, v in self.__dict__.items():
-            if _is_array(v) and (not _is_random_key(k)) or isinstance(v, Module) or (_is_supported_container(v) and all((isinstance(elem, Module) for elem in v))):
-                param_keys.append(k)
-        return param_keys
-
-    def tree_flatten_with_keys(self) -> tuple:
-        params_with_keys = []
-        aux_data = dict()
-        for k, v in self.__dict__.items():
-            if k not in self._trainable_param_keys:
-                aux_data[k] = v
-        for k in self._trainable_param_keys:
-            v = self.__dict__[k]
-            params_with_keys.append((jax.tree_util.GetAttrKey(k), v))
-        return (params_with_keys, aux_data)
-
-    @classmethod
-    def tree_unflatten(cls, static, dynamic) -> 'Module':
-        obj = object.__new__(cls)
-        param_keys = static['_trainable_param_keys']
-        for k, v in zip(param_keys, dynamic):
-            obj.__setattr__(k, v)
-        for k, v in static.items():
-            obj.__setattr__(k, v)
-        return obj
-
-# ============================================================
 # toylib.nn.layers - /Users/anuj/Desktop/code/toylib/toylib/nn/layers.py
 # ============================================================
 
@@ -1089,6 +1089,113 @@ def rms_norm(x: jt.Float[jt.Array, '... dim']) -> jt.Float[jt.Array, '... dim']:
     x = x.astype(jnp.float32)
     rms = jnp.sqrt(jnp.mean(jnp.square(x), axis=-1, keepdims=True) + 1e-09)
     return (x / rms).astype(orig_dtype)
+
+# ============================================================
+# toylib_projects.wm.probe.model - /Users/anuj/Desktop/code/toylib/toylib_projects/wm/probe/model.py
+# ============================================================
+
+"""Linear / MLP probe on top of a frozen VAE encoder.
+
+The probe answers a diagnostic question: *does the VAE's latent actually encode
+the ball and paddle positions?* It runs the pretrained encoder, takes the
+posterior mean ``mu`` (the deterministic latent), and feeds it through a small
+MLP head that regresses the per-frame state targets (ball_x, ball_y, paddle_x).
+
+The encoder is **not** trained here. Freezing is enforced at the optimizer
+level (see ``probe/train.py``, which maps the ``encoder`` sub-tree to
+``optax.set_to_zero``), so this module simply runs the encoder forward and lets
+gradients flow; the optimizer drops the encoder updates. Keeping the freeze in
+the optimizer — rather than a ``stop_gradient`` here — keeps the probe model a
+plain feed-forward module and makes "what is trainable" a single, inspectable
+decision in the training script.
+
+Built on the toylib ``Module`` base (dataclass-style, pytree-registered) so it
+plugs straight into the shared ``Experiment`` harness.
+"""
+
+class Pooling(enum.Enum):
+    """How the spatial latent grid is reduced to a feature vector.
+
+    ``FLATTEN`` keeps the full spatial latent (preserves *where* the ball is);
+    ``MEAN`` pools over the grid (only useful if position is encoded in channel
+    statistics — usually it isn't, so flatten is the default).
+    """
+    FLATTEN = 'flatten'
+    MEAN = 'mean'
+
+class EncoderType(enum.Enum):
+    """Which "encoder" feeds the probe head.
+
+    ``VAE`` runs the pretrained (frozen) VAE encoder and probes its latent.
+    ``PASSTHROUGH`` skips the VAE entirely and feeds the raw image to the head
+    — a baseline / upper bound: the ball is trivially recoverable from pixels,
+    so a pass-through probe tells you how much positional info the latent
+    *could* carry. Compare its R² to the VAE probe's.
+    """
+    VAE = 'vae'
+    PASSTHROUGH = 'passthrough'
+
+class IdentityEncoder(Module):
+    """Pass-through "encoder": returns the input image as the latent.
+
+    Mirrors the VAE ``Encoder`` call signature ``(x) -> (mu, log_sigma_sq)`` so
+    it drops straight into ``MLPProbe``. It has no parameters, so the
+    optimizer-level encoder freeze is a harmless no-op.
+    """
+
+    def init(self) -> None:
+        pass
+
+    def __call__(self, x: jt.Float[jt.Array, 'B H W C']) -> tuple[jt.Float[jt.Array, 'B H W C'], jt.Float[jt.Array, 'B H W C']]:
+        return (x, x)
+
+@dataclasses.dataclass(frozen=True)
+class ProbeConfig:
+    """Hyperparameters for the latent probe.
+
+    ``latent_spatial`` and ``latent_channels`` must match the encoder that
+    produces the latent (16×16×4 for the default 128×128 VAE). They determine
+    the flattened feature dimension fed to the MLP head.
+    """
+    latent_channels: int = 4
+    latent_spatial: int = 16
+    hidden_dim: int = 256
+    num_targets: int = 3
+    pooling: Pooling = Pooling.FLATTEN
+
+    @property
+    def feature_dim(self) -> int:
+        if self.pooling is Pooling.FLATTEN:
+            return self.latent_spatial * self.latent_spatial * self.latent_channels
+        if self.pooling is Pooling.MEAN:
+            return self.latent_channels
+        raise ValueError(f'unknown pooling mode: {self.pooling!r}')
+
+class MLPProbe(Module):
+    """Frozen VAE encoder + two-layer MLP regressing state targets.
+
+    The ``encoder`` is supplied pre-initialized (typically restored from a VAE
+    checkpoint) so this module's ``init`` only builds the trainable MLP head.
+    """
+    config: ProbeConfig
+    encoder: Module
+    key: jt.PRNGKeyArray
+
+    def init(self) -> None:
+        keys = jax.random.split(self.key, 2)
+        self.fc1 = Linear(in_features=self.config.feature_dim, out_features=self.config.hidden_dim, use_bias=True, key=keys[0], param_dtype=self.param_dtype, dtype=self.dtype)
+        self.fc2 = Linear(in_features=self.config.hidden_dim, out_features=self.config.num_targets, use_bias=True, key=keys[1], param_dtype=self.param_dtype, dtype=self.dtype)
+
+    def _pool(self, mu: jt.Float[jt.Array, 'B h w C']) -> jt.Float[jt.Array, 'B feature_dim']:
+        if self.config.pooling is Pooling.FLATTEN:
+            return mu.reshape(mu.shape[0], -1)
+        return jnp.mean(mu, axis=(1, 2))
+
+    def __call__(self, frames: jt.Float[jt.Array, 'B 128 128 3']) -> jt.Float[jt.Array, 'B num_targets']:
+        mu, _ = self.encoder(frames)
+        feat = self._pool(mu)
+        h = jax.nn.silu(self.fc1(feat))
+        return self.fc2(h)
 
 # ============================================================
 # toylib.nn.attention - /Users/anuj/Desktop/code/toylib/toylib/nn/attention.py
@@ -1489,88 +1596,7 @@ def vae_loss(model: VAE, batch: jt.Float[jt.Array, 'B H W 3'], rng_key: jt.PRNGK
     return (total, aux)
 
 # ============================================================
-# toylib_projects.wm.probe.model - /Users/anuj/Desktop/code/toylib/toylib_projects/wm/probe/model.py
-# ============================================================
-
-"""Linear / MLP probe on top of a frozen VAE encoder.
-
-The probe answers a diagnostic question: *does the VAE's latent actually encode
-the ball and paddle positions?* It runs the pretrained encoder, takes the
-posterior mean ``mu`` (the deterministic latent), and feeds it through a small
-MLP head that regresses the per-frame state targets (ball_x, ball_y, paddle_x).
-
-The encoder is **not** trained here. Freezing is enforced at the optimizer
-level (see ``probe/train.py``, which maps the ``encoder`` sub-tree to
-``optax.set_to_zero``), so this module simply runs the encoder forward and lets
-gradients flow; the optimizer drops the encoder updates. Keeping the freeze in
-the optimizer — rather than a ``stop_gradient`` here — keeps the probe model a
-plain feed-forward module and makes "what is trainable" a single, inspectable
-decision in the training script.
-
-Built on the toylib ``Module`` base (dataclass-style, pytree-registered) so it
-plugs straight into the shared ``Experiment`` harness.
-"""
-
-class Pooling(enum.Enum):
-    """How the spatial latent grid is reduced to a feature vector.
-
-    ``FLATTEN`` keeps the full spatial latent (preserves *where* the ball is);
-    ``MEAN`` pools over the grid (only useful if position is encoded in channel
-    statistics — usually it isn't, so flatten is the default).
-    """
-    FLATTEN = 'flatten'
-    MEAN = 'mean'
-
-@dataclasses.dataclass(frozen=True)
-class ProbeConfig:
-    """Hyperparameters for the latent probe.
-
-    ``latent_spatial`` and ``latent_channels`` must match the encoder that
-    produces the latent (16×16×4 for the default 128×128 VAE). They determine
-    the flattened feature dimension fed to the MLP head.
-    """
-    latent_channels: int = 4
-    latent_spatial: int = 16
-    hidden_dim: int = 256
-    num_targets: int = 3
-    pooling: Pooling = Pooling.FLATTEN
-
-    @property
-    def feature_dim(self) -> int:
-        if self.pooling is Pooling.FLATTEN:
-            return self.latent_spatial * self.latent_spatial * self.latent_channels
-        if self.pooling is Pooling.MEAN:
-            return self.latent_channels
-        raise ValueError(f'unknown pooling mode: {self.pooling!r}')
-
-class MLPProbe(Module):
-    """Frozen VAE encoder + two-layer MLP regressing state targets.
-
-    The ``encoder`` is supplied pre-initialized (typically restored from a VAE
-    checkpoint) so this module's ``init`` only builds the trainable MLP head.
-    """
-    config: ProbeConfig
-    encoder: Encoder
-    key: jt.PRNGKeyArray
-
-    def init(self) -> None:
-        keys = jax.random.split(self.key, 2)
-        self.fc1 = Linear(in_features=self.config.feature_dim, out_features=self.config.hidden_dim, use_bias=True, key=keys[0], param_dtype=self.param_dtype, dtype=self.dtype)
-        self.fc2 = Linear(in_features=self.config.hidden_dim, out_features=self.config.num_targets, use_bias=True, key=keys[1], param_dtype=self.param_dtype, dtype=self.dtype)
-
-    def _pool(self, mu: jt.Float[jt.Array, 'B h w C']) -> jt.Float[jt.Array, 'B feature_dim']:
-        if self.config.pooling is Pooling.FLATTEN:
-            return mu.reshape(mu.shape[0], -1)
-        return jnp.mean(mu, axis=(1, 2))
-
-    def __call__(self, frames: jt.Float[jt.Array, 'B 128 128 3']) -> jt.Float[jt.Array, 'B num_targets']:
-        mu, _ = self.encoder(frames)
-        feat = self._pool(mu)
-        h = jax.nn.silu(self.fc1(feat))
-        return self.fc2(h)
-
-# ============================================================
-# None - ../wm/probe/train.py
+# None - toylib_projects/wm/probe/train.py
 # ============================================================
 
 """Training entry point for the latent state probe.
@@ -1607,6 +1633,23 @@ Usage (CLI)::
 """
 TARGET_KEYS: tuple[str, ...] = ('ball_x', 'ball_y', 'paddle_x')
 TARGET_SCALE: float = 255.0
+_VAR_EPS: float = 1e-08
+
+def target_variance(path: str | Path, keys: tuple[str, ...]) -> np.ndarray:
+    """Per-target variance of the labels, on the **normalized** scale.
+
+    R² compares the probe's error to the error of always predicting the target
+    mean (whose MSE *is* the variance). We read the variance once from the
+    training labels so R² can be computed cheaply inside the jitted forward pass.
+    The values are divided by ``TARGET_SCALE**2`` to match the normalized targets
+    used in the loss.
+    """
+    with h5py.File(path, 'r') as f:
+        src = f['source']
+        cols = [np.asarray(src[k][:], dtype=np.float64) for k in keys]
+    raw = np.stack(cols, axis=1)
+    var = raw.var(axis=0) / TARGET_SCALE ** 2
+    return np.maximum(var, _VAR_EPS).astype(np.float32)
 
 def load_vae(checkpoint_dir: str, step: int, vae_config: ModelConfig, key) -> VAE:
     """Restore a VAE saved by ``vision_encoder.train`` at ``step``.
@@ -1628,41 +1671,58 @@ def load_vae(checkpoint_dir: str, step: int, vae_config: ModelConfig, key) -> VA
         manager.close()
     return restored['model']
 
-def make_probe_factory(vae_config: ModelConfig, vae_checkpoint_dir: str | None, vae_checkpoint_step: int | None) -> typing.Callable:
+def make_probe_factory(vae_config: ModelConfig, vae_checkpoint_dir: str | None, vae_checkpoint_step: int | None, encoder_type: EncoderType=EncoderType.VAE) -> typing.Callable:
     """Return a ``(ProbeConfig, key) -> MLPProbe`` factory.
 
-    With a checkpoint, loads the pretrained VAE encoder and builds a probe with
-    a fresh (random) MLP head on top of it.
+    The encoder feeding the probe head depends on ``encoder_type``:
 
-    With ``vae_checkpoint_dir=None`` the encoder is **randomly initialized**
-    instead of restored. The probe then trains against an untrained encoder —
-    only useful for smoke-testing the pipeline (and as a baseline: a random
-    encoder should probe *worse* than a trained one).
+      - ``VAE`` with a checkpoint: load the pretrained VAE encoder.
+      - ``VAE`` with ``vae_checkpoint_dir=None``: a **randomly initialized**
+        encoder — a smoke test / weak baseline (random features should probe
+        *worse* than trained ones).
+      - ``PASSTHROUGH``: an ``IdentityEncoder`` that feeds raw pixels to the
+        head — the upper-bound baseline (ignores the VAE entirely).
+
+    In every case the MLP head is freshly (randomly) initialized.
     """
 
     def factory(config: ProbeConfig, key) -> MLPProbe:
         vae_key, mlp_key = jax.random.split(key, 2)
-        if vae_checkpoint_dir is None:
+        if encoder_type is EncoderType.PASSTHROUGH:
+            encoder: Module = IdentityEncoder()
+            encoder.init()
+        elif vae_checkpoint_dir is None:
             vae = VAE(config=vae_config, key=vae_key)
             vae.init()
+            encoder = jax.tree.map(jnp.asarray, vae.encoder)
         else:
             if vae_checkpoint_step is None:
                 raise ValueError('vae_checkpoint_step is required when vae_checkpoint_dir is set')
             vae = load_vae(vae_checkpoint_dir, vae_checkpoint_step, vae_config, vae_key)
-        encoder = jax.tree.map(jnp.asarray, vae.encoder)
+            encoder = jax.tree.map(jnp.asarray, vae.encoder)
         probe = MLPProbe(config=config, encoder=encoder, key=mlp_key)
         probe.init()
         return probe
     return factory
 
-def make_forward_fn() -> typing.Callable:
+def make_forward_fn(target_var: np.ndarray | None=None) -> typing.Callable:
     """Build a ``(model, batch) -> (loss, aux)`` closure.
 
     ``batch`` is ``{"frames": (B, H, W, 3) uint8, "targets": (B, K) float32}``
     in RAM coordinates. Frames are mapped to ``[-1, 1]`` and targets to ``~[0,1]``
-    before an MSE regression loss. ``aux`` carries per-target MSE (normalized
-    units) and MAE (RAM units) for logging.
+    before an MSE regression loss. ``aux`` carries, per target:
+
+      - ``mse_{name}``    — MSE on the normalized scale.
+      - ``mae_raw_{name}``— MAE back in RAM units (multiply by ``TARGET_SCALE``).
+      - ``r2_{name}``     — R² = 1 − MSE / Var(target), if ``target_var`` is given.
+
+    R² is the interpretable signal: ≈0 means the latent carries no recoverable
+    info about that target (no better than predicting the mean); →1 means it is
+    fully recoverable. ``target_var`` is the per-target variance on the
+    normalized scale (see ``target_variance``); it is closed over as a constant
+    so R² stays cheap inside the jitted step.
     """
+    var = None if target_var is None else jnp.asarray(target_var)
 
     def forward_fn(model: MLPProbe, batch):
         frames = batch['frames'].astype(jnp.float32) / 127.5 - 1.0
@@ -1673,21 +1733,24 @@ def make_forward_fn() -> typing.Callable:
         loss = jnp.mean(se)
         aux = {}
         for i, name in enumerate(TARGET_KEYS):
-            aux[f'mse_{name}'] = jnp.mean(se[:, i])
+            mse_i = jnp.mean(se[:, i])
+            aux[f'mse_{name}'] = mse_i
             aux[f'mae_raw_{name}'] = jnp.mean(jnp.abs(err[:, i])) * TARGET_SCALE
+            if var is not None:
+                aux[f'r2_{name}'] = 1.0 - mse_i / var[i]
         return (loss, aux)
     return forward_fn
 
 @dataclasses.dataclass
 class ProbeAuxMetric:
     """Surface the per-target probe errors (MSE + RAM-unit MAE) as named metrics."""
-    keys: tuple[str, ...] = tuple([f'mse_{k}' for k in TARGET_KEYS] + [f'mae_raw_{k}' for k in TARGET_KEYS])
+    keys: tuple[str, ...] = tuple([f'mse_{k}' for k in TARGET_KEYS] + [f'mae_raw_{k}' for k in TARGET_KEYS] + [f'r2_{k}' for k in TARGET_KEYS])
 
     def __call__(self, loss, aux, batch):
         del loss, batch
         return {k: aux[k] for k in self.keys if k in aux}
 
-def create_experiment(train_path: str | Path, val_path: str | Path | None, *, vae_checkpoint_dir: str | None=None, vae_checkpoint_step: int | None=None, base_ch: int=64, latent_channels: int=4, latent_spatial: int=16, hidden_dim: int=256, pooling: Pooling=Pooling.FLATTEN, batch_size_per_device: int=32, num_microbatches: int=1, max_steps: int=2000, learning_rate: float=0.001, max_grad_norm: float=1.0, eval_interval_steps: int=100, num_eval_steps: int=4, save_interval_steps: int=1000, checkpoint_dir: str='/tmp/wm_probe_ckpt', log_dir: str='/tmp/wm_probe_logs', run_id: str | None=None, wandb_project: str | None=None, wandb_user: str | None=None, seed: int=0, jit_computations: bool=True) -> Experiment:
+def create_experiment(train_path: str | Path, val_path: str | Path | None, *, encoder_type: EncoderType=EncoderType.VAE, vae_checkpoint_dir: str | None=None, vae_checkpoint_step: int | None=None, base_ch: int=64, latent_channels: int=4, latent_spatial: int=16, hidden_dim: int=256, pooling: Pooling=Pooling.FLATTEN, batch_size_per_device: int=32, num_microbatches: int=1, max_steps: int=2000, learning_rate: float=0.001, max_grad_norm: float=1.0, eval_interval_steps: int=100, num_eval_steps: int=4, save_interval_steps: int=1000, checkpoint_dir: str='/tmp/wm_probe_ckpt', log_dir: str='/tmp/wm_probe_logs', run_id: str | None=None, wandb_project: str | None=None, wandb_user: str | None=None, seed: int=0, jit_computations: bool=True) -> Experiment:
     """Wire labelled datasets, the frozen-encoder probe, and the optimizer."""
     if run_id is None:
         run_id = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
@@ -1695,6 +1758,12 @@ def create_experiment(train_path: str | Path, val_path: str | Path | None, *, va
     batch_size = batch_size_per_device * n_devices * num_microbatches
     train_ds = Hdf5FramesDataset(dataset_path=str(train_path), batch_size=batch_size, seed=seed, shuffle=True, drop_remainder=True, repeat=True, label_keys=TARGET_KEYS)
     train_task = Task(name='train', dataset=train_ds, metrics=[Loss(), ProbeAuxMetric()])
+    if encoder_type is EncoderType.PASSTHROUGH:
+        frame_h, frame_w, frame_c = train_ds.frame_shape
+        if frame_h != frame_w:
+            raise ValueError(f'pass-through probe assumes square frames, got {frame_h}x{frame_w}')
+        latent_spatial, latent_channels = (frame_h, frame_c)
+    target_var = target_variance(train_path, TARGET_KEYS)
     eval_task = None
     if val_path is not None:
         val_ds = Hdf5FramesDataset(dataset_path=str(val_path), batch_size=batch_size, seed=seed, shuffle=False, drop_remainder=False, repeat=True, label_keys=TARGET_KEYS)
@@ -1708,4 +1777,4 @@ def create_experiment(train_path: str | Path, val_path: str | Path | None, *, va
         logger_config = LoggerConfig(log_dir=log_dir, run_id=run_id)
     vae_config = ModelConfig(base_ch=base_ch, latent_channels=latent_channels)
     probe_config = ProbeConfig(latent_channels=latent_channels, latent_spatial=latent_spatial, hidden_dim=hidden_dim, num_targets=len(TARGET_KEYS), pooling=pooling)
-    return Experiment(train_task=train_task, eval_task=eval_task, forward_fn=make_forward_fn(), model_factory=make_probe_factory(vae_config=vae_config, vae_checkpoint_dir=vae_checkpoint_dir, vae_checkpoint_step=vae_checkpoint_step), model_config=probe_config, training_config=TrainingConfig(max_steps=max_steps, num_microbatches=num_microbatches, max_grad_norm=max_grad_norm, optimizer_config=optimizer_config), eval_config=EvalConfig(eval_interval_steps=eval_interval_steps, num_eval_steps=num_eval_steps), checkpoint_config=CheckpointConfig(save_interval_steps=save_interval_steps, checkpoint_dir=f'{checkpoint_dir}/{run_id}'), logger_config=logger_config, seed=seed, jit_computations=jit_computations)
+    return Experiment(train_task=train_task, eval_task=eval_task, forward_fn=make_forward_fn(target_var=target_var), model_factory=make_probe_factory(vae_config=vae_config, vae_checkpoint_dir=vae_checkpoint_dir, vae_checkpoint_step=vae_checkpoint_step, encoder_type=encoder_type), model_config=probe_config, training_config=TrainingConfig(max_steps=max_steps, num_microbatches=num_microbatches, max_grad_norm=max_grad_norm, optimizer_config=optimizer_config), eval_config=EvalConfig(eval_interval_steps=eval_interval_steps, num_eval_steps=num_eval_steps), checkpoint_config=CheckpointConfig(save_interval_steps=save_interval_steps, checkpoint_dir=f'{checkpoint_dir}/{run_id}'), logger_config=logger_config, seed=seed, jit_computations=jit_computations)
