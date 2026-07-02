@@ -48,8 +48,15 @@ def get_module_location(module_name: str) -> Optional[str]:
 class ImportRemover(ast.NodeTransformer):
     """Remove all import statements, separately return external imports."""
 
-    def __init__(self, bundled_packages: Set[str]):
+    def __init__(self, bundled_packages: Set[str], current_module_name: Optional[str] = None):
         self.bundled_packages = bundled_packages
+        # Package of the file being processed, used to resolve relative imports.
+        # e.g. "toylib_projects.wm.datagen.foo" -> "toylib_projects.wm.datagen"
+        self.current_package = (
+            current_module_name.rsplit(".", 1)[0]
+            if current_module_name and "." in current_module_name
+            else current_module_name
+        )
         # Results
         self.external_import_statements = []
         self.imports_to_bundle = []  # type: list[Module]
@@ -85,20 +92,39 @@ class ImportRemover(ast.NodeTransformer):
     def visit_ImportFrom(self, node: ast.ImportFrom) -> Optional[ast.ImportFrom]:
         """Remove from-import statements from target packages."""
         # Handle: from bar.baz import boo, from bar.baz import boo as qux
-        if node.module:  # Skip relative imports for now
-            from_module = node.module  # e.g., "bar.baz"
+        # Also handles relative imports (node.level > 0) by resolving them to
+        # absolute module names using the current file's package.
+        if node.module or node.level:
+            if node.level > 0 and self.current_package:
+                # Relative import: climb `level-1` dots up from current_package
+                parts = self.current_package.split(".")
+                parts = parts[:len(parts) - (node.level - 1)]
+                from_module = ".".join(parts) + ("." + node.module if node.module else "")
+            elif node.level > 0:
+                # Relative import but we don't know the package — leave as-is
+                return node
+            else:
+                from_module = node.module
             package = from_module.split(".")[0]  # e.g., "bar"
 
             for alias in node.names:
                 imported_item = alias.name  # e.g., "boo"
                 imported_name = alias.asname if alias.asname else alias.name
 
-                # Full path to the imported item
+                # Try the full path first (handles submodule imports like
+                # `from pkg.sub import subsubmodule`). Fall back to from_module
+                # when the imported item is a symbol within the module, not a
+                # submodule itself.
                 full_module_path = f"{from_module}.{imported_item}"
+                resolved_name = (
+                    full_module_path
+                    if get_module_location(full_module_path) is not None
+                    else from_module
+                )
 
                 m = Module(
                     package=package,
-                    name=full_module_path,
+                    name=resolved_name,
                 )
                 self._visit_helper(m, node, imported_name)
 
@@ -206,7 +232,7 @@ class Bundler:
             return
 
         # Read and process the file
-        imports_to_bundle, tree = self.process_file(module.path)
+        imports_to_bundle, tree = self.process_file(module.path, module.name)
         module.tree = tree
 
         # Recurse through all the imports that need to be bundled
@@ -253,7 +279,7 @@ class Bundler:
 
         return "\n\n".join(final_code)
 
-    def process_file(self, file_path: str):
+    def process_file(self, file_path: str, module_name: Optional[str] = None):
         # Read file source
         with open(file_path, "r") as f:
             source = f.read()
@@ -265,7 +291,7 @@ class Bundler:
         tree = MainStripper().visit(tree)
 
         # Remove all imports and classify as bundled or external
-        import_remover = ImportRemover(self.packages_to_bundle)
+        import_remover = ImportRemover(self.packages_to_bundle, module_name)
         tree = import_remover.visit(tree)
 
         # Store the external imports - they're bundled at the end

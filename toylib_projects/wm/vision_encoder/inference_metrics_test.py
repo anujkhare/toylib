@@ -59,8 +59,12 @@ class TestRamToPixel:
     def test_no_resize_is_identity_shift(self) -> None:
         # crop only, no resize: target == crop size → pure translation.
         cfg = PreprocessConfig(
-            crop_top=10, crop_bottom=110, crop_left=20, crop_right=120,
-            target_h=100, target_w=100,
+            crop_top=10,
+            crop_bottom=110,
+            crop_left=20,
+            crop_right=120,
+            target_h=100,
+            target_w=100,
         )
         px, py = ram_to_pixel(50, 60, cfg)
         assert px == pytest.approx(30.0)  # 50 - 20
@@ -230,7 +234,8 @@ class TestInferenceRoundTrip:
     def test_reconstruct_matches_decode_of_encode(self, tiny_vae, tiny_frames) -> None:
         fused = inf.reconstruct(tiny_vae, tiny_frames, batch_size=4)
         staged = inf.decode_latents(
-            tiny_vae, inf.encode_frames(tiny_vae, tiny_frames, batch_size=4),
+            tiny_vae,
+            inf.encode_frames(tiny_vae, tiny_frames, batch_size=4),
             batch_size=4,
         )
         np.testing.assert_array_equal(fused, staged)
@@ -248,9 +253,7 @@ class TestInferenceRoundTrip:
         np.testing.assert_array_equal(z1, z2)  # z = mu, no sampling noise
 
     def test_latent_stats_shapes(self, tiny_vae, tiny_frames) -> None:
-        mu, log_sigma_sq = inf.encode_latent_stats(
-            tiny_vae, tiny_frames, batch_size=4
-        )
+        mu, log_sigma_sq = inf.encode_latent_stats(tiny_vae, tiny_frames, batch_size=4)
         assert mu.shape == (10, 4, 4, 2)
         assert log_sigma_sq.shape == (10, 4, 4, 2)
         # mu from encode_latent_stats matches encode_frames.
