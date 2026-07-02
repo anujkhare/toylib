@@ -55,7 +55,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-include = ["toylib/*"]
+include = ["toylib/*", "toylib_projects/*"]
+
+# Ship both top-level packages so `pip install -e .` exposes them as importable
+# top-level names (`import toylib`, `import toylib_projects`). Without listing
+# `toylib_projects` here, an editable install in a fresh env (e.g. Colab) only
+# registers `toylib`, so `import toylib_projects` fails even though the source
+# is present. Locally under `uv run` this was masked because the repo root is on
+# sys.path via the cwd.
+[tool.hatch.build.targets.wheel]
+packages = ["toylib", "toylib_projects"]
 
 [dependency-groups]
 dev = [

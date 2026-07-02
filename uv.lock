@@ -5785,7 +5785,7 @@ dev = [
 
 [[package]]
 name = "toylib-wm"
-version = "0.0.1"
+version = "0.0.2"
 source = { editable = "toylib_projects/wm" }
 dependencies = [
     { name = "ale-py" },
