@@ -212,6 +212,62 @@ def preprocess_frame(frame: np.ndarray, config: PreprocessConfig | None = None) 
     return np.asarray(img, dtype=np.uint8)
 
 
+def ram_to_pixel(
+    ram_x: float,
+    ram_y: float,
+    config: PreprocessConfig | None = None,
+) -> tuple[float, float] | None:
+    """Map a RAM/native-frame coordinate to the preprocessed-frame pixel grid.
+
+    The stored ``ball_x`` / ``ball_y`` / ``paddle_x`` state values live in the
+    native ``210×160`` (row/col) coordinate system that Stage 1 records. The
+    preprocessed frame the VAE sees is the result of ``crop`` then ``resize``
+    (see :func:`preprocess_frame`). This function applies the *same* crop +
+    scale so a state coordinate can be located in the preprocessed frame — the
+    single source of truth used by the region-based reconstruction metrics
+    (``ball_region_psnr`` etc.) so they never re-derive the transform.
+
+    Convention: ``ram_x`` is a **column** in ``[0, 160)`` and ``ram_y`` is a
+    **row** in ``[0, 210)`` (matching ``dataset.md``: ``ball_y > 105`` is the
+    lower half of the 210px-tall frame). The returned ``(px, py)`` is
+    ``(column, row)`` in the ``target_w × target_h`` preprocessed frame.
+
+    Parameters
+    ----------
+    ram_x, ram_y :
+        Native-frame column / row (e.g. ``ball_x`` / ``ball_y``).
+    config :
+        Preprocess parameters. Defaults to ``PreprocessConfig()`` if omitted.
+        **Pass the config the dataset was compiled with** — read it from the
+        ``.h5`` file's ``config_json`` attr — so the mapping matches the pixels
+        the VAE actually saw.
+
+    Returns
+    -------
+    tuple[float, float] | None :
+        ``(px, py)`` column/row in the preprocessed frame, or ``None`` if the
+        point falls outside the crop window (e.g. a between-lives frame with no
+        ball, or a coordinate in the cropped-away scoreboard). Callers skip
+        ``None`` frames when aggregating region metrics.
+    """
+    if config is None:
+        config = PreprocessConfig()
+
+    crop_h = config.crop_bottom - config.crop_top
+    crop_w = config.crop_right - config.crop_left
+
+    # Position within the cropped region (before resize).
+    cx = ram_x - config.crop_left
+    cy = ram_y - config.crop_top
+    if not (0.0 <= cx < crop_w and 0.0 <= cy < crop_h):
+        return None
+
+    # Scale into the resized target grid.
+    px = cx * config.target_w / crop_w
+    py = cy * config.target_h / crop_h
+    return (float(px), float(py))
+
+
 def preprocess_frames(frames: np.ndarray, config: PreprocessConfig | None = None) -> np.ndarray:
     """Crop + resize a batch of frames.
 

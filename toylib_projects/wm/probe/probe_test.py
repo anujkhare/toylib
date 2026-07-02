@@ -2,8 +2,6 @@
 
 Covers the three probe-specific behaviors:
 
-  - ``load_vae`` restores encoder weights from a checkpoint written in the same
-    format as ``vision_encoder.train``.
   - The probe forward produces ``(B, num_targets)`` predictions.
   - Training freezes the encoder (its weights are unchanged after steps) while
     the MLP head updates — i.e. the optimizer-level freeze actually works.
@@ -47,7 +45,9 @@ def _make_vae(seed: int = 0) -> vae_model.VAE:
 def _save_vae(ckpt_dir: Path, step: int, vae: vae_model.VAE) -> None:
     """Mirror ``Experiment.save_checkpoint``: a composite with a ``model`` item."""
     np_vae = jax.tree.map(np.asarray, vae)
-    manager = ocp.CheckpointManager(str(ckpt_dir), options=ocp.CheckpointManagerOptions())
+    manager = ocp.CheckpointManager(
+        str(ckpt_dir), options=ocp.CheckpointManagerOptions()
+    )
     manager.save(step, args=ocp.args.Composite(model=ocp.args.StandardSave(np_vae)))
     manager.wait_until_finished()
     manager.close()
@@ -69,27 +69,6 @@ def _write_labelled_h5(path: Path, n: int = 64) -> Path:
                 k, data=rng.integers(0, 256, size=(n,)).astype(np.float32)
             )
     return path
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# load_vae
-# ──────────────────────────────────────────────────────────────────────────
-
-
-def test_load_vae_restores_encoder_weights(tmp_path: Path) -> None:
-    vae = _make_vae(seed=1)
-    ckpt_dir = tmp_path / "vae_ckpt"
-    _save_vae(ckpt_dir, step=5, vae=vae)
-
-    restored = probe_train.load_vae(
-        str(ckpt_dir), step=5, vae_config=_vae_config(), key=jax.random.key(999)
-    )
-
-    orig = jax.tree_util.tree_leaves(vae.encoder)
-    got = jax.tree_util.tree_leaves(restored.encoder)
-    assert len(orig) == len(got) and len(orig) > 0
-    for a, b in zip(orig, got):
-        np.testing.assert_allclose(np.asarray(a), np.asarray(b))
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -192,9 +171,9 @@ def test_training_freezes_encoder_and_updates_head(tmp_path: Path) -> None:
         np.testing.assert_array_equal(a, b)
 
     # The MLP head must have moved (training actually happened).
-    assert any(
-        not np.allclose(a, b) for a, b in zip(fc1_before, fc1_after)
-    ), "MLP head did not update — optimizer freeze may be mislabeling params"
+    assert any(not np.allclose(a, b) for a, b in zip(fc1_before, fc1_after)), (
+        "MLP head did not update — optimizer freeze may be mislabeling params"
+    )
 
 
 def test_training_without_checkpoint_uses_random_encoder(tmp_path: Path) -> None:
@@ -256,9 +235,7 @@ def test_forward_fn_emits_r2_matching_definition() -> None:
     n = 8
     frames = jnp.zeros((n, _H, _W, 3), dtype=jnp.float32)
     # Targets in RAM units; forward divides by TARGET_SCALE internally.
-    targets = jnp.asarray(
-        np.tile(np.array([10.0, 20.0, 30.0], np.float32), (n, 1))
-    )
+    targets = jnp.asarray(np.tile(np.array([10.0, 20.0, 30.0], np.float32), (n, 1)))
     _, aux = forward(_ConstModel(), {"frames": frames, "targets": targets})
 
     for i, name in enumerate(probe_train.TARGET_KEYS):

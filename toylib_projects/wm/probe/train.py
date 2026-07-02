@@ -44,13 +44,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import orbax.checkpoint as ocp
 
 from toylib.nn import module as module_lib
 from toylib_projects.wm import dataloader as dataloader_lib
 from toylib_projects.wm import experiment as exp_lib
 from toylib_projects.wm import metrics as metrics_lib
 from toylib_projects.wm.probe import model as probe_model
+from toylib_projects.wm.vision_encoder import inference as ve_inference
 from toylib_projects.wm.vision_encoder import model as vae_model
 
 # Order matters: it defines the column order of the dataset's ``targets`` array
@@ -95,38 +95,6 @@ def target_variance(path: str | Path, keys: tuple[str, ...]) -> np.ndarray:
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def load_vae(
-    checkpoint_dir: str,
-    step: int,
-    vae_config: vae_model.ModelConfig,
-    key,
-) -> vae_model.VAE:
-    """Restore a VAE saved by ``vision_encoder.train`` at ``step``.
-
-    Builds a template VAE with the same config (so the pytree structure matches
-    the saved arrays), then restores just the ``model`` item from the composite
-    checkpoint. The optimizer / dataset-iterator items are ignored.
-
-    ``checkpoint_dir`` may be a local path or a remote ``gs://bucket/...`` URI;
-    orbax routes the latter through tensorstore/epath (requires ``gcsfs``).
-    """
-    template_vae = vae_model.VAE(config=vae_config, key=key)
-    template_vae.init()
-    template = jax.tree.map(np.asarray, template_vae)
-
-    manager = ocp.CheckpointManager(
-        checkpoint_dir, options=ocp.CheckpointManagerOptions()
-    )
-    try:
-        restored = manager.restore(
-            step,
-            args=ocp.args.Composite(model=ocp.args.StandardRestore(template)),
-        )
-    finally:
-        manager.close()
-    return restored["model"]
-
-
 def make_probe_factory(
     vae_config: vae_model.ModelConfig,
     vae_checkpoint_dir: str | None,
@@ -162,7 +130,9 @@ def make_probe_factory(
                 raise ValueError(
                     "vae_checkpoint_step is required when vae_checkpoint_dir is set"
                 )
-            vae = load_vae(vae_checkpoint_dir, vae_checkpoint_step, vae_config, vae_key)
+            vae = ve_inference.load_vae(
+                vae_checkpoint_dir, vae_checkpoint_step, config=vae_config, key=vae_key
+            )
             # Bring the restored (host) arrays onto the device/mesh in effect.
             encoder = jax.tree.map(jnp.asarray, vae.encoder)
 
