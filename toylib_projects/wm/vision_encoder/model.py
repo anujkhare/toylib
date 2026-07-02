@@ -54,7 +54,7 @@ from toylib.nn import layers, module
 class ModelConfig:
     """Hyperparameters for the Track A1 VAE.
 
-    Defaults match the walkthrough: 64×64 input, 8×8×4 latent, base_ch=64
+    Defaults match the walkthrough: 64×64x3 input, 8×8×4 latent, base_ch=64
     (so 4×base_ch = 256 channels at the bottleneck).
     """
 
@@ -602,9 +602,7 @@ class VAE(module.Module):
     ) -> tuple[jt.Float[jt.Array, "B h w C"], jt.Float[jt.Array, "B h w C"]]:
         return self.encoder(x)
 
-    def decode(
-        self, z: jt.Float[jt.Array, "B h w C"]
-    ) -> jt.Float[jt.Array, "B H W 3"]:
+    def decode(self, z: jt.Float[jt.Array, "B h w C"]) -> jt.Float[jt.Array, "B H W 3"]:
         return self.decoder(z)
 
     def __call__(
