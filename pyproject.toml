@@ -13,9 +13,7 @@ dependencies = [
     "beartype>=0.15.0",
     "einops>=0.6.0",
     "numpy>=1.24.0",
-    "datasets>=2.14.0",
-    "nltk>=3.8.0",
-    "wandb>=0.25.1",
+    "optax>=0.1.7",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -24,15 +22,32 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+# toylib.harness: training loop, checkpoints, loggers, inference helpers.
+harness = [
+    "orbax-checkpoint>=0.4.0",
+    "pandas>=2.0.0",
+    "pillow>=10.0.0",
+    "wandb>=0.25.1",
+]
+# toylib.viz: plotting helpers.
+viz = [
+    "matplotlib>=3.7.0",
+    "pillow>=10.0.0",
+]
+# toylib.data: dataset downloads.
+data = [
+    "datasets>=2.14.0",
+]
+# Everything a post needs.
+posts = [
+    "toylib[harness,viz,data]",
+]
 dev = [
     "pytest>=7.0.0",
-    "tensorboardX>=2.6.0",
-    "torch>=2.0.0",  # for DataLoader utilities
 ]
 tinystories = [
+    "toylib[harness]",
     "transformers>=4.30.0",
-    "optax>=0.1.7",
-    "orbax-checkpoint>=0.4.0",
     "grain>=0.0.4",
     "pyarrow>=12.0.0",
     "pandas>=2.0.0",

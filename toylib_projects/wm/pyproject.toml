@@ -8,7 +8,7 @@ description = "Text + action-conditioned video world model in JAX"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "toylib",
+    "toylib[harness]",
     "gymnasium[atari]>=1.0.0",
     "ale-py>=0.10.0",
     "h5py>=3.10.0",
@@ -20,7 +20,7 @@ dependencies = [
     "matplotlib>=3.7.0",  # state-over-time charts
     # data loading
     "grain>=0.0.4",       # PyGrain — shuffle/batch over compiled HDF5 datasets
-    # training loop infrastructure (forked from tinystories)
+    # training loop infrastructure (toylib.harness)
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",
     "gcsfs>=2024.0.0",    # lets orbax restore checkpoints from gs:// URIs

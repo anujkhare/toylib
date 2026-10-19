@@ -1,67 +1,37 @@
-"""Experiment harness for vision-encoder training.
+"""The training harness every model in this repo trains through.
 
-Forked and adapted from `toylib_projects/tinystories/experiment.py`. The bulk
-of the orchestration (sharded `Mesh`, microbatching scan, optimizer chain,
-checkpoint manager, logger plumbing) is unchanged — only the text-specific
-pieces have been ripped out and a couple of generic seams added so this
-harness works with the vision-encoder dataset and any user-supplied model.
+The caller supplies the model and the loss; ``Experiment`` owns everything
+else: the device mesh and data sharding, gradient accumulation over
+microbatches, the optimizer chain (with per-parameter routing), checkpointing,
+the validation loop, and metric logging.
 
+* ``model_factory(model_config, key) -> model`` builds the model at
+  ``init_state()`` time.
+* ``forward_fn(model, batch) -> (loss, aux)`` computes the training loss;
+  ``aux`` is a pytree of extra arrays that metrics can read.
+* ``eval_forward_fn`` (optional) is used for evaluation instead, e.g. to also
+  return reconstructions or per-token losses.
+* Datasets are anything with ``batch_size`` and ``__iter__`` (see ``Dataset``);
+  ``toylib.harness.data.ArrayDataset`` serves in-memory NumPy arrays.
 
-What changed vs. the tinystories template
------------------------------------------
+Usage::
 
-  - **No model imports.** Per the project's learning rules, this file knows
-    nothing about VAEs / DiTs / attention. The user supplies the model via
-    ``model_factory(model_config, key) -> model`` and the loss via
-    ``forward_fn(model, batch) -> (loss, aux_pytree)``.
-  - **No tokenizer.** The text-only ``sampling_evaluation`` and the
-    ``DEFAULT_PROMPTS`` constant are gone. ``eval()`` runs validation only.
-    Subclasses can override ``sampling_evaluation`` if they want to log VAE
-    reconstructions or similar — it's a no-op by default.
-  - **Generic batch shape.** ``_train_step`` no longer assumes
-    ``batch["inputs"]``; it pulls the batch size from
-    ``jax.tree.leaves(batch)[0]`` so dicts *and* raw tensors both work.
-  - **Generic forward-fn contract.** ``forward_fn(model, batch)`` always
-    returns ``(loss, aux)``. The old ``return_aux=True`` kwarg has been
-    dropped — one consistent signature for train and eval.
-  - **Dataset type.** ``Task.dataset`` is typed as ``Hdf5FramesDataset``
-    (forked HDF5-backed Grain loader with checkpointable iterator state).
-    Any object with the same protocol (``__iter__``, ``batch_size``,
-    ``get_state``, ``restore_state``) works at runtime.
-  - **Required model_factory + forward_fn.** No tinystories defaults.
-
-
-Intended usage (sketch)
------------------------
-
-::
-
-    from toylib_projects.wm.dataloader import Hdf5FramesDataset
-    from toylib_projects.wm.experiment import (
-        Experiment, Task, TrainingConfig, EvalConfig,
-        CheckpointConfig, LoggerConfig,
-    )
-
-    train_ds = Hdf5FramesDataset("data/compiled/vae_train.h5", batch_size=64, seed=0)
-    val_ds   = Hdf5FramesDataset("data/compiled/vae_val.h5",   batch_size=64,
-                                 seed=0, shuffle=False)
-
-    # User code (the bits this harness deliberately doesn't touch):
-    #   class MyVAEConfig: ...
-    #   class MyVAE: ...
-    #   def vae_factory(cfg, key): return MyVAE(cfg, key=key)
-    #   def vae_train_step(model, batch): return loss, {"recon_mse": ...}
+    from toylib.harness.data import ArrayDataset
+    from toylib.harness.experiment import Experiment, Task, TrainingConfig
 
     exp = Experiment(
-        train_task=Task("train", train_ds),
-        eval_task=Task("val", val_ds),
-        model_config=MyVAEConfig(...),
-        model_factory=vae_factory,
-        forward_fn=vae_train_step,
+        train_task=Task("train", ArrayDataset({"image": x, "label": y}, batch_size=128)),
+        model_factory=build_model,      # (config, key) -> model
+        forward_fn=loss_fn,             # (model, batch) -> (loss, aux)
+        model_config=config,
+        training_config=TrainingConfig(max_steps=2_000),
     )
     exp.init_state()
     exp.outer_loop()
     exp.cleanup()
+
+Projects add domain-specific behaviour by subclassing; for example
+``toylib_projects.tinystories.experiment.Experiment`` samples text during eval.
 """
 
 import dataclasses
@@ -76,9 +46,8 @@ import numpy as np
 import optax
 import orbax.checkpoint as ocp
 
-from toylib_projects.wm import dataloader as dataloader_lib
-from toylib_projects.wm import logger
-from toylib_projects.wm import metrics as metrics_module
+from toylib.harness import logger
+from toylib.harness import metrics as metrics_module
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -104,7 +73,12 @@ class OptimizerConfig:
 
 @dataclasses.dataclass
 class MultiOptimizerConfig:
-    """Configuration for multi-optimizer training (e.g. different lr for VAE encoder vs decoder)."""
+    """Route each parameter to one of several optimizers by its pytree path.
+
+    ``optimizer_for_param(path) -> name`` picks the optimizer for a parameter,
+    e.g. Muon for transformer blocks and AdamW for embeddings, or
+    ``optax.set_to_zero()`` to freeze a pretrained encoder.
+    """
 
     optimizer_configs: list[OptimizerConfig]
     optimizer_for_param: typing.Callable[[tuple], str]
@@ -141,10 +115,24 @@ class EvalConfig:
     num_eval_steps: int = 1
 
 
+@typing.runtime_checkable
+class Dataset(typing.Protocol):
+    """What the harness needs from a dataset.
+
+    Iterating yields batches: pytrees of arrays whose leading axis is
+    ``batch_size``. Datasets used with ``checkpoint_dataset_iterator=True``
+    also need ``get_state() -> dict`` and ``restore_state(dict)``.
+    """
+
+    batch_size: int
+
+    def __iter__(self) -> typing.Iterator[typing.Any]: ...
+
+
 @dataclasses.dataclass
 class Task:
     name: str
-    dataset: dataloader_lib.Hdf5FramesDataset
+    dataset: Dataset
     metrics: list[metrics_module.Metric] = dataclasses.field(
         default_factory=lambda: [metrics_module.Loss()]
     )
@@ -183,7 +171,7 @@ class WandBLoggerConfig(LoggerConfig):
         )
 
 
-def _serialize_dataclass_config(config) -> dict:
+def _serialize_dataclass_config(config) -> typing.Any:
     """Recursively convert dataclasses to dicts, leaving non-dataclass values alone.
 
     Used to capture the experiment configuration for the logger. Non-dataclass
@@ -215,13 +203,13 @@ def _serialize_dataclass_config(config) -> dict:
 
 @dataclasses.dataclass
 class Experiment:
-    """Generic training harness for the vision-encoder pipeline.
+    """Train and evaluate a user-supplied model.
 
     The user supplies the model + loss; this class owns sharding, microbatching,
     optimizer chain, checkpointing, validation loop, and metric logging.
 
     Required fields:
-        train_task:     ``Task`` with a ``Hdf5FramesDataset``.
+        train_task:     ``Task`` whose dataset yields training batches.
         forward_fn:     ``(model, batch) -> (loss, aux_pytree)``.
         model_factory:  ``(model_config, jax.random.key) -> model`` callable
                         invoked at ``init_state()`` time.
@@ -295,7 +283,7 @@ class Experiment:
         )
 
     def _compute_metrics(
-        self, task: Task, loss: float, aux: jt.PyTree, batch: jt.PyTree
+        self, task: Task, loss: jt.ArrayLike, aux: jt.PyTree, batch: jt.PyTree
     ) -> dict[str, jt.Array]:
         all_metrics: dict[str, jt.Array] = {}
         for metric in task.metrics:

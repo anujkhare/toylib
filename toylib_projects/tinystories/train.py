@@ -20,6 +20,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from toylib.harness import analyze as harness_analyze
+from toylib.harness import metrics as harness_metrics
 from toylib_projects.tinystories import analyze
 from toylib_projects.tinystories import data
 from toylib_projects.tinystories import decoder_only_model
@@ -246,7 +248,7 @@ def create_experiment(
         val_task = experiment.Task(
             name="val",
             dataset=val_dataset,
-            metrics=[metrics_module.Loss(), metrics_module.BitsPerByte(bpt_path)],
+            metrics=[harness_metrics.Loss(), metrics_module.BitsPerByte(bpt_path)],
         )
     elif use_dummy_data:
         # For compilation analysis, create a dummy eval task
@@ -305,7 +307,7 @@ def create_experiment(
     # Print stats
     analyze.print_estimated_tokens(exp)
     analyze.print_chinchilla_estimate(exp.model)
-    print(analyze.print_param_sizes(exp.model, depth=3)[0])
+    print(harness_analyze.print_param_sizes(exp.model, depth=3)[0])
     return exp
 
 

@@ -1,14 +1,8 @@
-"""Tests for metrics.py.
-
-Forked from `toylib_projects/tinystories/metrics_test.py` keeping only the
-``TestLossMetric`` class. The text-domain ``TestBitsPerByteMetric`` is not
-forked because we don't carry ``BitsPerByte`` in this project (see
-``metrics.py`` docstring).
-"""
+"""Tests for metrics.py. ``BitsPerByte`` is tested with tinystories, where it lives."""
 
 import jax.numpy as jnp
 
-from toylib_projects.wm import metrics
+from toylib.harness import metrics
 
 
 class TestLossMetric:

@@ -8,7 +8,7 @@ description = "TinyStories GPT-2 implementation using toylib"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "toylib",
+    "toylib[harness]",
     "transformers>=4.30.0",  # for AutoTokenizer
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",

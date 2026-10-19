@@ -1,7 +1,6 @@
-"""Generic metric scaffolding for the wm training loop.
+"""Metric interfaces for the training harness.
 
-Forked from `toylib_projects/tinystories/metrics.py`, keeping only the
-domain-agnostic pieces shared by every model trained through ``Experiment``:
+The domain-agnostic pieces shared by every model trained through ``Experiment``:
 
   - ``Metric`` Protocol              — interface every scalar metric implements.
   - ``Loss``                         — pass-through metric that surfaces the
@@ -9,9 +8,8 @@ domain-agnostic pieces shared by every model trained through ``Experiment``:
   - ``VisualizationMetric`` Protocol — interface for generative image metrics
                                        that run outside JIT.
 
-Model-specific metrics (VAE reconstruction / prior-sampling visualizations,
-PSNR/SSIM, per-mode FID, probe accuracy, etc.) live next to their model — e.g.
-``vision_encoder/metrics.py`` — since they're not infrastructure.
+Model-specific metrics (accuracy, bits per byte, reconstruction error, ...)
+live next to their model, since they're not infrastructure.
 """
 
 import dataclasses
@@ -21,15 +19,16 @@ import jaxtyping as jt
 import numpy as np
 
 
+@typing.runtime_checkable
 class Metric(typing.Protocol):
     """Protocol for computing and accumulating metrics."""
 
     def __call__(
         self,
-        loss: float,
+        loss: jt.ArrayLike,
         aux: jt.PyTree,
         batch: jt.PyTree,
-    ) -> dict[str, jt.Array]:
+    ) -> dict[str, jt.ArrayLike]:
         """Compute final metric value(s) for the given inputs.
 
         Args:
@@ -46,14 +45,15 @@ class Loss:
 
     def __call__(
         self,
-        loss: float,
+        loss: jt.ArrayLike,
         aux: jt.PyTree,
         batch: jt.PyTree,
-    ) -> dict[str, jt.Array]:
+    ) -> dict[str, jt.ArrayLike]:
         del aux, batch
         return {"loss": loss}
 
 
+@typing.runtime_checkable
 class VisualizationMetric(typing.Protocol):
     """Protocol for generative image metrics that run outside JIT.
 

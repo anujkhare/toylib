@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import Iterator
 from unittest.mock import Mock, MagicMock, patch
 
+from toylib.harness import logger
+from toylib.harness import metrics
 from toylib_projects.tinystories import decoder_only_model
 from toylib_projects.tinystories import experiment
-from toylib_projects.tinystories import logger
-from toylib_projects.tinystories import metrics
 import optax
 
 
@@ -56,7 +56,7 @@ class TestExperiment:
 
     def test_config_initialization(self):
         """Test that Experiment initializes properly."""
-        mock_dataset = Mock()
+        mock_dataset = MagicMock()  # iterable, as the Dataset protocol requires
         mock_dataset.batch_size = 4
         train_task = experiment.Task(name="train", dataset=mock_dataset)
 
@@ -79,12 +79,15 @@ class TestExperiment:
     @patch("optax.adam")
     def test_init_state(self, mock_opt, mock_model_class, mock_device_put):
         """Test that init_state initializes model and optimizer state."""
-        mock_dataset = Mock()
+        mock_dataset = MagicMock()  # iterable, as the Dataset protocol requires
         mock_dataset.batch_size = 4
         train_task = experiment.Task(name="train", dataset=mock_dataset)
         mock_model = MagicMock()
         mock_model_class.return_value = mock_model
-        mock_opt.return_value.init.return_value = "mock_opt_state"
+        # A real GradientTransformation, as the harness's return type requires.
+        mock_opt.return_value = optax.GradientTransformation(
+            init=lambda params: "mock_opt_state", update=None
+        )
 
         exp = experiment.Experiment(train_task=train_task)
         exp.init_state()
@@ -625,7 +628,7 @@ class TestMultiOptimizer:
     @patch("toylib_projects.tinystories.experiment.optax.multi_transform")
     def test_default_single_optimizer(self, mock_multi_transform):
         """Test that default behavior uses a single optimizer for all parameters."""
-        mock_dataset = Mock()
+        mock_dataset = MagicMock()  # iterable, as the Dataset protocol requires
         mock_dataset.batch_size = 4
         train_task = experiment.Task(name="train", dataset=mock_dataset)
 
@@ -638,7 +641,7 @@ class TestMultiOptimizer:
 
     def test_custom_optimizer_mapping(self):
         """Test custom optimizer mapping for different model parts."""
-        mock_dataset = Mock()
+        mock_dataset = MagicMock()  # iterable, as the Dataset protocol requires
         mock_dataset.batch_size = 4
         train_task = experiment.Task(name="train", dataset=mock_dataset)
 
@@ -701,7 +704,7 @@ class TestMultiOptimizer:
 
     def test_configured_optimizer_mapping(self):
         """Test optimizer mapping supplied via TrainingConfig."""
-        mock_dataset = Mock()
+        mock_dataset = MagicMock()  # iterable, as the Dataset protocol requires
         mock_dataset.batch_size = 4
         train_task = experiment.Task(name="train", dataset=mock_dataset)
 

@@ -8,22 +8,6 @@ from pathlib import Path
 from toylib_projects.tinystories import metrics
 
 
-class TestLossMetric:
-    """Tests for Loss metric."""
-
-    def test_loss_metric_returns_loss(self):
-        """Test that Loss metric returns the loss value."""
-        loss_metric = metrics.Loss()
-        loss_val = 2.5
-        aux = {"logits": jnp.array([1.0, 2.0])}
-        batch = {"inputs": jnp.array([0, 1])}
-
-        result = loss_metric(loss=loss_val, aux=aux, batch=batch)
-
-        assert "loss" in result
-        assert result["loss"] == 2.5
-
-
 class TestBitsPerByteMetric:
     """Tests for BitsPerByte metric."""
 

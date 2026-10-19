@@ -70,9 +70,9 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from toylib.harness import experiment as exp_lib
+from toylib.harness import metrics as metrics_lib
 from toylib_projects.wm import dataloader as dataloader_lib
-from toylib_projects.wm import experiment as exp_lib
-from toylib_projects.wm import metrics as metrics_lib
 from toylib_projects.wm.vision_encoder import analyze as analyze_lib
 from toylib_projects.wm.vision_encoder import metrics as ve_metrics_lib
 from toylib_projects.wm.vision_encoder import model as model_lib

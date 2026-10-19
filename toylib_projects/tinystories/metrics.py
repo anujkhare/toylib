@@ -1,51 +1,10 @@
+"""Language-model metrics. Generic ones (``Metric``, ``Loss``) live in ``toylib.harness.metrics``."""
+
 import dataclasses
-import typing
+
 import jax.numpy as jnp
 import jaxtyping as jt
 import numpy as np
-
-
-class Metric(typing.Protocol):
-    """Protocol for computing and accumulating metrics."""
-
-    def __call__(
-        self,
-        loss: float,
-        aux: jt.PyTree,
-        batch: jt.PyTree,
-    ) -> dict[str, jt.Array]:
-        """Compute final metric value(s) for the given inputs.
-
-        Args:
-            loss: The loss value returned by forward_fn
-            aux: The auxiliary jt.PyTree returned by forward_fn
-            batch: The input batch
-        """
-        pass
-
-
-@dataclasses.dataclass
-class Loss:
-    """Pass-through metric that returns the loss value."""
-
-    def __call__(
-        self,
-        loss: float,
-        aux: jt.PyTree,
-        batch: jt.PyTree,
-    ) -> dict[str, jt.Array]:
-        """Return the loss value.
-
-        Args:
-            loss: The loss value returned by forward_fn
-            aux: The auxiliary PyTree (unused)
-            batch: The input batch (unused)
-
-        Returns:
-            Dictionary with 'loss' metric
-        """
-        del aux, batch
-        return {"loss": loss}
 
 
 @dataclasses.dataclass
@@ -68,10 +27,10 @@ class BitsPerByte:
 
     def __call__(
         self,
-        loss: float,
+        loss: jt.ArrayLike,
         aux: jt.PyTree,
         batch: jt.PyTree,
-    ) -> dict[str, jt.Array]:
+    ) -> dict[str, jt.ArrayLike]:
         """Compute bits per byte metric.
 
         Args:

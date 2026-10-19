@@ -1,6 +1,5 @@
 """Tests for logger.py.
 
-There is no `logger_test.py` in tinystories to fork from — this file is new.
 Covers the three sinks shipped in `logger.py`: ``FileLogger``,
 ``StdoutLogger``, and ``WandBLogger`` (which is mocked since real wandb runs
 require network + credentials).
@@ -11,7 +10,7 @@ import json
 from pathlib import Path
 from unittest import mock
 
-from toylib_projects.wm import logger as logger_mod
+from toylib.harness import logger as logger_mod
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -120,14 +119,14 @@ class TestWandBLogger:
         with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
             log = logger_mod.WandBLogger(
                 config_dict={"hp": 1},
-                project_name="wm-test",
+                project_name="toylib-test",
                 user_name="anuj",
                 run_id="abc",
             )
 
         fake_wandb.init.assert_called_once_with(
             entity="anuj",
-            project="wm-test",
+            project="toylib-test",
             config={"hp": 1},
             id="abc",
             resume="allow",

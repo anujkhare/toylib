@@ -45,10 +45,10 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from toylib.harness import experiment as exp_lib
+from toylib.harness import metrics as metrics_lib
 from toylib.nn import module as module_lib
 from toylib_projects.wm import dataloader as dataloader_lib
-from toylib_projects.wm import experiment as exp_lib
-from toylib_projects.wm import metrics as metrics_lib
 from toylib_projects.wm.probe import model as probe_model
 from toylib_projects.wm.vision_encoder import inference as ve_inference
 from toylib_projects.wm.vision_encoder import model as vae_model

@@ -1,7 +1,7 @@
 """Vision-encoder (VAE) specific metrics.
 
 The domain-agnostic ``Metric`` / ``Loss`` / ``VisualizationMetric`` scaffolding
-lives in ``toylib_projects.wm.metrics``. This module holds the image metrics
+lives in ``toylib.harness.metrics``. This module holds the image metrics
 that are specific to the VAE codec:
 
   - ``ReconstructionVisualization`` — side-by-side input vs. reconstruction,

@@ -1,13 +1,11 @@
-"""Smoke tests for the forked experiment harness.
+"""Smoke tests for the experiment harness.
 
 Exercises construction, config validation, logger plumbing, and a minimal
-end-to-end loop using a *trivial* "model" (a single scalar parameter) and a
-forward_fn that returns a constant loss. The point is to confirm the
+end-to-end loop using a *trivial* "model" (a small parameter vector) and a
+forward_fn whose loss depends only on it. The point is to confirm the
 infrastructure (sharding, microbatching, optimizer chain, checkpoint
-manager, logger sink, dataset iteration) wires together — not to test any
+manager, logger sink, dataset iteration) wires together, not to test any
 model behavior.
-
-A real VAE / model lives outside this file per the project's learning rules.
 """
 
 from __future__ import annotations
@@ -15,15 +13,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import h5py
-import hdf5plugin  # noqa: F401  (registers LZ4 filter)
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from toylib_projects.wm.dataloader import Hdf5FramesDataset
-from toylib_projects.wm.experiment import (
+from toylib.harness.data import ArrayDataset
+from toylib.harness.experiment import (
     CheckpointConfig,
     EvalConfig,
     Experiment,
@@ -39,17 +35,10 @@ from toylib_projects.wm.experiment import (
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def _write_tiny_vae_h5(path: Path, n: int = 16, h: int = 8, w: int = 8) -> Path:
+def _frames(n: int, h: int = 8, w: int = 8) -> dict[str, np.ndarray]:
     rng = np.random.default_rng(0)
     frames = rng.integers(0, 256, size=(n, h, w, 3), dtype=np.uint8)
-    with h5py.File(path, "w") as f:
-        f.attrs["n_frames"] = np.int32(n)
-        f.attrs["height"] = np.int32(h)
-        f.attrs["width"] = np.int32(w)
-        f.create_dataset(
-            "frames", data=frames, chunks=(1, h, w, 3), **hdf5plugin.LZ4()
-        )
-    return path
+    return {"frames": frames}
 
 
 def _trivial_model_factory(config, key):
@@ -65,24 +54,21 @@ def _trivial_forward_fn(model, batch):
 
 
 @pytest.fixture
-def train_ds(tmp_path: Path) -> Hdf5FramesDataset:
-    _write_tiny_vae_h5(tmp_path / "train.h5", n=16)
-    return Hdf5FramesDataset(
-        dataset_path=str(tmp_path / "train.h5"),
+def train_ds() -> ArrayDataset:
+    return ArrayDataset(
+        _frames(16),
         batch_size=jax.local_device_count(),  # smallest divisible-by-devices size
-        seed=0,
         shuffle=False,
     )
 
 
 @pytest.fixture
-def val_ds(tmp_path: Path) -> Hdf5FramesDataset:
-    _write_tiny_vae_h5(tmp_path / "val.h5", n=8)
-    return Hdf5FramesDataset(
-        dataset_path=str(tmp_path / "val.h5"),
+def val_ds() -> ArrayDataset:
+    return ArrayDataset(
+        _frames(8),
         batch_size=jax.local_device_count(),
-        seed=0,
         shuffle=False,
+        restart_each_iter=True,
     )
 
 
@@ -140,14 +126,9 @@ def test_microbatch_divisibility_rejected(tmp_path: Path) -> None:
     runs on single-device CPU (where every batch size is trivially device-
     divisible).
     """
-    _write_tiny_vae_h5(tmp_path / "train.h5", n=16)
     n_devices = jax.local_device_count()
     batch_size = 2 * n_devices  # per-device batch = 2
-    ds = Hdf5FramesDataset(
-        dataset_path=str(tmp_path / "train.h5"),
-        batch_size=batch_size,
-        seed=0,
-    )
+    ds = ArrayDataset(_frames(16), batch_size=batch_size)
     with pytest.raises(ValueError, match="does not evenly divide per-device batch size"):
         Experiment(
             train_task=Task("train", ds),
@@ -267,3 +248,65 @@ def test_checkpoint_roundtrip(tmp_path: Path, train_ds) -> None:
     exp.restore_checkpoint(step=1)
     np.testing.assert_array_equal(np.asarray(exp.model["w"]), [1.0, 2.0, 3.0, 4.0])
     exp.cleanup()
+
+
+def _linear_forward_fn(model, batch):
+    """Mean of the frames times w: depends on the batch, so data order matters."""
+    x = batch["frames"].astype(jnp.float32).mean(axis=(1, 2, 3)) / 255.0
+    loss = jnp.mean((x[:, None] * model["w"] - 1.0) ** 2)
+    return loss, {}
+
+
+def test_jitted_loop_reduces_loss(tmp_path: Path) -> None:
+    """The jitted path trains: loss after 50 steps is below the first step's."""
+    ds = ArrayDataset(_frames(32), batch_size=4 * jax.local_device_count(), seed=1)
+    exp = Experiment(
+        train_task=Task("train", ds),
+        forward_fn=_linear_forward_fn,
+        model_factory=_trivial_model_factory,
+        training_config=TrainingConfig(max_steps=50, num_microbatches=2),
+        checkpoint_config=CheckpointConfig(
+            checkpoint_dir=str(tmp_path / "ckpts"), save_interval_steps=10_000
+        ),
+        logger_config=LoggerConfig(log_dir=str(tmp_path), run_id="jit"),
+    )
+    exp.init_state()
+    exp.outer_loop()
+    exp.cleanup()
+    rows = [json.loads(line) for line in (tmp_path / "logs_jit.txt").read_text().split("\n") if line.strip()]
+    losses = [r["train/loss"] for r in rows if "train/loss" in r]
+    assert len(losses) == 50
+    assert losses[-1] < losses[0]
+
+
+def test_dataset_iterator_checkpoint_resumes_mid_epoch(tmp_path: Path) -> None:
+    """With checkpoint_dataset_iterator, a restored run continues the same data order."""
+
+    def make(run_id: str) -> Experiment:
+        return Experiment(
+            train_task=Task("train", ArrayDataset(_frames(16), batch_size=jax.local_device_count(), seed=3)),
+            forward_fn=_linear_forward_fn,
+            model_factory=_trivial_model_factory,
+            training_config=TrainingConfig(max_steps=6),
+            checkpoint_config=CheckpointConfig(
+                checkpoint_dir=str(tmp_path / f"ckpts_{run_id}"),
+                save_interval_steps=3,
+                checkpoint_dataset_iterator=True,
+            ),
+            logger_config=LoggerConfig(log_dir=str(tmp_path), run_id=run_id),
+            jit_computations=False,
+        )
+
+    exp = make("a")
+    exp.init_state()
+    exp.outer_loop()  # saves at steps 0 and 3
+    exp.restore_checkpoint(step=3)
+    expected_state = exp.train_task.dataset.get_state()
+    exp.cleanup()
+
+    resumed = make("a")
+    resumed.init_state()
+    resumed.restore_checkpoint(step=3)
+    assert resumed.train_task.dataset.get_state() == expected_state
+    assert resumed.train_task.dataset.get_state()["position"] == 4  # batch after step 3
+    resumed.cleanup()

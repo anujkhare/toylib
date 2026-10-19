@@ -1,7 +1,21 @@
+"""Metric loggers for the training harness.
+
+Three sinks are provided:
+
+  - ``StdoutLogger`` — prints to stdout (great for local development)
+  - ``FileLogger``   — appends JSON-lines to a file under ``output_path``
+  - ``WandBLogger``  — lazily imports wandb; for cloud runs
+
+All three share the ``Logger`` ABC so the experiment can swap them via
+config without touching the training loop.
+"""
+
 import abc
 import datetime
 import json
 import os
+
+import numpy as np
 
 
 class Logger(abc.ABC):
@@ -13,6 +27,10 @@ class Logger(abc.ABC):
     @abc.abstractmethod
     def log(self, step: int, metrics: dict) -> None:
         """Log the given metrics at the specified step."""
+        pass
+
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        """Log a uint8 (N, H, W, 3) image batch. No-op if not overridden."""
         pass
 
     @abc.abstractmethod
@@ -55,28 +73,12 @@ class WandBLogger(Logger):
         metrics["global_step"] = step
         self.run.log(metrics)
 
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        import wandb
+        self.run.log({key: [wandb.Image(img) for img in images], "global_step": step})
+
     def close(self) -> None:
         self.run.finish()
-
-
-# class TensorBoardLogger(Logger):
-#     """Logger implementation that logs metrics to tensorboard locally."""
-
-#     def __init__(self, config_dict: dict, output_path: str, *args, **kwargs) -> None:
-#         import os
-#         from tensorboardX import SummaryWriter
-#         import time
-
-#         self.config_dict = config_dict
-#         self.writer = SummaryWriter(
-#             logdir=os.path.join(output_path, time.strftime("%Y%m%d-%H%M%S"))
-#         )
-
-#     def log(self, step: int, metrics: dict, tag: str = "train") -> None:
-#         self.writer.add_scalars(tag, metrics, step)
-
-#     def close(self) -> None:
-#         self.writer.close()
 
 
 class FileLogger(Logger):
@@ -92,6 +94,7 @@ class FileLogger(Logger):
     ) -> None:
         self.config_dict = config_dict
         label = run_id or datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        os.makedirs(output_path, exist_ok=True)
         self.file_ptr = open(os.path.join(output_path, f"logs_{label}.txt"), "w")
         self.file_ptr.write("\n")
 
@@ -99,8 +102,25 @@ class FileLogger(Logger):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         metrics["timestamp"] = timestamp
         metrics["step"] = step
-        self.file_ptr.write(json.dumps(metrics) + "\n")
+        self.file_ptr.write(json.dumps(metrics, default=str) + "\n")
         self.file_ptr.flush()
+
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        try:
+            import math
+            from PIL import Image as PILImage
+            n, h, w, c = images.shape
+            ncols = min(n, 4)
+            nrows = math.ceil(n / ncols)
+            grid = np.zeros((nrows * h, ncols * w, c), dtype=np.uint8)
+            for i, img in enumerate(images):
+                r, col = divmod(i, ncols)
+                grid[r * h:(r + 1) * h, col * w:(col + 1) * w] = img
+            out_dir = os.path.dirname(self.file_ptr.name)
+            fname = f"step{step:07d}_{key.replace('/', '_')}.png"
+            PILImage.fromarray(grid).save(os.path.join(out_dir, fname))
+        except ImportError:
+            pass
 
     def close(self) -> None:
         self.file_ptr.close()
@@ -115,6 +135,9 @@ class StdoutLogger(Logger):
     def log(self, step: int, metrics: dict) -> None:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp}] Step {step}: {metrics}")
+
+    def log_images(self, step: int, key: str, images: np.ndarray) -> None:
+        print(f"[Step {step}] {key}: {images.shape} uint8 images")
 
     def close(self) -> None:
         pass
