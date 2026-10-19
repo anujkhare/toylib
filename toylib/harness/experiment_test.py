@@ -310,3 +310,101 @@ def test_dataset_iterator_checkpoint_resumes_mid_epoch(tmp_path: Path) -> None:
     assert resumed.train_task.dataset.get_state() == expected_state
     assert resumed.train_task.dataset.get_state()["position"] == 4  # batch after step 3
     resumed.cleanup()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Regressions
+# ──────────────────────────────────────────────────────────────────────────
+
+_MULTI_DEVICE_SCRIPT = """
+import os, sys
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=" + sys.argv[1]
+import jax, jax.numpy as jnp, numpy as np, optax
+from toylib.harness.data import ArrayDataset
+from toylib.harness.experiment import (CheckpointConfig, Experiment, LoggerConfig,
+    MultiOptimizerConfig, OptimizerConfig, Task, TrainingConfig)
+
+def forward(model, batch):
+    pred = batch["x"] @ model["w"]
+    return jnp.mean((pred - batch["y"]) ** 2), {}
+
+rng = np.random.default_rng(0)
+data = {"x": rng.normal(size=(8, 3)).astype(np.float32), "y": rng.normal(size=(8,)).astype(np.float32)}
+sgd = MultiOptimizerConfig([OptimizerConfig("sgd", optax.sgd(1.0))], lambda path: "sgd")
+exp = Experiment(
+    train_task=Task("train", ArrayDataset(data, batch_size=8, shuffle=False)),
+    forward_fn=forward,
+    model_factory=lambda cfg, key: {"w": jnp.ones((3,))},
+    training_config=TrainingConfig(optimizer_config=sgd, num_microbatches=2),
+    checkpoint_config=CheckpointConfig(checkpoint_dir=sys.argv[2] + "/ckpt"),
+    logger_config=LoggerConfig(log_dir=sys.argv[2], run_id="multi"),
+)
+exp.init_state()
+batch = next(iter(exp.train_task.dataset))
+before = jax.tree.map(np.asarray, exp.model)
+true_grad = jax.grad(lambda m: forward(m, batch)[0])(before)
+after, _, _ = exp.train_step_fn(exp.model, exp.opt_state, batch)
+applied = before["w"] - np.asarray(after["w"])  # SGD with lr=1 applies exactly the gradient
+print(jax.local_device_count(), float(np.linalg.norm(applied) / np.linalg.norm(true_grad["w"])))
+"""
+
+
+@pytest.mark.parametrize("num_devices", [1, 2, 4])
+def test_gradient_is_not_scaled_by_device_count(tmp_path: Path, num_devices: int) -> None:
+    """Under jit with sharded inputs the gradient is already global; the update
+    must equal the true full-batch gradient whatever the device count."""
+    import subprocess
+    import sys
+
+    script = tmp_path / "multi_device.py"
+    script.write_text(_MULTI_DEVICE_SCRIPT)
+    result = subprocess.run(
+        [sys.executable, str(script), str(num_devices), str(tmp_path)],
+        capture_output=True, text=True, check=True,
+    )
+    devices, ratio = result.stdout.split()[-2:]
+    assert int(devices) == num_devices
+    assert float(ratio) == pytest.approx(1.0, rel=1e-4)
+
+
+def test_validation_runs_exactly_num_eval_steps_batches(tmp_path: Path, train_ds) -> None:
+    calls = []
+
+    def counting_forward(model, batch):
+        calls.append(1)
+        return _trivial_forward_fn(model, batch)
+
+    exp = Experiment(
+        train_task=Task("train", train_ds),
+        eval_task=Task("val", ArrayDataset(_frames(8), batch_size=1, restart_each_iter=True)),
+        forward_fn=_trivial_forward_fn,
+        eval_forward_fn=counting_forward,
+        model_factory=_trivial_model_factory,
+        eval_config=EvalConfig(num_eval_steps=3),
+        checkpoint_config=CheckpointConfig(checkpoint_dir=str(tmp_path / "ckpts")),
+        logger_config=LoggerConfig(log_dir=str(tmp_path), run_id="eval_steps"),
+        jit_computations=False,
+    )
+    exp.init_state()
+    exp.run_validation()
+    exp.cleanup()
+    assert len(calls) == 3
+
+
+def test_restore_checkpoint_defaults_to_latest(tmp_path: Path, train_ds) -> None:
+    exp = Experiment(
+        train_task=Task("train", train_ds),
+        forward_fn=_trivial_forward_fn,
+        model_factory=_trivial_model_factory,
+        checkpoint_config=CheckpointConfig(checkpoint_dir=str(tmp_path / "ckpts")),
+        logger_config=LoggerConfig(log_dir=str(tmp_path), run_id="latest"),
+        jit_computations=False,
+    )
+    exp.init_state()
+    for step in (2, 7):
+        exp.model, exp.step = {"w": jnp.full((4,), float(step))}, step
+        exp.save_checkpoint()
+    exp.restore_checkpoint()
+    assert exp.step == 7
+    np.testing.assert_array_equal(np.asarray(exp.model["w"]), np.full((4,), 7.0))
+    exp.cleanup()

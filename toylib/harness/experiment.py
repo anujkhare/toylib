@@ -357,10 +357,12 @@ class Experiment:
                 scan_fn, init_carry_grads, microbatches
             )
 
-        # Average grads over devices × microbatches (jax sums by default across the mesh).
-        total_grads = jax.tree.map(
-            lambda g: g / self.num_devices / num_microbatches, total_grads
-        )
+        # Average over microbatches. No division by the device count: under jit
+        # the batch is one global array (sharded behind the scenes), so each
+        # microbatch's loss is already the mean over every device's rows and
+        # its gradient is already global. Dividing by num_devices, as one would
+        # with pmap, shrank every update by 1/N on N devices.
+        total_grads = jax.tree.map(lambda g: g / num_microbatches, total_grads)
         averaged_metrics = jax.tree.map(lambda x: jnp.mean(x, axis=0), all_metrics)
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
@@ -472,7 +474,12 @@ class Experiment:
         self.ckpt_manager.wait_until_finished()
 
     def _resolve_latest_saved_checkpoint_step(self) -> int:
-        raise NotImplementedError("provide a step explicitly!")
+        step = self.ckpt_manager.latest_step()
+        if step is None:
+            raise ValueError(
+                f"No checkpoints in {self.checkpoint_config.checkpoint_dir!r} to restore"
+            )
+        return int(step)
 
     def restore_checkpoint(self, step: int | None = None):
         self._assert_initialized()
@@ -518,7 +525,7 @@ class Experiment:
         first_batch_images: dict | None = None
         num_batches = 0
 
-        for ix, batch in enumerate(self.eval_task.dataset):
+        for batch in self.eval_task.dataset:
             batch_metrics = self.eval_step_fn(self.model, batch)
 
             scalars = {k: v for k, v in batch_metrics.items() if v.ndim == 0}
@@ -534,7 +541,7 @@ class Experiment:
                 first_batch_images = images
 
             num_batches += 1
-            if ix >= self.eval_config.num_eval_steps:
+            if num_batches >= self.eval_config.num_eval_steps:
                 break
 
         if num_batches == 0:
