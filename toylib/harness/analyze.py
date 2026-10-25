@@ -35,17 +35,17 @@ def get_tree_stats(model: jt.PyTree) -> pd.DataFrame:
 
 def print_param_sizes(
     model: jt.PyTree, depth: int = 1, size_denom: int = 1
-) -> tuple[pd.DataFrame, int, int]:
+) -> tuple[pd.DataFrame, int, float]:
     """
     Analyzes parameters and the compiled XLA HLO for peak memory usage.
     """
     df_stats = get_tree_stats(model)
     if len(df_stats) == 0:
         print("Model has no parameters.")
-        return pd.DataFrame()
+        return pd.DataFrame(), 0, 0.0
     df_stats.loc[:, "n_bytes_divided"] = df_stats["n_bytes"] / size_denom
-    total_params = df_stats.params.sum()
-    total_bytes = df_stats.n_bytes_divided.sum()
+    total_params = int(df_stats.params.sum())
+    total_bytes = float(df_stats.n_bytes_divided.sum())
     print(f"Total Parameters: {total_params:,}. Bytes: ({total_bytes:,.2f})")
     level_cols = [f"level_{i}" for i in range(depth)]
     grouped = (
