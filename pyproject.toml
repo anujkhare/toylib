@@ -34,11 +34,11 @@ viz = [
     "matplotlib>=3.7.0",
     "pillow>=10.0.0",
 ]
-# toylib.data: dataset downloads.
+# Hugging Face datasets, for projects that load data from the Hub.
 data = [
     "datasets>=2.14.0",
 ]
-# Everything a post needs.
+# Everything a post (toylib_projects/pNN_*) needs.
 posts = [
     "toylib[harness,viz,data]",
 ]
@@ -70,16 +70,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-include = ["toylib/*", "toylib_posts/*", "toylib_projects/*"]
+include = ["toylib/*", "toylib_projects/*"]
 
-# Ship all top-level packages so `pip install -e .` exposes them as importable
-# top-level names (`import toylib`, `import toylib_posts`, `import toylib_projects`).
-# Without listing `toylib_projects` here, an editable install in a fresh env (e.g. Colab) only
+# Ship both top-level packages so `pip install -e .` exposes them as importable
+# top-level names (`import toylib`, `import toylib_projects`). Without listing
+# `toylib_projects` here, an editable install in a fresh env (e.g. Colab) only
 # registers `toylib`, so `import toylib_projects` fails even though the source
 # is present. Locally under `uv run` this was masked because the repo root is on
 # sys.path via the cwd.
 [tool.hatch.build.targets.wheel]
-packages = ["toylib", "toylib_posts", "toylib_projects"]
+packages = ["toylib", "toylib_projects"]
 
 [dependency-groups]
 dev = [

@@ -3,13 +3,15 @@
     toylib.nn, toylib.data   core: import nothing else from the repo
     toylib.harness           may import core
     toylib.viz               imports nothing else from the repo
-    toylib_posts.<post>      may import toylib; not other posts, not toylib_projects
+    toylib                   never imports toylib_projects
+    toylib_projects.pNN_*    posts: may import toylib, never another project
 
 Imports inside test files are exempt: a test may build fixtures from any layer.
 """
 
 import ast
 import pathlib
+import re
 
 import pytest
 
@@ -17,10 +19,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Package (path relative to repo root) -> import prefixes it must not use.
 FORBIDDEN = {
-    "toylib/nn": ("toylib.harness", "toylib.viz", "toylib.data", "toylib_posts", "toylib_projects"),
-    "toylib/data": ("toylib.harness", "toylib.viz", "toylib.nn", "toylib_posts", "toylib_projects"),
-    "toylib/harness": ("toylib.viz", "toylib_posts", "toylib_projects"),
-    "toylib/viz": ("toylib.harness", "toylib.nn", "toylib.data", "toylib_posts", "toylib_projects"),
+    "toylib/nn": ("toylib.harness", "toylib.viz", "toylib.data", "toylib_projects"),
+    "toylib/data": ("toylib.harness", "toylib.viz", "toylib.nn", "toylib_projects"),
+    "toylib/harness": ("toylib.viz", "toylib_projects"),
+    "toylib/viz": ("toylib.harness", "toylib.nn", "toylib.data", "toylib_projects"),
 }
 
 
@@ -53,10 +55,14 @@ def test_library_layers(package):
 
 
 def test_posts_are_independent():
-    posts_dir = ROOT / "toylib_posts"
-    posts = sorted(p.name for p in posts_dir.iterdir() if p.is_dir() and p.name.startswith("p"))
+    """Each post imports only toylib and itself, so it can be read on its own."""
+    projects_dir = ROOT / "toylib_projects"
+    projects = sorted(
+        p.name for p in projects_dir.iterdir() if p.is_dir() and (p / "__init__.py").exists()
+    )
+    posts = [p for p in projects if re.fullmatch(r"p\d\d_.*", p)]
     problems = []
     for post in posts:
-        others = tuple(f"toylib_posts.{p}" for p in posts if p != post)
-        problems += _violations(f"toylib_posts/{post}", others + ("toylib_projects",))
+        others = tuple(f"toylib_projects.{p}" for p in projects if p != post)
+        problems += _violations(f"toylib_projects/{post}", others)
     assert problems == []

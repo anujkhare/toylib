@@ -19,9 +19,9 @@ with global average pooling. Readers predict the three curves first.
 
 Each is one session. You write the code; ask for review, tests or debugging.
 
-1. **MNIST loader** in `toylib/data/mnist.py` (the interface is stubbed there).
-   *Done when:* train and test arrays have shapes `(60000, 28, 28, 1)` and
-   `(10000, 28, 28, 1)`, and `viz.image_grid(x[:64], titles=...)` shows labelled digits.
+1. ~~**MNIST loader**~~ Done: `mnist.py` and `cifar10.py` in this folder,
+   wrapped for the harness by `data.py`. `01_data_and_pipeline.ipynb` shows a batch
+   and runs the skeleton in `model.py` through `Experiment` for a few steps.
 2. **MLP baseline** in `model.py`, on `toylib.nn.mlp.MLP` (fix it first: review fix 3).
    *Done when:* it overfits one batch within 50 steps.
 3. **Pooling, flatten and a two-layer CNN.**
@@ -36,11 +36,22 @@ Each is one session. You write the code; ask for review, tests or debugging.
 6. **One or two supporting views.** *Done when:* each figure has a one-sentence takeaway you can defend.
 7. **`POST.md`.**
 
+## Files so far
+
+- `mnist.py`, `cifar10.py`: download once, return raw uint8 NHWC arrays and int32 labels.
+- `data.py`: MNIST / CIFAR-10 -> standardized float32 NHWC -> `ArrayDataset`.
+- `model.py`: `ModelConfig`, `build_model`, `forward` (harness wiring) around a
+  placeholder `CNN` and `loss_fn` for you to fill in.
+- `metrics.py`: `Accuracy` for `Task(metrics=[...])`.
+- `01_data_and_pipeline.ipynb`: data, shape trace, dummy passes, a short
+  `Experiment` run, checkpoint restore. Set `DATASET = "cifar10"` for CIFAR-10.
+- `pipeline_test.py`: the same wiring on synthetic data. `datasets_test.py`: the loaders.
+
 ## Commands
 
 ```bash
 uv sync --extra posts
-uv run python -m toylib_posts.p01_cnn_mnist.train
-uv run python -m toylib_posts.p01_cnn_mnist.figures
-uv run pytest toylib_posts/p01_cnn_mnist
+uv run python -m toylib_projects.p01_cnn_mnist.train
+uv run python -m toylib_projects.p01_cnn_mnist.figures
+uv run pytest toylib_projects/p01_cnn_mnist
 ```

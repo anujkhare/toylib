@@ -1,12 +1,16 @@
-# Posts
+# Projects and posts
 
-One folder per blog post. Each post trains a small model on a known dataset and
-answers one question about its insides with a figure.
+Everything specific to one model or dataset lives here; `toylib/` keeps only
+the shared library. Longer projects (`tinystories`, `wm`, `dotsAndBoxes`,
+`bundler`) have their own READMEs. The rest of this page is about the posts.
+
+One `pNN_*` folder per blog post. Each post trains a small model on a known
+dataset and answers one question about its insides with a figure.
 
 | Post | Folder | Question | Status |
 | --- | --- | --- | --- |
 | 0 | [`p00_module_from_scratch`](p00_module_from_scratch/) | What is a pytree, and how did "every array is a parameter" end up training our RoPE tables? | Draft notebooks |
-| 1 | [`p01_cnn_mnist`](p01_cnn_mnist/) | Is a CNN translation-invariant? | Not started |
+| 1 | [`p01_cnn_mnist`](p01_cnn_mnist/) | Is a CNN translation-invariant? | Data and pipeline ready; model next |
 | 2 | [`p02_char_gpt`](p02_char_gpt/) | When does a small GPT learn to copy? | Not started |
 
 ## Layout of a post
@@ -14,6 +18,8 @@ answers one question about its insides with a figure.
 ```
 pNN_slug/
   README.md      the plan: question, milestones, how to run
+  <dataset>.py   loaders for the post's datasets (raw NumPy arrays)
+  data.py        preprocessing -> ArrayDataset
   model.py       the model (yours to write)
   train.py       data -> ArrayDataset -> Experiment -> checkpoints + logs (yours)
   figures.py     every figure in the post, rebuilt from checkpoints and logs
@@ -24,17 +30,17 @@ pNN_slug/
 ```
 
 Run anything as a module from the repo root, e.g.
-`uv run python -m toylib_posts.p01_cnn_mnist.train`.
+`uv run python -m toylib_projects.p01_cnn_mnist.train`.
 
 ## What a post builds on
 
-Posts import from `toylib` and never from each other or from `toylib_projects`.
-If two posts need the same thing, it moves into `toylib`.
+Posts import from `toylib` and never from another project. If two projects
+need the same thing, it moves into `toylib`.
 
 | Need | Use |
 | --- | --- |
 | Layers, attention, the `Module` base class | `toylib.nn` |
-| Dataset download into NumPy arrays | `toylib.data` |
+| Download a file once and cache it | `toylib.data.download` |
 | Arrays to batches the harness understands | `toylib.harness.data.ArrayDataset` |
 | Training loop, checkpoints, logging, eval | `toylib.harness.experiment.Experiment` |
 | Restore a checkpoint, list checkpoints, run a model over a dataset | `toylib.harness.inference` |

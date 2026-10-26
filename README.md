@@ -1,17 +1,18 @@
 # Toylib
 
 Small models built from scratch in JAX for learning, each written up as a blog
-post with visualizations of what happens inside. The repo has four layers;
-each depends only on the ones above it.
+post with visualizations of what happens inside. `toylib/` is the shared
+library; everything specific to one model or dataset lives in `toylib_projects/`.
 
 | Layer | Where | What it holds |
 | --- | --- | --- |
-| Core library | `toylib/nn`, `toylib/data` | The `Module` base class, layers, attention; dataset downloads into NumPy arrays |
+| Core library | `toylib/nn`, `toylib/data` | The `Module` base class, layers, attention; download-once file caching |
 | Harness | `toylib/harness` | Training loop (`Experiment`), in-memory datasets, checkpoints, loggers, metrics, inference helpers |
 | Visualization | `toylib/viz` | Shared figure style, image grids, training curves, heatmaps, GIFs |
-| Posts | `toylib_posts/pNN_*` | One folder per post: model, training script, figures, the post itself |
+| Projects | `toylib_projects/*` | Posts and longer projects: datasets, models, training scripts, figures |
 
-`toylib_projects/` holds longer projects that use the same library:
+`toylib_projects/` holds the blog posts (`pNN_*`, see
+[`toylib_projects/README.md`](toylib_projects/README.md)) and longer projects:
 
 - `tinystories`: a GPT-2-style decoder-only language model, following nanochat.
 - `wm`: a text- and action-conditioned video world model trained on Atari Breakout.
@@ -22,10 +23,12 @@ each depends only on the ones above it.
 
 ### Rules between layers
 
-- `toylib.nn` imports nothing else from the repo. `toylib.viz` never imports
-  `toylib.harness` or models. (Enforced by `toylib/layering_test.py`.)
-- Posts import from `toylib`, never from each other or from `toylib_projects`.
-  Anything two posts need moves into `toylib`.
+- `toylib` never imports `toylib_projects`. Inside it, `toylib.nn` imports
+  nothing else from the repo and `toylib.viz` never imports `toylib.harness` or
+  models.
+- Posts import from `toylib`, never from another project. Anything two
+  projects need moves into `toylib`. Dataset loaders stay with the project that
+  uses them. (All enforced by `toylib/layering_test.py`.)
 
 ## Installation
 
@@ -44,7 +47,7 @@ The core package needs only JAX, optax, einops and jaxtyping. The `harness`,
 
 ```bash
 uv run pytest toylib                     # core library, harness, viz
-uv run pytest toylib_posts/p01_cnn_mnist # one post
+uv run pytest toylib_projects/p01_cnn_mnist # one post
 uv run pytest toylib toylib_projects     # everything (slow; some tinystories tests need network)
 ```
 

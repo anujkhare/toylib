@@ -29,7 +29,7 @@ batch format `decoder_only_model.train_step` already expects.
 
 ## Milestones
 
-1. **Character tokenizer and a 90/10 split** in `toylib/data/shakespeare.py`.
+1. **Character tokenizer and a 90/10 split** in `shakespeare.py` (this folder).
    *Done when:* encode then decode returns the original text, and the vocabulary has 65 entries.
 2. **A small config** (two to four layers) training through the harness.
    *Done when:* samples move from noise to word-like text, and validation loss tracks training loss.

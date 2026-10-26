@@ -17,4 +17,4 @@ examples/multipart_serialised.eqx
 site/
 tensorboard_logs/
 # Per-post checkpoints, logs and scratch figures (final figures go in figures/)
-toylib_posts/*/outputs/
+toylib_projects/p*/outputs/
