@@ -47,7 +47,7 @@ The dataset/task is chosen with the following objectives:
    - *Cons:* 3D first-person projection introduces partial observability, dynamic scale changes, and high-frequency visual shifts during camera rotation. Highly likely to exceed the capacity of a ~50M parameter model on a small budget.
 
 **Note on Real-Video Datasets (e.g., YouTube, Robotics):**
-We explicitly decided against using real-video-based datasets (such as robotics manipulation logs or curated YouTube clips). Real video has infinite visual entropy (reflections, shadows, moving backgrounds, camera motion) that would require a massive, pre-trained black-box VAE to compress cleanly, violating our "built from scratch" objective. Furthermore, real videos do not come with action labels; estimating actions would require training or running a complex Inverse Dynamics Model (IDM), introducing severe engineering overhead and noise that would distract from the core flow-matching and temporal attention mechanics.
+We explicitly decided against using real-video-based datasets (such as robotics manipulation logs or curated YouTube clips). Real video has infinite visual entropy (reflections, shadows, moving backgrounds, camera motion) that would require a massive, pre-trained black-box VAE to compress cleanly, violating our "built from scratch" objective. Furthermore, real videos do not come with action labels; estimating actions would require training or running a complex Inverse Dynamics Model (IDM), introducing severe engineering overhead and noise that would distract from the core flow-matching and temporal attention mechanics. (The latent-action literature — LAPO, Genie's latent action model; see [Latent-action models](#latent-action-models-learning-actions-from-unlabeled-video) — targets exactly this problem, but at a cost we deliberately avoid by using ground-truth Gymnasium actions.)
 
 ### Decision
 
@@ -279,9 +279,12 @@ The building blocks the plan tells you to implement by hand. These are *method* 
 | **Lucid** (2025) | actions → next frame (Minecraft) | latent-diffusion DiT, inference-optimized | open Minecraft world model at ~20fps — a faster, leaner Oasis-style engine | mostly a real-time engineering point on the Oasis design; low structural novelty for us |
 | **Genie** (Bruce et al., 2024) | unlabeled video → playable environment | ST-transformer: VQ video tokenizer + **latent action model** + MaskGIT dynamics | learns a *latent action space* from video with no action labels | we have ground-truth actions, so the latent-action trick is less central, but the joint video+action modeling is relevant |
 | **Genie 2** (DeepMind, 2024) | single image prompt + actions → playable 3D world (future frames) | **autoregressive latent diffusion**: frozen autoencoder → large transformer dynamics model, classifier-free guidance for action control | foundation-scale, action-controllable, long-horizon-consistent playable worlds from one image; **real action inputs** (vs Genie 1's latent actions); emergent physics/memory | action-conditioned latent diffusion at scale; long-horizon memory target; see [detailed comparison](#genie-2-vs-us) |
+| **Genie 3** (DeepMind, 2025) | text → navigable world (real-time) | scaled successor to Genie 2 (technical page, not a full paper) | 24fps / 720p navigable worlds from text with minute-scale consistency; consumer prototype "Project Genie" (Google Labs, Jan 2026) | direction-of-travel for long-horizon consistency and text-prompted worlds — **read for target, not reproducible method** |
 | **WHAM / Muse** (Kanervisto et al., Microsoft, Nature 2025) | actions + past frames → next frame (+ unconditional gen) for game-dev ideation | **discrete VQ** image tokens + action tokens interleaved in a decoder-only **AR transformer** | interactive world model as pure next-token AR over joint image+action tokens; creative-tool (not RL/playable) framing | **closest games-native analogue to our action-token-in-sequence mechanism** — but fully discrete (VQ frames), where we keep frames continuous (the same divergence as GAIA-1) |
 | **The Matrix** (Feng et al., 2024) | limited move-controls → future video (infinite horizon) | latent-diffusion DiT trained on game + real-world footage, streaming/AR rollout | real-time, **infinite-horizon** controllable generation with map-level consistency | another long-rollout reference alongside Diffusion Forcing / Rolling Diffusion; shows continuous-latent diffusion scaling to open-world driving |
 | **Cosmos-Predict2** (NVIDIA, 2025) | text/image/video → future video (physical-AI foundation model) | **continuous 3D causal tokenizer** (Cosmos Tokenizer) + diffusion DiT (also an AR variant), very large scale | production-scale physical-world generation; high-compression continuous tokenizer | scale + continuous-tokenizer blueprint; see [detailed comparison](#cosmos-predict2-vs-us) |
+| **GAIA-2** (Wayve, 2025) | multi-condition → future driving video | **latent-diffusion** world model with structured control (ego-dynamics, other agents, road semantics), multi-camera consistency | successor to GAIA-1 moving from VQ+AR to latent diffusion with fine-grained structured conditioning | shows the field's drift toward continuous-latent diffusion (our frame backbone); structured-control conditioning is an alternative to our action-tokens-in-sequence choice |
+| **Vista** (Gao et al., 2024) | action/command → future driving video | latent-diffusion driving world model with versatile action controllability (steering, speed, high-level commands) | generalizable, high-fidelity driving world model spanning multiple control modalities | another continuous-latent, action-conditioned driving reference alongside GAIA-2 and Cosmos |
 | **Diffusion Forcing** (Chen et al., 2024) | sequence generation / planning | per-token **independent noise levels** in a causal sequence model | unifies next-token AR and full-sequence diffusion; stable, variable-length rollouts | the technique behind Oasis; **directly targets our long-rollout risk** (Track 2+) |
 | **Rolling Diffusion** (Ruhe et al., 2024) | video generation | sliding window with **per-frame increasing noise** | reframes video diffusion as a rolling, progressive denoising over time | an alternative long-horizon rollout scheme for Track 2+ |
 
@@ -292,6 +295,17 @@ The building blocks the plan tells you to implement by hand. These are *method* 
 
 They remain valuable on two axes. First, **action-conditioning mechanism**, where this branch is the full menu of alternatives to our "discrete action tokens in the joint sequence" choice: channel-concat (DIAMOND), classifier-free guidance (Genie 2), learned latent actions (Genie 1), and — closest to us — VQ action tokens in an AR stream (**WHAM**), which differs only in quantizing frames where we keep them continuous. Second, **long-horizon rollout stability** (our Track 2+ risk), where The Matrix's infinite-horizon streaming joins Diffusion Forcing, Rolling Diffusion, and GameNGen's noise augmentation as concrete mitigations. A final contrast worth stating: the recorded-gameplay systems (Oasis, Lucid, WHAM, The Matrix) have **no ground-truth world state**, so they fall back to FVD/human evaluation — whereas our Gymnasium sim exposes `ball_x`/`paddle_x`/`bricks_remaining`, enabling the physics-grounded metrics in our [evaluation philosophy](#evaluation-philosophy).
 
+### Latent-action models (learning actions from unlabeled video)
+
+The single most important design decision for a video-action world model is **where actions come from**: ground-truth labels vs. actions inferred from action-less video. We take the labeled route (Gymnasium exposes the true action), so this thread is the alternative we explicitly *do not* build. It is listed because it is the crux of the "video-action" world-model literature and the reason our dataset choice matters — see the [real-video dataset note](#note-on-real-video-datasets-eg-youtube-robotics).
+
+| Paper | Main task | High-level architecture | Key contribution | Relevance to us |
+|---|---|---|---|---|
+| **LAPO** (Schmidt & Jiang, 2023) | unlabeled video → latent actions (+ policy) | inverse dynamics model bottlenecked against a forward dynamics model to recover a discrete latent action per transition | actions are recoverable from pure video by unsupervised objectives; the cleanest statement of the latent-action idea | the tractable recipe underlying Genie's latent action model; the concrete IDM-style method we **avoid** by using ground-truth actions |
+| **Genie latent action model** (Bruce et al., 2024) | unlabeled 2D-game video → latent actions | VQ latent-action model trained jointly with an ST-transformer dynamics model | latent-action discovery at scale, enabling a playable environment with no action labels | the scaled cousin of LAPO; already summarized in [Genie](#action-conditioned-world-models) |
+
+Adjacent sub-thread (not tabulated): **ILPO** (imitating latent policies), **DynaMo**, **LAPA** (latent-action pretraining for robots), and **AdaWorld** extend the same idea to imitation, self-supervised representations, and cross-embodiment transfer. All are only relevant if we ever drop ground-truth actions.
+
 ### Video DiT architecture
 
 | Paper | Main task | High-level architecture | Key contribution | Relevance to us |
@@ -300,6 +314,7 @@ They remain valuable on two axes. First, **action-conditioning mechanism**, wher
 | **CogVideoX** (Yang et al., 2024) | text → video | **3D causal VAE** + expert-transformer DiT with **expert AdaLN**, 3D full attention | 3D causal VAE and expert adaptive-LN for joint text+video modeling | 3D VAE reference for Track 3b; expert AdaLN conditioning |
 | **Latte** (Ma et al., 2024) | text/class → video | latent video DiT with **factorized spatial & temporal** transformer blocks | systematic study of factorized spatio-temporal attention; joint image+video training recipe | factorized attention to manage sequence length (Track 2) |
 | **AnimateDiff** (Guo et al., ICLR 2024) | text → video (animate a personalized T2I model) | frozen T2I U-Net + inserted **motion module** (temporal attention) trained on video | plug-in motion module; weight **inflation** from 2D → temporal blocks | inflation recipe for Track 3b |
+| **Sora / Video generation models as world simulators** (OpenAI, 2024) | text/image → video | large-scale **spacetime-patch diffusion transformer** over video latents | argues large video generators implicitly learn world dynamics ("world simulators") | the framing that motivated video-generation-as-world-model; context for why the field (and this plan) converged on video DiTs — **technical report, not reproducible** |
 
 ### Joint-sequence and any-conditional models
 
@@ -317,7 +332,7 @@ They remain valuable on two axes. First, **action-conditioning mechanism**, wher
 
 ### World-model lineage (RL / latent imagination)
 
-The conceptual ancestors of the term "world model": latent dynamics models learned for planning/control. Less directly comparable to us (they optimize for control, not high-fidelity generation), but this is where our framing — a learned latent model of an environment — originates.
+The conceptual ancestors of the term "world model": latent dynamics models learned for planning/control. Less directly comparable to us (they optimize for control, not high-fidelity generation), but this is where our framing — a learned latent model of an environment — originates. Note: the paperswithcode *world-models* task is dominated by this control/planning branch, so its top-cited entries (the planning/MCTS rows below — MuZero, EfficientZero, TD-MPC, STORM) are mostly RL agents that plan in a learned latent rather than generate frames; they are included for completeness rather than as structural analogues.
 
 | Paper | Main task | High-level architecture | Key contribution | Relevance to us |
 |---|---|---|---|---|
@@ -325,6 +340,33 @@ The conceptual ancestors of the term "world model": latent dynamics models learn
 | **PlaNet** (Hafner et al., 2019) | latent planning from pixels | **RSSM** latent dynamics (deterministic + stochastic state) | planning directly in a learned latent dynamics model | predecessor latent-dynamics design to Dreamer |
 | **Dreamer / DreamerV3** (Hafner et al., 2019–2023) | RL via imagined rollouts | RSSM world model + actor-critic trained in latent imagination | learn behaviors purely in imagination; V3 is a generalist (incl. Atari) | the latent-imagination world model lineage; Atari mastery from a learned model |
 | **SimPLe** (Kaiser et al., 2019) | model-based RL on Atari | video-prediction model + PPO in the learned model | sample-efficient Atari from a learned pixel model | model-based RL on **our exact domain** (Atari) |
+| **IRIS** (Micheli et al., 2022) | model-based RL on Atari 100k | discrete autoencoder (VQ) + autoregressive **Transformer** world model; agent trained in imagination | transformers as sample-efficient world models (mean human-normalized 1.046 on Atari 100k from ~2h play) | tractable **discrete-token AR transformer** world model on **our exact domain** (Atari); the discrete counterpart to DIAMOND and to our continuous-latent frames; follow-up Δ-IRIS adds context-aware tokenization |
+| **MuZero** (Schrittwieser et al., Nature 2020) | planning-based RL (Atari, Go, chess, shogi) | learned latent model predicting **reward, policy, and value** (no observation reconstruction) + **MCTS** planning | mastery across board games and Atari from a model that only predicts planning-relevant quantities | the highest-cited "world model" on the paperswithcode task; a **planning/MCTS** world model (vs our generative one) — the dominant *non-generative* sense of the term |
+| **EfficientZero** (Ye et al., NeurIPS 2021) | sample-efficient RL (Atari 100k) | MuZero + self-supervised consistency loss + value-prefix + off-policy correction | first to reach ~human-level on Atari 100k (~2h play) | MuZero-family sample efficiency on **our exact domain** (Atari); planning-based, no high-fidelity frame generation |
+| **TD-MPC / TD-MPC2** (Hansen et al., 2022 / 2024) | continuous-control RL | **implicit** (decoder-free) latent world model + model-predictive control with a TD-learned value | strong control by planning in a task-oriented latent, no reconstruction; V2 scales to a single generalist agent | the "world model = latent for planning, not pixels" endpoint — a sharp contrast to our reconstruction-based generative latents |
+| **STORM** (Zhang et al., NeurIPS 2023) | sample-efficient RL (Atari 100k) | **stochastic transformer** world model (categorical latents) + actor-critic in imagination | transformer-based DreamerV2/V3-style imagination, efficient on Atari 100k | transformer world model on Atari bridging IRIS (AR tokens) and Dreamer (RSSM); an architecture reference |
+
+### Non-generative world models (joint-embedding prediction / JEPA)
+
+A branch worth naming explicitly because it is the **philosophical opposite** of our design. JEPA world models **predict in representation space and never reconstruct pixels** — the bet (LeCun's) is that generating observations wastes capacity on unpredictable detail, so a world model should predict abstract embeddings and be used for planning/control. Our plan makes the opposite bet: we *want* frames (and text) as outputs, and our [physics-grounded metrics](#evaluation-philosophy) need decoded observations. These systems are therefore not templates to copy but the main alternative worldview, and the fourth option on the representation axis (alongside compact RSSM latents, pixel diffusion, and discrete AR tokens).
+
+| Paper | Main task | High-level architecture | Key contribution | Relevance to us |
+|---|---|---|---|---|
+| **I-JEPA** (Assran et al., 2023) | self-supervised image representation | ViT context/target encoders + predictor, **latent masked prediction** (no pixel decoder) | strong image representations by predicting masked *embeddings*, not pixels | the image-level statement of the non-generative bet we deliberately do *not* take |
+| **V-JEPA** (Bardes et al., 2024) | self-supervised video representation | video ViT + predictor, masked latent prediction over spacetime | extends JEPA to video; features transfer to motion understanding | the video-representation predecessor to V-JEPA 2 |
+| **V-JEPA 2 / V-JEPA 2-AC** (Assran, LeCun et al., 2025) | action-free video world model → robot planning | JEPA pretraining on **>1M hours** of internet video; **V-JEPA 2-AC** post-trains a latent **action-conditioned** predictor on ~62h unlabeled robot (Droid) video | scalable non-generative world model enabling **zero-shot** robot manipulation by planning in latent space | the flagship modern JEPA world model; our design's philosophical opposite (predict-in-latent + plan vs. generate + evaluate); its action-conditioning is a latent predictor, not a token/diffusion target |
+
+Cousins sharing the "don't reconstruct" instinct: **DINO-WM** (world models on frozen visual features) and **TD-MPC** (decoder-free latent world model, above). The framing traces to LeCun's position paper *A Path Towards Autonomous Machine Intelligence* (2022).
+
+**Not to be confused with masked *generative* video models.** JEPA's masked-prediction pretraining looks superficially like a masked generative model, but the difference is *not* causality (AR vs. bidirectional attention) — that axis is orthogonal, and both paradigms come in causal and non-causal flavors. The load-bearing difference is **where the prediction target lives**. The cleanest contrast is **V-JEPA vs. a Masked Autoencoder (MAE)**: identical masking recipe and bidirectional attention, but MAE decodes the masked patches back to **pixels** (a reconstruction loss → generative), whereas V-JEPA predicts a **target encoder's *representations*** of the masked regions (an embedding-space regression, no decoder → JEPA). Because the JEPA target is a *learned, non-decodable* representation, it can discard unpredictable low-level detail — which also means it needs an EMA target encoder + stop-gradient to avoid representation collapse, and it **cannot render frames**. Our plan is committed to the reconstruction side of this line: even our latent-diffusion latents are *decodable* VAE latents, not JEPA-style non-reconstructive embeddings.
+
+### Surveys
+
+Orientation references — taxonomies rather than methods to implement.
+
+| Paper | Scope | Relevance to us |
+|---|---|---|
+| **A Survey of World Models for Autonomous Driving** (Guan et al., 2025, arXiv:2501.11260) | taxonomy of world models organized by purpose, representation, and action source | a useful cross-domain map (beyond driving) of the three design axes this plan navigates: **purpose** (train a policy in imagination vs. deliver a playable engine vs. generate/evaluate data), **representation** (compact RSSM latent vs. pixel diffusion vs. discrete AR tokens vs. [non-reconstructive embedding prediction / JEPA](#non-generative-world-models-joint-embedding-prediction--jepa)), and **where actions come from** (ground-truth labels vs. [inferred latent actions](#latent-action-models-learning-actions-from-unlabeled-video)) |
 
 ### Detailed comparisons vs our proposal
 
@@ -411,6 +453,7 @@ In short: **our proposal ≈ GAIA-1's modality structure, realized with UniDiffu
 | `Vchitect/Latte` | Factorized attention implementation |
 | `guoyww/AnimateDiff` | Temporal inflation recipe |
 | `eloialonso/diamond` | DIAMOND Atari world model |
+| `eloialonso/iris` | IRIS discrete-token AR transformer world model (Atari) |
 | `etched-ai/open-oasis` | Open Oasis world model |
 | `nvidia-cosmos/cosmos-predict2` | Cosmos scale reference |
 
