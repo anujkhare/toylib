@@ -51,11 +51,35 @@ def preprocess(images: np.ndarray, info: DatasetInfo) -> np.ndarray:
 
 def unpreprocess(images: np.ndarray, info: DatasetInfo) -> np.ndarray:
     """Undo ``preprocess`` back to floats in [0, 1], for plotting."""
-    x = np.asarray(images) * np.asarray(info.std, np.float32) + np.asarray(info.mean, np.float32)
+    x = np.asarray(images) * np.asarray(info.std, np.float32) + np.asarray(
+        info.mean, np.float32
+    )
     return np.clip(x, 0.0, 1.0)
 
 
-def load_arrays(name: str, split: str, limit: int | None = None) -> dict[str, np.ndarray]:
+def random_flip_and_crop(
+    batch: dict[str, np.ndarray], rng: np.random.Generator, pad: int = 4
+) -> dict[str, np.ndarray]:
+    """Standard CIFAR-10 augmentation, drawn independently for each image.
+
+    Flips horizontally with probability 1/2, then pads by ``pad`` pixels and crops
+    back to the original size at a random offset. Pixels are standardized, so the
+    zero padding is the dataset's mean colour.
+    """
+    images = batch["image"]
+    n, h, w, _ = images.shape
+    flip = rng.random(n) < 0.5
+    images = np.where(flip[:, None, None, None], images[:, :, ::-1], images)
+    padded = np.pad(images, ((0, 0), (pad, pad), (pad, pad), (0, 0)))
+    rows = rng.integers(0, 2 * pad + 1, (n, 1)) + np.arange(h)
+    cols = rng.integers(0, 2 * pad + 1, (n, 1)) + np.arange(w)
+    crops = padded[np.arange(n)[:, None, None], rows[:, :, None], cols[:, None, :]]
+    return {**batch, "image": crops}
+
+
+def load_arrays(
+    name: str, split: str, limit: int | None = None
+) -> dict[str, np.ndarray]:
     """Preprocessed ``{"image", "label"}`` arrays for one split, optionally the first ``limit``."""
     info = DATASETS[name]
     images, labels = info.load(split)
@@ -71,17 +95,24 @@ def make_datasets(
     seed: int = 0,
     train_limit: int | None = None,
     test_limit: int | None = None,
+    augment: bool = False,
 ) -> tuple[ArrayDataset, ArrayDataset]:
     """Train and test ``ArrayDataset``s for ``name`` ("mnist" or "cifar10").
 
     Training batches are shuffled and resume mid-epoch after a checkpoint
     restore; test batches come in a fixed order and restart for every
     evaluation, so each eval sees the same examples. ``*_limit`` keeps only the
-    first N examples, for quick runs.
+    first N examples, for quick runs. ``augment`` applies
+    ``random_flip_and_crop`` to training batches; test batches are never augmented.
     """
     if name not in DATASETS:
         raise ValueError(f"Unknown dataset {name!r}; choose from {sorted(DATASETS)}")
-    train = ArrayDataset(load_arrays(name, "train", train_limit), batch_size=batch_size, seed=seed)
+    train = ArrayDataset(
+        load_arrays(name, "train", train_limit),
+        batch_size=batch_size,
+        seed=seed,
+        transform=random_flip_and_crop if augment else None,
+    )
     test = ArrayDataset(
         load_arrays(name, "test", test_limit),
         batch_size=eval_batch_size,

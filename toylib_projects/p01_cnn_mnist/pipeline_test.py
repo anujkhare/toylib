@@ -64,6 +64,34 @@ def test_preprocess_roundtrip():
     np.testing.assert_allclose(data.unpreprocess(x, info), images / 255.0, atol=1e-6)
 
 
+def test_random_flip_and_crop():
+    images = np.random.default_rng(0).normal(size=(64, 32, 32, 3)).astype(np.float32)
+    batch = {"image": images, "label": np.arange(64)}
+
+    out = data.random_flip_and_crop(batch, np.random.default_rng(1), pad=4)
+    assert out["image"].shape == images.shape and out["image"].dtype == images.dtype
+    np.testing.assert_array_equal(out["label"], batch["label"])
+
+    # With no padding the only change is the flip: each image is itself or its mirror.
+    flipped = data.random_flip_and_crop(batch, np.random.default_rng(1), pad=0)["image"]
+    same = (flipped == images).all(axis=(1, 2, 3))
+    mirrored = (flipped == images[:, :, ::-1]).all(axis=(1, 2, 3))
+    assert (same | mirrored).all() and same.any() and mirrored.any()
+
+    # Pixels encode their position, so each crop must be one solid window of the
+    # image, shifted by at most ``pad``, with zeros only in the padding.
+    rows, cols = np.mgrid[:32, :32]
+    coded = np.tile((1 + 100 * rows + cols).astype(np.float32)[None, :, :, None], (64, 1, 1, 1))
+    crops = data.random_flip_and_crop({"image": coded}, np.random.default_rng(2), pad=4)["image"]
+    for crop in crops[..., 0]:
+        r, c = np.nonzero(crop)
+        window = crop[r.min() : r.max() + 1, c.min() : c.max() + 1]
+        assert min(window.shape) >= 28 and (window != 0).all()
+        assert (np.diff(window, axis=0) == 100).all()
+        assert (np.abs(np.diff(window, axis=1)) == 1).all()
+    assert len({tuple(np.argwhere(crop[..., 0])[0]) for crop in crops}) > 1
+
+
 @pytest.mark.parametrize("name", ["mnist", "cifar10"])
 def test_trains_through_harness(tmp_path: Path, name):
     """A few jitted steps with eval and checkpoints, then restore with inference."""

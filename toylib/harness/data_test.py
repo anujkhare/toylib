@@ -76,3 +76,15 @@ def test_validation():
         ArrayDataset(_arrays(2), batch_size=3)
     with pytest.raises(ValueError, match="at least one"):
         ArrayDataset({}, batch_size=1)
+
+
+def test_transform_is_applied_and_reproducible() -> None:
+    def add_noise(batch: dict, rng: np.random.Generator) -> dict:
+        return {**batch, "x": batch["x"] + rng.random(batch["x"].shape)}
+
+    arrays = {"x": np.zeros((8, 2))}
+    first = list(ArrayDataset(arrays, batch_size=4, transform=add_noise))
+    second = list(ArrayDataset(arrays, batch_size=4, transform=add_noise))
+    assert not np.array_equal(first[0]["x"], first[1]["x"])
+    np.testing.assert_array_equal(first[0]["x"], second[0]["x"])
+    assert arrays["x"].sum() == 0  # the source arrays stay untouched

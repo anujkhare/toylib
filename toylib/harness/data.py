@@ -41,6 +41,9 @@ class ArrayDataset:
     shuffle: bool = True
     seed: int = 0
     restart_each_iter: bool = False
+    # Optional ``(batch, rng) -> batch`` applied to each batch, e.g. augmentation.
+    # ``rng`` is seeded from ``(seed, epoch, position)``, so runs are reproducible.
+    transform: typing.Callable[[dict, np.random.Generator], dict] | None = None
 
     def __post_init__(self) -> None:
         if not self.arrays:
@@ -84,7 +87,11 @@ class ArrayDataset:
             # Advance before yielding: if the consumer stops after this batch,
             # the saved state already points at the next one.
             self.position += 1
-            yield {k: v[idx] for k, v in self.arrays.items()}
+            batch = {k: v[idx] for k, v in self.arrays.items()}
+            if self.transform is not None:
+                rng = np.random.default_rng((self.seed, self.epoch, self.position))
+                batch = self.transform(batch, rng)
+            yield batch
         self.epoch, self.position = self.epoch + 1, 0
 
     def get_state(self) -> dict[str, int]:
