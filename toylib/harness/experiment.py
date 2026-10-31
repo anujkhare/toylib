@@ -334,36 +334,45 @@ class Experiment:
         num_microbatches = self.training_config.num_microbatches
         microbatch_size = sharded_batch_size // num_microbatches
 
-        # Reshape leaves from [sharded_batch, ...] to
-        # [num_microbatches, microbatch_size, ...] so scan can slice along axis 0.
-        microbatches = jax.tree.map(
-            lambda x: x.reshape(num_microbatches, microbatch_size, *x.shape[1:]),
-            batch,
-        )
-
-        def scan_fn(carry_grads, microbatch):
+        def compute_microbatch(microbatch):
             (loss_val, aux), grads = jax.value_and_grad(self.forward_fn, has_aux=True)(
                 model, microbatch
             )
-            new_carry_grads = jax.tree.map(lambda c, g: c + g, carry_grads, grads)
             microbatch_metrics = self._compute_metrics(
                 task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
             )
-            return new_carry_grads, microbatch_metrics
+            return grads, microbatch_metrics
 
-        init_carry_grads = jax.tree.map(jnp.zeros_like, model)
-        with jax.profiler.TraceAnnotation("microbatch_loop"):
-            total_grads, all_metrics = jax.lax.scan(
-                scan_fn, init_carry_grads, microbatches
+        if num_microbatches == 1:
+            # Skip the scan: on XLA CPU a one-iteration scan made training 8x
+            # slower (8 vs 64 steps/s on the post 1 CNN).
+            total_grads, averaged_metrics = compute_microbatch(batch)
+        else:
+            # Reshape leaves from [sharded_batch, ...] to
+            # [num_microbatches, microbatch_size, ...] so scan can slice along axis 0.
+            microbatches = jax.tree.map(
+                lambda x: x.reshape(num_microbatches, microbatch_size, *x.shape[1:]),
+                batch,
             )
 
-        # Average over microbatches. No division by the device count: under jit
-        # the batch is one global array (sharded behind the scenes), so each
-        # microbatch's loss is already the mean over every device's rows and
-        # its gradient is already global. Dividing by num_devices, as one would
-        # with pmap, shrank every update by 1/N on N devices.
-        total_grads = jax.tree.map(lambda g: g / num_microbatches, total_grads)
-        averaged_metrics = jax.tree.map(lambda x: jnp.mean(x, axis=0), all_metrics)
+            def scan_fn(carry_grads, microbatch):
+                grads, microbatch_metrics = compute_microbatch(microbatch)
+                new_carry_grads = jax.tree.map(lambda c, g: c + g, carry_grads, grads)
+                return new_carry_grads, microbatch_metrics
+
+            init_carry_grads = jax.tree.map(jnp.zeros_like, model)
+            with jax.profiler.TraceAnnotation("microbatch_loop"):
+                total_grads, all_metrics = jax.lax.scan(
+                    scan_fn, init_carry_grads, microbatches
+                )
+
+            # Average over microbatches. No division by the device count: under jit
+            # the batch is one global array (sharded behind the scenes), so each
+            # microbatch's loss is already the mean over every device's rows and
+            # its gradient is already global. Dividing by num_devices, as one would
+            # with pmap, shrank every update by 1/N on N devices.
+            total_grads = jax.tree.map(lambda g: g / num_microbatches, total_grads)
+            averaged_metrics = jax.tree.map(lambda x: jnp.mean(x, axis=0), all_metrics)
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
             updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
