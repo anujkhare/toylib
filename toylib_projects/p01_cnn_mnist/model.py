@@ -16,6 +16,7 @@ The same code serves MNIST (28x28x1) and CIFAR-10 (32x32x3): the config's
 """
 
 import dataclasses
+import einops
 
 import jax
 import jax.numpy as jnp
@@ -33,29 +34,50 @@ class ModelConfig:
     # size, and whether the head flattens or global-average-pools.
 
 
+class Block(module.Module):
+    in_channels: int
+    out_channels: int
+    pool: bool = True
+    key: jt.PRNGKeyArray
+
+    def init(self) -> None:
+        self.conv_layer = layers.Conv2D(
+            in_channels=self.in_channels, out_channels=self.out_channels, key=self.key
+        )
+
+    def __call__(
+        self, x: jt.Float[jt.Array, "B H W in_channels"]
+    ) -> jt.Float[jt.Array, "B H_out W_out out_channels"]:
+        x = self.conv_layer(x)
+        x = jax.nn.relu(x)
+        if self.pool:
+            x = layers.max_pool(x, factor=2)
+        return x
+
+
 class CNN(module.Module):
     image_shape: tuple[int, int, int]
     num_classes: int
     key: jt.PRNGKeyArray
 
-    # Trainable sub-modules are created in init().
-    # TODO(you): conv layers, pooling, and the head.
-    head: layers.Linear | None = None
-
     def init(self) -> None:
-        # PLACEHOLDER: one linear layer on the flattened pixels, so that
-        # training, evaluation and checkpointing can be exercised now.
         h, w, c = self.image_shape
+        keys = jax.random.split(self.key, 4)
+
+        self.conv1 = Block(in_channels=c, out_channels=32, key=keys[0])
+        self.conv2 = Block(in_channels=32, out_channels=64, key=keys[1])
+        self.conv3 = Block(in_channels=64, out_channels=64, pool=False, key=keys[2])
+
         self.head = layers.Linear(
-            in_features=h * w * c,
+            in_features=(h // 4) * (w // 4) * 64,
             out_features=self.num_classes,
             use_bias=True,
-            key=self.key,
+            key=keys[3],
         )
 
     def __call__(
         self,
-        images: jt.Float[jt.Array, "batch height width channels"],
+        images: jt.Float[jt.Array, "B H W C"],
         return_intermediates: bool = False,
     ):
         """Logits for a batch of images.
@@ -67,10 +89,11 @@ class CNN(module.Module):
         acts = {}
         # Accept NumPy batches straight from ArrayDataset (no-op under jit).
         x = jnp.asarray(images)
-        # TODO(you): conv -> relu -> pool blocks, recording each in `acts`.
-        x = x.reshape(x.shape[0], -1)
-        acts["flatten"] = x
-        logits = self.head(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+
+        logits = self.head(einops.rearrange(x, "b h w c -> b (h w c)"))
         if return_intermediates:
             return logits, acts
         return logits
@@ -91,8 +114,8 @@ def loss_fn(
     TODO(you): softmax cross-entropy. The placeholder below ignores the labels
     and pulls every logit towards zero; it only exists so gradients flow.
     """
-    del labels
-    return jnp.mean(logits**2)
+    log_probs = jax.nn.log_softmax(logits)
+    return -jnp.mean(jnp.take_along_axis(log_probs, labels[:, None], axis=-1))
 
 
 def forward(model: CNN, batch: dict) -> tuple[jax.Array, dict]:
