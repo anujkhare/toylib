@@ -1,85 +1,117 @@
 # Running the heavy models on Colab
 
-`01_resnets_colab.ipynb` trains the runs that are too slow on a laptop CPU. You keep the
-notebook open in your editor, while its cells run on a Colab machine through Google's
-[Colab extension](https://github.com/googlecolab/colab-vscode).
+`01_resnets_colab.ipynb` trains the runs that are too slow for a laptop CPU. Google's
+[Colab CLI](https://github.com/googlecolab/google-colab-cli) rents a Colab machine and runs
+the notebook on it from a shell, so these commands work from your terminal or a Claude Code
+session.
 
-The notebook's file is on your Mac, but its kernel, its disk and everything it writes are
-on the Colab machine. Colab can only get the code from GitHub, so **commits must be pushed
-before they reach the runtime**. Local files on the runtime disappear with it, so checkpoints
-go straight to `gs://tinystories-checkpoints/toylib-p01-cifar10/` and metrics go to W&B.
+Colab gets the code from GitHub, so **commits must be pushed before they reach the runtime**.
+Files on the runtime disappear with it, so checkpoints go straight to
+`gs://tinystories-checkpoints/toylib-p01-cifar10/` and metrics go to W&B. A runtime is
+billed while it exists, so stop it when you're done.
 
-Claude can't run cells on the Colab kernel, because the connection belongs to your editor.
-It can read the same results you can: checkpoints from the bucket and metrics from W&B.
+## One-time setup
 
-## Before you start
+Install the CLI and put it on your PATH, then open a new terminal:
 
-1. Have two values ready, because Colab secrets don't work from the extension: your Google
-   Cloud project ID, and your W&B key from <https://wandb.ai/authorize>. The notebook asks
-   for both once per runtime.
-2. Refresh the W&B login on this Mac, since the stored one has stopped working:
+```bash
+uv tool install google-colab-cli
+```
 
-   ```bash
-   uv run wandb login --relogin
-   ```
+```bash
+uv tool update-shell
+```
 
-3. Let Python on this Mac read the bucket. `gcloud storage` already works, but Orbax needs
-   these credentials to load checkpoints:
+Log in with the scopes Colab needs. The same login lets Python on this Mac read the bucket.
+Pass `--auth=adc` to `colab`, because the installed version defaults to another method.
 
-   ```bash
-   gcloud auth application-default login
-   ```
+```bash
+gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory
+```
 
-4. Install the **Colab** extension (publisher: Google) in VS Code. Cursor gets it from
-   Open VSX. Install **Jupyter** too if the editor asks.
+Refresh the W&B login:
 
-## Connect
+```bash
+uv run wandb login --relogin
+```
 
-1. Open `toylib_projects/p01_cnn_mnist/01_resnets_colab.ipynb`.
-2. Click **Select Kernel** at the top right, then **Colab**, then **New Colab Server**.
-   Avoid Auto Connect: it may not give you a TPU.
-3. Choose **TPU** and then a machine type. Give the server a name if asked.
-4. Sign in with Google when the browser opens, then return to the editor.
-5. Select the Python kernel if the editor asks.
+Check that Colab accepts the login, and see your compute units:
+
+```bash
+colab --auth=adc sessions
+```
+
+```bash
+colab --auth=adc usage
+```
+
+## Start a runtime
+
+Each new runtime needs all three of these. A `400` from `colab new` means this account has
+no quota for that accelerator, so try `--tpu v5e1` or `--gpu T4`.
+
+```bash
+colab --auth=adc new -s p01 --tpu v6e1
+```
+
+`colab auth` gives the runtime access to GCS. It needs you at a terminal, so an agent can't
+run it:
+
+```bash
+colab --auth=adc auth -s p01
+```
+
+Send the W&B key as a file. `colab exec --env` would save it in plain text in the CLI's
+local history.
+
+```bash
+K=$(mktemp) && uv run python -c "import netrc; print(netrc.netrc().authenticators('api.wandb.ai')[2], end='')" > "$K" && colab --auth=adc upload -s p01 "$K" /content/.wandb_key; rm -f "$K"
+```
 
 ## Run
 
-Run the cells from the top, one at a time as far as the timing cell:
-
-1. **Setup** clones the branch and installs the repo. Check that it ends without errors.
-2. **Sign-in** opens Google sign-in in the browser, then prompts at the top of the editor
-   for your project ID and W&B key.
-3. **Imports** prints the JAX devices. They must say TPU. If they say CPU, the runtime is
-   wrong: remove the server (**Colab: Remove Server**) and connect again.
-4. **Timing** measures each model on this accelerator and prints the expected hours. It
-   takes a few minutes, most of it compiling. This is the first real TPU test, so if
-   something is going to break, it should break here.
-5. **Train** runs all three models in order. Each prints a W&B link where you can follow it.
-
-While it runs, keep the editor open and the Mac awake. Don't start other work on the runtime.
-
-This keeps the Mac awake until you press Ctrl-C in its terminal:
+`--timeout` is per cell and defaults to 30 seconds, which would abandon the training cell.
+This allows 24 hours:
 
 ```bash
-caffeinate -i -d
+colab --auth=adc exec -s p01 -f toylib_projects/p01_cnn_mnist/01_resnets_colab.ipynb --timeout 86400
 ```
 
-Colab can end a session whenever it needs the machine back, more so on the free tier, so
-treat the limits as unknown and rely on the checkpoints.
+The notebook installs the repo, checks the bucket and the accelerator, times each model, and
+then trains all three in order. It stops early if the runtime can't read the bucket or has
+no accelerator. Outputs are written to `01_resnets_colab_output.ipynb` next to the notebook
+when `exec` ends, and that file is gitignored.
+
+If `exec` loses its connection or times out, the training cell keeps running on the kernel.
+
+## Watch it
+
+```bash
+colab --auth=adc status -s p01
+```
+
+```bash
+gcloud storage ls gs://tinystories-checkpoints/toylib-p01-cifar10/
+```
+
+Curves are on W&B in the project `toylib-p01-cifar10`.
+
+## Finish
+
+Stop the runtime as soon as training ends:
+
+```bash
+colab --auth=adc stop -s p01
+```
 
 ## If the runtime disappears
 
-Connect to a new server and run every cell again, the timing cell excepted. Each run
-restores its newest checkpoint from the bucket and finished runs are skipped, so you lose at most
-five epochs of the current model.
+Repeat **Start a runtime** and **Run**. Each run restores its newest checkpoint from the
+bucket and finished runs are skipped, so you lose at most five epochs of the current model.
 
 A run with a saved checkpoint should print `resuming at step ...`. If it prints
-`starting fresh` instead, stop the cell and check the bucket for that run's folder. The
-first checkpoint is saved as training starts.
-
-## If TPU isn't available
-
-Choose **GPU** in the same menu. Nothing else changes: the notebook uses whatever JAX finds.
+`starting fresh` instead, stop and check the bucket for that run's folder. The first
+checkpoint is saved as training starts.
 
 ## Getting results back
 
@@ -97,6 +129,6 @@ net = inference.load_model(template, "gs://tinystories-checkpoints/toylib-p01-ci
 
 ## Known limits
 
-- `userdata.get` (Colab secrets) [fails from the extension](https://github.com/googlecolab/colab-vscode/wiki/Known-Issues-and-Workarounds),
-  which is why the notebook prompts for the W&B key.
-- The batch must divide evenly across TPU cores. 128 and 400 work with 1 or 8 cores.
+- If `gcloud` can't find a project on the runtime, add
+  `--env GOOGLE_CLOUD_PROJECT=<your project>` to `colab exec`. Don't pass secrets this way.
+- The batch must divide evenly across devices. 128 and 400 work with 1 or 8.
