@@ -858,8 +858,8 @@ function buildShift() {
     $("shiftValue").textContent = S.dx;
     lineChart($("shiftChart"), names.map((n, i) => ({ y: D.shifts[n], color: colors[i] })), { x: xs, xLabel: "pixels shifted, all 10,000 test photos", yLabel: "test accuracy", yMin, yMax: 1, ticks: { x: [-8, -4, 0, 4, 8], y: ys }, marker: S.dx, height: 280 });
   });
-  const a = D.shifts["CNN with augmentation"], c = D.maxShift;
-  $("shiftNote").textContent = `Moving photos 4 pixels takes this model from ${fmtPct(a[c])} to about ${fmtPct((a[c - 4] + a[c + 4]) / 2)}, and 8 pixels to about ${fmtPct((a[c - 8] + a[c + 8]) / 2)}. Gaps left by the shift are filled with the dataset's mean colour.`;
+  const a = D.shifts["CNN with augmentation"], w = D.shifts["Wide ResNet-20"], c = D.maxShift;
+  $("shiftNote").textContent = `Moving photos 4 pixels takes this model from ${fmtPct(a[c])} to about ${fmtPct((a[c - 4] + a[c + 4]) / 2)}, and 8 pixels to about ${fmtPct((a[c - 8] + a[c + 8]) / 2)}. Gaps left by the shift are filled with the dataset's mean colour. Every model here that trained with augmentation saw shifts of up to 4 pixels, yet Wide ResNet-20 only falls from ${fmtPct(w[c])} to about ${fmtPct((w[c - 8] + w[c + 8]) / 2)} at 8 pixels. It averages over positions before its last layer, where this model flattens them. That fits the question, though these runs differ in more than that one design choice.`;
 }
 
 // Failures
@@ -967,14 +967,18 @@ function buildDepth() {
   const series = curves.map((r, i) => ({ y: r.curve, xs: r.curve.map((_, n) => n + 1), color: CLASS_COLORS[i] }));
   lineChart($("depthChart"), series, { x: [1, longest], xLabel: "epoch", yLabel: "test accuracy", yMin: 0.2, yMax: 1, ticks: { x: [1, 10, 20, 30, 40].filter((t) => t <= longest), y: [0.2, 0.4, 0.6, 0.8, 1] }, height: 260 });
   legend($("depthLegend"), curves.map((r, i) => [r.name, CLASS_COLORS[i]]));
-  $("depthOutro").textContent = DEPTH_OUTRO;
+  $("depthOutro").textContent = depthOutro();
   function rows() {
     const cnnParams = Object.values(WEIGHTS[0]).reduce((a, x) => a + x.length, 0);
     return [{ name: "This CNN", depth: 4, residual: null, params: cnnParams, epochs: 40, train: 0.827, test: D.testAccuracy }, ...D.resnets.map((r) => ({ ...r, epochs: r.curve.length }))];
   }
 }
-const RESNET_NOTE = "More runs are still training, and this table will grow when they finish. Models with no skip connections are labelled Plain. All use global average pooling before the last layer.";
-const DEPTH_OUTRO = "";
+const RESNET_NOTE = "Models with no skip connections are labelled Plain. Wide ResNet-20 has twice the channels of ResNet-20. All of them use global average pooling before the last layer. The 56-layer runs stopped at 15 epochs, so compare them with each other, not with the 40-epoch rows.";
+function depthOutro() {
+  const test = (name) => fmtPct(D.resnets.find((r) => r.name === name).test);
+  const wide = D.resnets.find((r) => r.name === "Wide ResNet-20");
+  return `Skip connections mattered more than layers. At 20 layers they lift test accuracy from ${test("Plain-20")} to ${test("ResNet-20")}. At 56 layers, after 15 epochs, ResNet-56 has reached ${test("ResNet-56")} while the plain network is at ${test("Plain-56")}, having stayed at chance for at least its first five epochs. The largest single gain came from width: doubling the channels of ResNet-20 reached ${test("Wide ResNet-20")}, for about four times the parameters. That model scores ${fmtPct(wide.train)} on its training set, so memorization is back, and regularization is once again the next thing to try.`;
+}
 
 // Parity with JAX, run once on load so the claim on this page is checked.
 function parityCheck() {
