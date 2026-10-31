@@ -34,17 +34,6 @@ class Logger(abc.ABC):
         """Log a uint8 (N, H, W, 3) image batch. No-op if not overridden."""
         pass
 
-    def log_checkpoint(self, step: int, path: str) -> None:
-        """Keep a copy of the checkpoint saved at ``path``. No-op if not overridden."""
-        pass
-
-    def fetch_checkpoint(self, checkpoint_dir: str) -> int | None:
-        """Put the newest kept checkpoint under ``checkpoint_dir``; return its step.
-
-        Returns None if there is none. No-op if not overridden.
-        """
-        return None
-
     @abc.abstractmethod
     def close(self) -> None:
         """Close any resources held by the logger."""
@@ -58,13 +47,7 @@ class Logger(abc.ABC):
 
 
 class WandBLogger(Logger):
-    """Logger implementation using Weights and Biases (wandb).
-
-    With ``upload_checkpoints=True``, every checkpoint is stored as a version of
-    the artifact ``<run id>-checkpoints``, so training can continue from another
-    machine: a run started with the same ``run_id`` resumes the wandb run and
-    ``fetch_checkpoint`` finds its newest checkpoint.
-    """
+    """Logger implementation using Weights and Biases (wandb)."""
 
     def __init__(
         self,
@@ -73,14 +56,12 @@ class WandBLogger(Logger):
         user_name: str,
         run_id: str | None = None,
         output_path: str | None = None,
-        upload_checkpoints: bool = False,
         *args,
         **kwargs,
     ) -> None:
         import wandb
 
         self.config_dict = config_dict
-        self.upload_checkpoints = upload_checkpoints
         if output_path is not None:
             os.makedirs(output_path, exist_ok=True)
         self.run = wandb.init(
@@ -100,36 +81,6 @@ class WandBLogger(Logger):
     def log_images(self, step: int, key: str, images: np.ndarray) -> None:
         import wandb
         self.run.log({key: [wandb.Image(img) for img in images], "global_step": step})
-
-    def log_checkpoint(self, step: int, path: str) -> None:
-        if not self.upload_checkpoints:
-            return
-        import wandb
-
-        artifact = wandb.Artifact(
-            f"{self.run.id}-checkpoints", type="checkpoint", metadata={"step": step}
-        )
-        artifact.add_dir(path)
-        # Uploads in the background; run.finish() waits for it. wandb moves the
-        # "latest" alias to each new version.
-        self.run.log_artifact(artifact, aliases=[f"step-{step}"])
-
-    def fetch_checkpoint(self, checkpoint_dir: str) -> int | None:
-        if not self.upload_checkpoints or self.run.offline:
-            return None
-        import wandb
-
-        try:
-            artifact = self.run.use_artifact(f"{self.run.id}-checkpoints:latest")
-        except (ValueError, wandb.errors.CommError) as error:
-            # A network failure must not pass for "nothing uploaded yet": the run
-            # would silently start again from step 0.
-            if "not found" not in str(error):
-                raise
-            return None
-        step = int(artifact.metadata["step"])
-        artifact.download(root=os.path.join(checkpoint_dir, str(step)))
-        return step
 
     def close(self) -> None:
         self.run.finish()
@@ -211,17 +162,6 @@ class MultiLogger(Logger):
     def log_images(self, step: int, key: str, images: np.ndarray) -> None:
         for sink in self.loggers:
             sink.log_images(step, key, images)
-
-    def log_checkpoint(self, step: int, path: str) -> None:
-        for sink in self.loggers:
-            sink.log_checkpoint(step, path)
-
-    def fetch_checkpoint(self, checkpoint_dir: str) -> int | None:
-        for sink in self.loggers:
-            step = sink.fetch_checkpoint(checkpoint_dir)
-            if step is not None:
-                return step
-        return None
 
     def close(self) -> None:
         for sink in self.loggers:

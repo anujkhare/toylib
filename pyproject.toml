@@ -29,6 +29,10 @@ harness = [
     "pillow>=10.0.0",
     "wandb>=0.25.1",
 ]
+# Lets the harness read and write checkpoints in gs:// buckets.
+gcs = [
+    "gcsfs>=2024.0.0",
+]
 # toylib.viz: plotting helpers.
 viz = [
     "matplotlib>=3.7.0",
@@ -40,7 +44,7 @@ data = [
 ]
 # Everything a post (toylib_projects/pNN_*) needs.
 posts = [
-    "toylib[harness,viz,data]",
+    "toylib[harness,viz,data,gcs]",
 ]
 dev = [
     "pytest>=7.0.0",

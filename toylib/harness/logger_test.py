@@ -10,8 +10,6 @@ import json
 from pathlib import Path
 from unittest import mock
 
-import pytest
-
 from toylib.harness import logger as logger_mod
 
 
@@ -126,16 +124,6 @@ class TestMultiLogger:
         other.close.assert_called_once()
         assert '"loss": 0.5' in (tmp_path / "logs_m.txt").read_text()
 
-    def test_fetch_checkpoint_returns_the_first_hit(self) -> None:
-        log = logger_mod.MultiLogger(
-            [
-                logger_mod.StdoutLogger(config_dict={}),
-                mock.MagicMock(spec=logger_mod.Logger),
-            ]
-        )
-        log.loggers[1].fetch_checkpoint.return_value = 12
-        assert log.fetch_checkpoint("/ckpts") == 12
-
 
 # ──────────────────────────────────────────────────────────────────────────
 # WandBLogger (mocked — real wandb needs credentials)
@@ -194,65 +182,8 @@ class TestWandBLogger:
             log.close()
         fake_run.finish.assert_called_once()
 
-    def _logger(self, user_name="u", **kwargs):
-        fake_wandb = mock.MagicMock()
-        fake_wandb.errors.CommError = type("CommError", (Exception,), {})
-        fake_wandb.init.return_value.id = "run"
-        fake_wandb.init.return_value.offline = False
-        with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
-            log = logger_mod.WandBLogger(
-                config_dict={}, project_name="p", user_name=user_name, **kwargs
-            )
-        return log, fake_wandb
-
     def test_blank_user_name_means_the_default_entity(self) -> None:
-        _, fake_wandb = self._logger(user_name="")
+        fake_wandb = mock.MagicMock()
+        with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
+            logger_mod.WandBLogger(config_dict={}, project_name="p", user_name="")
         assert fake_wandb.init.call_args.kwargs["entity"] is None
-
-    def test_checkpoints_stay_local_unless_asked(self) -> None:
-        log, fake_wandb = self._logger()
-        with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
-            log.log_checkpoint(5, "/ckpts/5")
-            assert log.fetch_checkpoint("/ckpts") is None
-        fake_wandb.Artifact.assert_not_called()
-        log.run.use_artifact.assert_not_called()
-
-    def test_log_checkpoint_uploads_the_directory(self) -> None:
-        log, fake_wandb = self._logger(upload_checkpoints=True)
-        with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
-            log.log_checkpoint(5, "/ckpts/5")
-        fake_wandb.Artifact.assert_called_once_with(
-            "run-checkpoints", type="checkpoint", metadata={"step": 5}
-        )
-        artifact = fake_wandb.Artifact.return_value
-        artifact.add_dir.assert_called_once_with("/ckpts/5")
-        log.run.log_artifact.assert_called_once_with(artifact, aliases=["step-5"])
-
-    def test_fetch_checkpoint_downloads_into_the_step_directory(self) -> None:
-        log, fake_wandb = self._logger(upload_checkpoints=True)
-        artifact = log.run.use_artifact.return_value
-        artifact.metadata = {"step": 5}
-        with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
-            assert log.fetch_checkpoint("/ckpts") == 5
-        artifact.download.assert_called_once_with(root="/ckpts/5")
-
-    def test_fetch_checkpoint_without_any_upload(self) -> None:
-        log, fake_wandb = self._logger(upload_checkpoints=True)
-        log.run.use_artifact.side_effect = ValueError("artifact 'x' not found in 'p'")
-        with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
-            assert log.fetch_checkpoint("/ckpts") is None
-
-    def test_fetch_checkpoint_does_not_hide_a_network_failure(self) -> None:
-        log, fake_wandb = self._logger(upload_checkpoints=True)
-        error = fake_wandb.errors.CommError("HTTP 503")
-        log.run.use_artifact.side_effect = error
-        with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
-            with pytest.raises(type(error)):
-                log.fetch_checkpoint("/ckpts")
-
-    def test_fetch_checkpoint_offline(self) -> None:
-        log, fake_wandb = self._logger(upload_checkpoints=True)
-        log.run.offline = True
-        with mock.patch.dict("sys.modules", {"wandb": fake_wandb}):
-            assert log.fetch_checkpoint("/ckpts") is None
-        log.run.use_artifact.assert_not_called()

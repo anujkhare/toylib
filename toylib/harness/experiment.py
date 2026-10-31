@@ -59,7 +59,7 @@ from toylib.harness import metrics as metrics_module
 class CheckpointConfig:
     save_interval_steps: int = 5_000
     max_to_keep: typing.Optional[int] = 10
-    checkpoint_dir: str = "/tmp/checkpoints"
+    checkpoint_dir: str = "/tmp/checkpoints"  # A local path or gs://bucket/path.
     checkpoint_dataset_iterator: bool = False
 
 
@@ -160,9 +160,6 @@ class WandBLoggerConfig(LoggerConfig):
     logger_cls: type[logger.Logger] = logger.WandBLogger
     project_name: str = ""
     user_name: str = ""  # The wandb entity; blank for the account's default.
-    # Store each checkpoint as a wandb artifact, which ``Experiment.resume`` can
-    # fetch on another machine.
-    upload_checkpoints: bool = False
     # Also write the JSON-lines log that ``FileLogger`` writes.
     also_log_to_file: bool = False
 
@@ -173,7 +170,6 @@ class WandBLoggerConfig(LoggerConfig):
             project_name=self.project_name,
             user_name=self.user_name,
             run_id=self.run_id,
-            upload_checkpoints=self.upload_checkpoints,
         )
         if not self.also_log_to_file:
             return wandb_logger
@@ -497,9 +493,6 @@ class Experiment:
             )
         self.ckpt_manager.save(self.step, args=ocp.args.Composite(**args))
         self.ckpt_manager.wait_until_finished()
-        self.logger_obj.log_checkpoint(
-            self.step, str(self.ckpt_manager.directory / str(self.step))
-        )
 
     def _resolve_latest_saved_checkpoint_step(self) -> int:
         step = self.ckpt_manager.latest_step()
@@ -538,14 +531,11 @@ class Experiment:
     def resume(self) -> bool:
         """Continue from the newest checkpoint, if there is one.
 
-        Looks in ``checkpoint_dir``, then asks the logger, which is how a run
-        moves to a new machine. Returns whether a checkpoint was restored; if not,
-        training starts from the beginning.
+        With ``checkpoint_dir`` in a ``gs://`` bucket, this continues a run on a new
+        machine. Returns whether a checkpoint was restored; if not, training starts
+        from the beginning.
         """
         self._assert_initialized()
-        if self.ckpt_manager.latest_step() is None:
-            self.logger_obj.fetch_checkpoint(self.checkpoint_config.checkpoint_dir)
-            self.ckpt_manager.reload()
         if self.ckpt_manager.latest_step() is None:
             return False
         self.restore_checkpoint()
