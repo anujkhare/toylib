@@ -40,12 +40,18 @@ Each is one session. You write the code; ask for review, tests or debugging.
 
 - `mnist.py`, `cifar10.py`: download once, return raw uint8 NHWC arrays and int32 labels.
 - `data.py`: MNIST / CIFAR-10 -> standardized float32 NHWC -> `ArrayDataset`.
-- `model.py`: `ModelConfig`, `build_model`, `forward` (harness wiring) around a
-  placeholder `CNN` and `loss_fn` for you to fill in.
+- `model.py`: `ModelConfig`, `build_model`, `forward` (harness wiring) around the
+  `CNN` and `loss_fn`.
 - `metrics.py`: `Accuracy` for `Task(metrics=[...])`.
-- `01_data_and_pipeline.ipynb`: data, shape trace, dummy passes, a short
-  `Experiment` run, checkpoint restore. Set `DATASET = "cifar10"` for CIFAR-10.
-- `pipeline_test.py`: the same wiring on synthetic data. `datasets_test.py`: the loaders.
+- `01_data_and_pipeline.ipynb`: MNIST data, shape trace, overfitting one batch,
+  full training through `Experiment`, and test-set results from the checkpoint.
+- `01_data_and_pipeline_cifar10.ipynb`: the same notebook for CIFAR-10.
+- `resnet.py`: residual networks for CIFAR-10, kept apart from `model.py`.
+- `explorer/`: an interactive page around the trained CNN, with a real forward pass
+  in the browser. `explorer/build_data.py` regenerates its `data.js`; see
+  `EXPLAINER_PLAN.md` for the plan.
+- `pipeline_test.py`: the same wiring on synthetic data. `model_test.py`: the
+  model and loss. `resnet_test.py`: the ResNet. `datasets_test.py`: the loaders.
 
 ## Commands
 

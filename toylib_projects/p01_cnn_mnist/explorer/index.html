@@ -1,0 +1,1005 @@
+<title>Inside a Small CNN</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one long essay with the reader's photo pinned in a rail beside it, so
+   every section is about the same input. Colors extend toylib's figure palette:
+   the diverging blue and red are the ones used for signed values in its plots. */
+:root {
+  --bg: #fcfcfb; --panel: #f3f2ee; --ink: #15161a; --ink-2: #52514e; --ink-3: #807e77;
+  --line: #e1e0d9; --accent: #2a78d6; --accent-ink: #1c5cab; --warm: #d9531e;
+  --good: #0a8a0a; --bad: #c73434; --on-accent: #ffffff;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121317; --panel: #1c1e24; --ink: #eeedea; --ink-2: #b4b3ad; --ink-3: #8c8b85;
+  --line: #30323a; --accent: #6da7ec; --accent-ink: #9ec5f4; --warm: #f08a5d;
+  --good: #58c458; --bad: #ec8a89; --on-accent: #0d1420; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #121317; --panel: #1c1e24; --ink: #eeedea; --ink-2: #b4b3ad; --ink-3: #8c8b85;
+  --line: #30323a; --accent: #6da7ec; --accent-ink: #9ec5f4; --warm: #f08a5d;
+  --good: #58c458; --bad: #ec8a89; --on-accent: #0d1420; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 18px; line-height: 1.6; }
+.page { display: grid; grid-template-columns: minmax(0, 1fr) 264px; gap: 56px; max-width: 1180px; margin: 0 auto;
+  padding-block: 48px 96px; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+main { min-width: 0; display: grid; gap: 72px; }
+section { display: grid; gap: 16px; min-width: 0; scroll-margin-top: 24px; }
+section > p, header > p, .measure { max-width: 66ch; margin: 0; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.1; margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(2.5rem, 6vw, 4.1rem); font-weight: 700; letter-spacing: -0.02em; }
+h2 { font-size: clamp(1.55rem, 3vw, 2.05rem); font-weight: 700; letter-spacing: -0.01em; }
+h3 { font-size: 1rem; font-weight: 700; }
+header { display: grid; gap: 18px; }
+.lead { font-size: 1.22rem; line-height: 1.5; }
+.step { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em; color: var(--ink-3); text-transform: uppercase; }
+code, .mono { font-family: var(--mono); font-size: 0.82em; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+a { color: var(--accent-ink); }
+button, select, input { font: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.note { font-size: 0.92rem; color: var(--ink-2); }
+.figure { display: grid; gap: 12px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.col { display: grid; gap: 6px; min-width: 0; }
+.cap { font-family: var(--mono); font-size: 0.72rem; line-height: 1.4; color: var(--ink-2); }
+canvas { display: block; image-rendering: pixelated; max-width: 100%; }
+canvas.smooth { image-rendering: auto; }
+.tile { background: var(--panel); border: 1px solid var(--line); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: transparent; color: var(--ink); padding: 4px 10px; font-family: var(--mono); font-size: 0.74rem; cursor: pointer; }
+.chip:hover { border-color: var(--accent); }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn { border: 1px solid var(--accent); background: transparent; color: var(--accent-ink); padding: 6px 12px; font-family: var(--mono); font-size: 0.76rem; cursor: pointer; }
+.btn:hover { background: var(--accent); color: var(--on-accent); }
+
+/* Rail */
+.rail { position: sticky; top: calc(24px + env(safe-area-inset-top, 0px)); align-self: start; display: grid; gap: 12px; font-family: var(--display); font-size: 0.86rem; max-height: calc(100vh - 48px); overflow-y: auto; }
+.rail canvas#railPhoto { width: 100%; height: auto; }
+.rail .verdict { font-size: 1.2rem; font-weight: 700; line-height: 1.2; }
+.rail .truth { color: var(--ink-2); font-size: 0.8rem; }
+.bars { display: grid; gap: 4px; }
+.bar { display: grid; grid-template-columns: 76px 1fr 38px; gap: 6px; align-items: center; font-family: var(--mono); font-size: 0.68rem; }
+.bar .track { height: 9px; background: var(--panel); }
+.bar .fill { height: 100%; background: var(--accent); }
+.bar:first-child .fill { background: var(--warm); }
+.bar .pct { text-align: right; }
+.railControls { display: grid; gap: 6px; }
+.bar.ladder { grid-template-columns: minmax(0, 250px) 1fr 48px; font-size: 0.74rem; }
+.bar.ladder .track { height: 14px; }
+.bar.ladder .fill, .bar.ladder:first-child .fill { background: var(--accent); }
+
+/* Picker */
+.gallery { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.thumb { padding: 0; border: 2px solid transparent; background: none; cursor: pointer; line-height: 0; }
+.thumb canvas { width: 52px; height: 52px; }
+.thumb[aria-pressed="true"] { border-color: var(--warm); }
+.upload { display: inline-block; }
+.upload input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.upload span { display: inline-block; }
+.upload input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Architecture */
+.arch { display: flex; gap: 0; overflow-x: auto; padding-bottom: 6px; }
+.stage { flex: 1 0 96px; display: grid; gap: 4px; align-content: start; background: none; border: 0; border-left: 1px solid var(--line); padding: 2px 10px; text-align: left; color: inherit; cursor: pointer; }
+.stage:hover { background: var(--panel); }
+.stage canvas { width: 72px; height: 72px; }
+.stage b { font-family: var(--display); font-size: 0.9rem; }
+.stage span { font-family: var(--mono); font-size: 0.66rem; color: var(--ink-2); line-height: 1.35; }
+
+/* Grids */
+.channels { display: grid; grid-template-columns: repeat(auto-fill, minmax(50px, 1fr)); gap: 3px; }
+.channels button { padding: 0; border: 2px solid transparent; background: none; cursor: pointer; line-height: 0; }
+.channels canvas { width: 100%; height: auto; }
+.channels button[aria-pressed="true"] { border-color: var(--warm); }
+.kernel { display: grid; grid-template-columns: repeat(3, 58px); gap: 3px; }
+.kernel input { width: 100%; text-align: center; padding: 6px 2px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font-family: var(--mono); font-size: 0.8rem; }
+.sum { font-family: var(--mono); font-size: 0.74rem; line-height: 1.6; overflow-x: auto; white-space: pre; background: var(--panel); padding: 10px 12px; }
+.stats { display: flex; flex-wrap: wrap; gap: 20px; font-family: var(--mono); font-size: 0.74rem; color: var(--ink-2); }
+.stats b { color: var(--ink); font-weight: 600; }
+.chart { width: 100%; height: auto; }
+.chart text { font-family: var(--mono); font-size: 11px; fill: var(--ink-2); }
+.chart .grid { stroke: var(--line); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); }
+.legend i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 5px; }
+.tableWrap { overflow-x: auto; }
+table { border-collapse: collapse; font-family: var(--mono); font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 12px 6px 0; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--ink-2); }
+.confusion { display: grid; grid-template-columns: 74px repeat(10, minmax(30px, 1fr)); gap: 1px; font-family: var(--mono); font-size: 0.62rem; min-width: 420px; }
+.confusion .label { color: var(--ink-2); display: flex; align-items: center; overflow: hidden; }
+.confusion .top { writing-mode: vertical-rl; transform: rotate(180deg); height: 64px; justify-content: flex-start; }
+.confusion button { aspect-ratio: 1; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.mapWrap { position: relative; max-width: 100%; }
+#mapTip { position: absolute; pointer-events: none; background: var(--bg); border: 1px solid var(--line); padding: 4px 6px; font-family: var(--mono); font-size: 0.68rem; line-height: 1.3; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+footer { font-size: 0.86rem; color: var(--ink-2); display: grid; gap: 8px; max-width: 66ch; }
+
+@media (max-width: 920px) {
+  body { font-size: 17px; }
+  .page { grid-template-columns: minmax(0, 1fr); gap: 20px; padding-block: 0 72px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+  .rail { order: -1; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px; border-bottom: 1px solid var(--line);
+    grid-template-columns: 64px minmax(0, 1fr); gap: 4px 12px; max-height: none; overflow: visible; }
+  .rail canvas#railPhoto { grid-row: span 2; width: 64px; }
+  .rail .bars, .rail .railIntro { display: none; }
+  .rail .verdict { font-size: 1rem; }
+  .railControls { grid-column: 1 / -1; }
+  section { scroll-margin-top: 150px; }
+  main { gap: 56px; padding-top: 16px; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+<main>
+  <header>
+    <p class="step">A small network, opened up</p>
+    <h1>Inside a small CNN</h1>
+    <p class="lead">This network looks at a 32×32 photo and picks one of ten things it might show. It has <span class="num" id="heroParams"></span> learned numbers, and it labels <span class="num" id="heroAcc"></span> of photos it never saw in training correctly.</p>
+    <p>Everything below is the real trained model. Your browser runs the forward pass on the actual weights, so when you change the photo, every figure on this page changes with it. Pick a photo to carry through the story. The rail keeps it in view.</p>
+    <div class="gallery" id="gallery" aria-label="Choose a photo"></div>
+  </header>
+
+  <section id="overview">
+    <p class="step">The whole network</p>
+    <h2>Six steps from pixels to a guess</h2>
+    <p>The photo passes through three convolution blocks, which turn colours into patterns, and pooling, which trades position for reach. A single linear layer then scores each class. These thumbnails show the strongest channel at each stage, for your photo. Select a stage to jump to it.</p>
+    <div class="arch" id="arch"></div>
+  </section>
+
+  <section id="numbers">
+    <p class="step">The input</p>
+    <h2>A photo is three grids of numbers</h2>
+    <p>The network never sees a picture. It gets 32×32×3 numbers: one grid each for red, green and blue. Before anything else, each channel is shifted and scaled so that across the training set it has mean 0 and standard deviation 1. Hover a pixel to read it.</p>
+    <div class="figure">
+      <div class="row" id="channelsRow"></div>
+      <p class="sum" id="pixelRead">Hover a pixel.</p>
+    </div>
+  </section>
+
+  <section id="convolution">
+    <p class="step">One operation</p>
+    <h2>A convolution is a small template, slid everywhere</h2>
+    <p>A filter is a 3×3 grid of weights. At each position it multiplies the numbers under it by its weights and adds them up. The result is high wherever the patch matches the template. This demo uses one grey channel to keep the arithmetic readable. Change a weight, or try a preset.</p>
+    <div class="figure">
+      <div class="chips" id="kernelPresets"></div>
+      <div class="row">
+        <div class="col"><span class="cap">input, hover it</span><canvas id="convIn" class="tile" width="32" height="32" style="width:208px;height:208px"></canvas></div>
+        <div class="col"><span class="cap">filter</span><div class="kernel" id="kernelInputs"></div></div>
+        <div class="col"><span class="cap">output</span><canvas id="convOut" class="tile" width="32" height="32" style="width:208px;height:208px"></canvas></div>
+      </div>
+      <p class="sum" id="convSum">Hover the input to see one position's arithmetic.</p>
+      <p class="note">Blue is negative and red is positive. The output grid is the same size as the input, so a filter's response keeps its position. Real layers apply many filters at once, each producing its own output grid, called a channel.</p>
+    </div>
+  </section>
+
+  <section id="filters">
+    <p class="step">The first layer</p>
+    <h2>Nobody designed these filters</h2>
+    <p>These are the 32 filters of the first layer, drawn as tiny colour patches. They began as random noise, and training shaped them. At 3×3 they are hard to read as pictures, so judge them by what they do: select a filter to see where it fires on your photo. Then move through the epochs in the rail, and the filters, the map and the prediction all change together.</p>
+    <div class="figure">
+      <div class="row">
+        <div class="channels" id="filterGrid" style="flex:1 1 300px"></div>
+        <div class="col" style="flex:0 0 200px"><span class="cap" id="filterCap"></span><canvas id="filterAct" class="tile" width="32" height="32" style="width:200px;height:200px"></canvas></div>
+      </div>
+      <p class="note" id="filterNote"></p>
+    </div>
+  </section>
+
+  <section id="activations">
+    <p class="step">Layer by layer</p>
+    <h2>What each step does to your photo</h2>
+    <p>Step through the stages. A convolution makes many channels, positive and negative. ReLU zeroes every negative value, so a channel only reports what it found. Pooling keeps the largest of each 2×2 block: the map halves in size, and a feature that moves by a pixel usually still lands in the same block.</p>
+    <div class="figure">
+      <div class="chips" id="stageTabs"></div>
+      <div class="stats" id="stageStats"></div>
+      <div class="row">
+        <div class="channels" id="activationGrid" style="flex:1 1 320px"></div>
+        <div class="col" style="flex:0 0 200px"><span class="cap" id="channelCap"></span><canvas id="channelBig" class="tile" width="32" height="32" style="width:200px;height:200px"></canvas></div>
+      </div>
+      <p class="note">Channels are sorted by total activity. Dark means a strong response, and all tiles at a stage share one scale, except where a stage has negative values, shown in blue and red.</p>
+    </div>
+  </section>
+
+  <section id="reach">
+    <p class="step">Reach</p>
+    <h2>Later units see more of the photo</h2>
+    <p>A unit in the first layer sees 3 pixels across. Each later step widens that: 4, 8, 10 and finally 18 pixels. That is why later channels can respond to shapes and not only edges. Hover the photo to place a unit. The outline shows every pixel that can influence it.</p>
+    <div class="figure">
+      <div class="chips" id="reachTabs"></div>
+      <div class="row">
+        <div class="col"><span class="cap" id="reachCap"></span><canvas id="reachCanvas" width="256" height="256" class="tile smooth" style="width:256px;height:256px"></canvas></div>
+        <div class="col"><span class="cap">which pixels actually matter, averaged over 256 test photos</span><canvas id="erfCanvas" width="256" height="256" class="tile smooth" style="width:256px;height:256px"></canvas></div>
+      </div>
+      <p class="note">The heat map is the effective receptive field: the gradient of a central unit with respect to the input. It is concentrated towards the middle of the outline. A unit can see the whole box, but the centre has the most influence.</p>
+    </div>
+  </section>
+
+  <section id="wants">
+    <p class="step">What a channel looks for</p>
+    <h2>Two ways to ask a channel what it wants</h2>
+    <p>The first answer is empirical: search 10,000 test photos for the crops that excite the channel most. The second is synthetic: start from noise and adjust the pixels to excite the channel as much as possible. Real crops show what it fires on in practice, and they are the stronger evidence. Synthetic images can look like more than they are, so read them alongside the crops.</p>
+    <div class="figure">
+      <div class="chips" id="wantTabs"></div>
+      <div class="channels" id="wantGrid"></div>
+      <p class="note" id="wantNote"></p>
+      <span class="cap" id="wantCap"></span>
+      <div class="row">
+        <div class="col"><span class="cap">synthetic</span><canvas id="wantBig" class="tile" width="32" height="32" style="width:140px;height:140px"></canvas></div>
+        <div class="col" style="flex:1 1 240px"><span class="cap">test-set crops that excite it most</span><div class="row" id="wantPatches" style="gap:6px"></div></div>
+        <div class="col"><span class="cap">this channel on your photo</span><canvas id="wantMap" class="tile" width="8" height="8" style="width:140px;height:140px"></canvas></div>
+      </div>
+      <h3>The same search for each class score</h3>
+      <div class="row" id="classVisuals" style="gap:6px"></div>
+    </div>
+  </section>
+
+  <section id="decision">
+    <p class="step">The decision</p>
+    <h2>Where the evidence came from</h2>
+    <p>The last layer is linear: each of the 4,096 values gets one weight per class, and a class's score is their weighted sum. So the score splits exactly across the 8×8 positions. Each cell below is what that position added to the chosen class, with no approximation. The cells plus one bias term equal the score.</p>
+    <div class="figure">
+      <div class="chips" id="classTabs"></div>
+      <div class="row">
+        <div class="col"><span class="cap">drag to cover part of the photo</span><canvas id="paintCanvas" class="tile" width="32" height="32" style="width:208px;height:208px;touch-action:none;cursor:crosshair"></canvas></div>
+        <div class="col"><span class="cap">evidence by position</span><canvas id="evidenceCanvas" class="tile" width="8" height="8" style="width:208px;height:208px"></canvas></div>
+        <div class="col"><span class="cap" id="sweepCap">effect of covering each spot</span><canvas id="sweepCanvas" class="tile" width="14" height="14" style="width:208px;height:208px"></canvas></div>
+      </div>
+      <div class="chips"><button class="btn" id="clearPaint" type="button">Clear covering</button></div>
+      <p class="sum" id="ledger"></p>
+      <p class="note">Set the rail to epoch 0 to test this explanation. <a href="https://arxiv.org/abs/1810.03292">A sound explanation has to change when the weights change</a>, and these maps do. The third map needs no theory at all: it covers one 6×6 patch at a time, reruns the network about 200 times, and shows how far the chosen class's probability falls.</p>
+    </div>
+  </section>
+
+  <section id="shift">
+    <p class="step">Moving the photo</p>
+    <h2>Does a CNN care where things are?</h2>
+    <p>Convolutions treat every position alike, so you might expect a CNN to ignore where an object sits. But this network's last layer reads the 8×8 grid position by position. Slide the photo and watch the confidence, then compare with the measured accuracy over the whole test set.</p>
+    <div class="figure">
+      <label class="cap" for="shiftSlider">horizontal shift: <span id="shiftValue">0</span> pixels</label>
+      <input id="shiftSlider" type="range" min="-8" max="8" step="1" value="0">
+      <div id="shiftChart"></div>
+      <div class="legend" id="shiftLegend"></div>
+      <p class="note" id="shiftNote"></p>
+    </div>
+  </section>
+
+  <section id="failures">
+    <p class="step">Mistakes</p>
+    <h2>Where it goes wrong</h2>
+    <p>Each row of this matrix is a true class, each column a predicted one, counted over all 10,000 test photos. Select a cell to see photos from it. The errors make sense: animals are confused with animals, and vehicles with vehicles.</p>
+    <div class="figure">
+      <div class="tableWrap"><div class="confusion" id="confusion"></div></div>
+      <span class="cap" id="confusionCap"></span>
+      <div class="gallery" id="confusionPhotos"></div>
+      <h3>Its most confident mistakes</h3>
+      <div class="gallery" id="mistakes"></div>
+    </div>
+    <h3>How the network arranges photos</h3>
+    <p>The final convolution describes each photo with 4,096 numbers. This map squeezes those descriptions into two dimensions with t-SNE, for <span class="num" id="mapCount"></span> test photos, so that photos the network sees as similar sit together. Filter by class, and select any photo to load it.</p>
+    <div class="figure">
+      <div class="chips" id="mapFilter"></div>
+      <div class="mapWrap"><canvas id="mapCanvas" class="tile" width="1280" height="900" style="width:100%;height:auto;cursor:pointer"></canvas><div id="mapTip" hidden></div></div>
+    </div>
+  </section>
+
+  <section id="depth">
+    <p class="step">Beyond this model</p>
+    <h2>What it took to improve it</h2>
+    <p id="depthIntro"></p>
+    <div class="figure">
+      <div id="ladderChart"></div>
+      <h3>Residual networks on CIFAR-10</h3>
+      <div class="tableWrap"><table id="resnetTable"></table></div>
+      <p class="note" id="resnetNote"></p>
+      <div id="depthChart"></div>
+      <div class="legend" id="depthLegend"></div>
+    </div>
+    <p id="depthOutro" class="measure"></p>
+  </section>
+
+  <footer>
+    <p id="parityNote"></p>
+    <p>Trained on CIFAR-10 with toylib's harness. Earlier work this page draws on: <a href="https://poloclub.github.io/cnn-explainer">CNN Explainer</a>, <a href="https://arxiv.org/abs/1506.06579">Yosinski et al.</a>, <a href="https://arxiv.org/abs/1311.2901">Zeiler and Fergus</a>, <a href="https://research.google/pubs/feature-visualization/">Olah et al.</a>, <a href="https://distill.pub/activation-atlas/">Activation Atlas</a>, <a href="https://arxiv.org/abs/1701.04128">Luo et al.</a> and <a href="https://arxiv.org/abs/1810.03292">Adebayo et al.</a></p>
+  </footer>
+</main>
+
+<aside class="rail" aria-label="Your photo and its prediction">
+  <canvas id="railPhoto" width="32" height="32" class="tile"></canvas>
+  <div><div class="verdict" id="railVerdict"></div><div class="truth" id="railTruth"></div></div>
+  <div class="bars" id="railBars"></div>
+  <div class="railControls">
+    <span class="cap railIntro">model after epoch</span>
+    <div class="chips" id="epochChips"></div>
+    <span class="cap" id="railEpochNote"></span>
+    <button class="btn" id="resetEdits" type="button" hidden>Undo edits to photo</button>
+    <label class="upload btn"><input id="uploadInput" type="file" accept="image/*"><span>Use your own photo</span></label>
+  </div>
+</aside>
+</div>
+
+<script src="cnn.js"></script>
+<script src="data.js"></script>
+<script>
+"use strict";
+const D = window.EXPLORER_DATA;
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+const SIZE = 32, PIXELS = SIZE * SIZE * 3;
+const fmtPct = (x, digits = 1) => (100 * x).toFixed(digits) + "%";
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+// Colours for data. These are fixed in both themes, since they encode values.
+const DIVERGING = [[16,66,129],[42,120,214],[134,182,239],[205,226,251],[240,239,236],[249,208,207],[236,138,137],[227,73,72],[156,44,43]];
+const SEQUENTIAL = [[252,252,251],[183,211,246],[109,167,236],[42,120,214],[13,54,107]];
+const CLASS_COLORS = ["#2a78d6","#eb6834","#1baf7a","#eda100","#e87ba4","#008300","#6250d6","#e34948","#7a6a58","#3bb5c9"];
+function ramp(stops, t) {
+  const f = clamp(t, 0, 1) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(f)), u = f - i;
+  return [0, 1, 2].map((k) => stops[i][k] + (stops[i + 1][k] - stops[i][k]) * u);
+}
+const diverging = (v, scale) => ramp(DIVERGING, 0.5 + 0.5 * v / (scale || 1));
+const sequential = (v, scale) => ramp(SEQUENTIAL, v / (scale || 1));
+
+function paint(canvas, w, h, color) {
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  const ctx = canvas.getContext("2d"), img = ctx.createImageData(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const [r, g, b] = color(x, y), o = (y * w + x) * 4;
+    img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+const paintRGB = (canvas, rgb, w = SIZE, h = SIZE, offset = 0) =>
+  paint(canvas, w, h, (x, y) => { const o = offset + (y * w + x) * 3; return [rgb[o], rgb[o + 1], rgb[o + 2]]; });
+
+const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+const IMAGES = bytes(D.images);
+const NUM_IMAGES = D.labels.length;
+const WEIGHTS = D.snapshots.map((s) => CNN.decodeWeights(s.weights));
+const PATCHES = { conv2: bytes(D.patches.conv2), conv3: bytes(D.patches.conv3) };
+const VISUALS = { conv2: bytes(D.visuals.conv2), conv3: bytes(D.visuals.conv3), class: bytes(D.visuals.class) };
+const baseImage = (n) => IMAGES.subarray(n * PIXELS, (n + 1) * PIXELS);
+const thumbCanvas = (n) => { const c = el("canvas"); paintRGB(c, IMAGES, SIZE, SIZE, n * PIXELS); return c; };
+
+// State, and the one pipeline everything reads from.
+const S = { raw: null, index: 0, snapshot: D.snapshots.length - 1, dx: 0, covered: new Uint8Array(SIZE * SIZE), custom: false, classIndex: null, out: null, shown: null };
+const updaters = [];
+let scheduled = false;
+
+function effectiveImage(dx = S.dx, covered = S.covered) {
+  // Returns the standardized tensor and the display version of the edited photo.
+  const data = new Float32Array(PIXELS), shown = new Uint8ClampedArray(PIXELS);
+  const fill = D.mean.map((m) => m * 255);
+  for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+    const sx = x - dx, inside = sx >= 0 && sx < SIZE && !covered[y * SIZE + x];
+    for (let c = 0; c < 3; c++) {
+      const o = (y * SIZE + x) * 3 + c;
+      const v = inside ? S.raw[(y * SIZE + sx) * 3 + c] : fill[c];
+      shown[o] = v;
+      data[o] = inside ? (v / 255 - D.mean[c]) / D.std[c] : 0;
+    }
+  }
+  return { tensor: { data, h: SIZE, w: SIZE, c: 3 }, shown };
+}
+function run() {
+  const { tensor, shown } = effectiveImage();
+  S.tensor = tensor; S.shown = shown;
+  S.out = CNN.forward(tensor, WEIGHTS[S.snapshot]);
+  S.probs = CNN.softmax(S.out.logits);
+  S.top = S.probs.indexOf(Math.max(...S.probs));
+  updaters.forEach((u) => u());
+}
+function refresh() {
+  if (scheduled) return;
+  scheduled = true;
+  requestAnimationFrame(() => { scheduled = false; run(); });
+}
+function loadImage(n) {
+  S.index = n; S.custom = false; S.raw = baseImage(n); S.classIndex = null;
+  clearEdits(); refresh();
+}
+function clearEdits() {
+  S.covered.fill(0); S.dx = 0; $("shiftSlider").value = 0;
+}
+
+// Rail
+function buildRail() {
+  D.snapshots.forEach((s, i) => {
+    const b = el("button", { className: "chip", type: "button", textContent: s.epoch });
+    b.setAttribute("aria-label", `Use the model after epoch ${s.epoch}`);
+    b.onclick = () => { S.snapshot = i; refresh(); };
+    $("epochChips").append(b);
+  });
+  $("resetEdits").onclick = () => { clearEdits(); refresh(); };
+  $("uploadInput").onchange = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const c = el("canvas", { width: SIZE, height: SIZE }), ctx = c.getContext("2d", { willReadFrequently: true });
+      const side = Math.min(img.width, img.height);
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, SIZE, SIZE);
+      const rgba = ctx.getImageData(0, 0, SIZE, SIZE).data, raw = new Uint8Array(PIXELS);
+      for (let i = 0; i < SIZE * SIZE; i++) for (let k = 0; k < 3; k++) raw[i * 3 + k] = rgba[i * 4 + k];
+      S.raw = raw; S.custom = true; S.classIndex = null; clearEdits(); refresh();
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => { $("railTruth").textContent = "That file could not be read as an image."; };
+    img.src = url;
+  };
+  updaters.push(() => {
+    paintRGB($("railPhoto"), S.shown);
+    $("railVerdict").textContent = `${D.classNames[S.top]}, ${fmtPct(S.probs[S.top], 0)}`;
+    const truth = S.custom ? "your photo" : `labelled ${D.classNames[D.labels[S.index]]}`;
+    $("railTruth").textContent = `${truth}${!S.custom && S.top !== D.labels[S.index] ? ", so this is wrong" : ""}`;
+    const order = S.probs.map((p, i) => [p, i]).sort((a, b) => b[0] - a[0]).slice(0, 5);
+    $("railBars").replaceChildren(...order.map(([p, i]) => el("div", { className: "bar" },
+      el("span", { textContent: D.classNames[i] }),
+      el("div", { className: "track" }, Object.assign(el("div", { className: "fill" }), { style: `width:${100 * p}%` })),
+      el("span", { className: "pct", textContent: fmtPct(p, 0) }))));
+    [...$("epochChips").children].forEach((b, i) => b.setAttribute("aria-pressed", i === S.snapshot));
+    $("railEpochNote").textContent = `${fmtPct(D.snapshots[S.snapshot].testAccuracy)} test accuracy`;
+    $("resetEdits").hidden = !(S.dx || S.covered.some((v) => v));
+  });
+}
+
+// Picker: one confident correct photo per class, and a few the model gets wrong.
+function buildGallery() {
+  const pickFor = (test) => D.labels.findIndex((_, i) => test(i));
+  const featured = [];
+  for (let c = 0; c < 10; c++) {
+    const n = pickFor((i) => D.labels[i] === c && D.predictions[i] === c && D.confidence[i] > 0.6 && D.confidence[i] < 0.97);
+    featured.push(n >= 0 ? n : pickFor((i) => D.labels[i] === c));
+  }
+  const wrong = D.labels.map((_, i) => i).filter((i) => D.predictions[i] !== D.labels[i] && D.confidence[i] < 0.8).slice(0, 4);
+  const items = [...featured, ...wrong];
+  items.forEach((n) => {
+    const b = el("button", { className: "thumb", type: "button", title: D.classNames[D.labels[n]] }, thumbCanvas(n));
+    b.setAttribute("aria-label", `Photo labelled ${D.classNames[D.labels[n]]}`);
+    b.onclick = () => loadImage(n);
+    b.dataset.n = n;
+    $("gallery").append(b);
+  });
+  updaters.push(() => [...$("gallery").children].forEach((b) => b.setAttribute("aria-pressed", !S.custom && +b.dataset.n === S.index)));
+  return featured[3]; // Start with a cat, the hardest class.
+}
+
+// Architecture strip
+function buildArch() {
+  const stages = [
+    ["Input", "32×32×3", "3,072 numbers", null, "numbers"],
+    ["Conv 1", "16×16×32", "320→ params", "pool1", "activations"],
+    ["Conv 2", "8×8×64", "", "pool2", "activations"],
+    ["Conv 3", "8×8×64", "", "conv3", "reach"],
+    ["Flatten", "4,096", "no params", null, "decision"],
+    ["Linear", "10 scores", "", null, "decision"],
+  ];
+  const size = (k) => Math.round(WEIGHTS[0][k + "_w"].length + (WEIGHTS[0][k + "_b"]?.length || 0));
+  stages[1][2] = `${size("conv1").toLocaleString()} params`;
+  stages[2][2] = `${size("conv2").toLocaleString()} params`;
+  stages[3][2] = `${size("conv3").toLocaleString()} params`;
+  stages[5][2] = `${size("head").toLocaleString()} params`;
+  const canvases = stages.map(([name, shape, params, , target]) => {
+    const c = el("canvas", { width: 8, height: 8, className: "tile" });
+    const b = el("button", { className: "stage", type: "button" }, c, el("b", { textContent: name }), el("span", { textContent: shape }), el("span", { textContent: params }));
+    b.onclick = () => $(target).scrollIntoView();
+    $("arch").append(b);
+    return c;
+  });
+  updaters.push(() => {
+    paintRGB(canvases[0], S.shown);
+    stages.forEach(([, , , key], i) => { if (key) drawChannel(canvases[i], S.out[key], strongest(S.out[key])); });
+    const flat = S.out.conv3.data;
+    let top = 0; for (const v of flat) top = Math.max(top, v);
+    paint(canvases[4], 64, 64, (x, y) => sequential(flat[(y * 64 + x) * 64 % flat.length], top));
+    paint(canvases[5], 1, 10, (x, y) => sequential(S.probs[y], 1));
+  });
+}
+function channelTotals(t) {
+  const totals = new Float32Array(t.c);
+  for (let i = 0; i < t.data.length; i++) totals[i % t.c] += Math.abs(t.data[i]);
+  return totals;
+}
+function strongest(t) { const totals = channelTotals(t); return totals.indexOf(Math.max(...totals)); }
+function tensorRange(t) {
+  let top = 0, low = 0;
+  for (const v of t.data) { if (v > top) top = v; if (v < low) low = v; }
+  return { top, low };
+}
+function drawChannel(canvas, t, ch, range = null) {
+  const r = range || tensorRange(t);
+  if (r.low < 0) {
+    const scale = Math.max(r.top, -r.low);
+    paint(canvas, t.w, t.h, (x, y) => diverging(t.data[(y * t.w + x) * t.c + ch], scale));
+  } else paint(canvas, t.w, t.h, (x, y) => sequential(t.data[(y * t.w + x) * t.c + ch], r.top));
+}
+
+// Pixels
+function buildNumbers() {
+  const names = ["red", "green", "blue"], tints = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  const canvases = names.map((name) => {
+    const c = el("canvas", { width: SIZE, height: SIZE, className: "tile", style: "width:176px;height:176px" });
+    $("channelsRow").append(el("div", { className: "col" }, el("span", { className: "cap", textContent: name }), c));
+    return c;
+  });
+  canvases.forEach((c) => {
+    const read = (e) => {
+      const b = c.getBoundingClientRect(), x = clamp(Math.floor((e.clientX - b.left) / b.width * SIZE), 0, 31), y = clamp(Math.floor((e.clientY - b.top) / b.height * SIZE), 0, 31);
+      const o = (y * SIZE + x) * 3;
+      const line = (k) => `${names[k].padEnd(5)} ${String(S.shown[o + k]).padStart(3)} → (${(S.shown[o + k] / 255).toFixed(3)} − ${D.mean[k].toFixed(3)}) / ${D.std[k].toFixed(3)} = ${S.tensor.data[o + k].toFixed(3).padStart(6)}`;
+      $("pixelRead").textContent = `pixel (${x}, ${y})\n${line(0)}\n${line(1)}\n${line(2)}`;
+    };
+    c.addEventListener("pointermove", read);
+    c.addEventListener("pointerdown", read);
+  });
+  updaters.push(() => canvases.forEach((c, k) => paint(c, SIZE, SIZE, (x, y) => {
+    const v = S.shown[(y * SIZE + x) * 3 + k]; return tints[k].map((t) => (t ? v : v * 0.12));
+  })));
+}
+
+// Hand convolution
+const PRESETS = {
+  "vertical edges": [-1, 0, 1, -2, 0, 2, -1, 0, 1],
+  "horizontal edges": [-1, -2, -1, 0, 0, 0, 1, 2, 1],
+  "blur": [0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11],
+  "sharpen": [0, -1, 0, -1, 5, -1, 0, -1, 0],
+  "do nothing": [0, 0, 0, 0, 1, 0, 0, 0, 0],
+};
+function buildConvolution() {
+  const K = { values: [...PRESETS["vertical edges"]], gray: new Float32Array(SIZE * SIZE), out: new Float32Array(SIZE * SIZE) };
+  const inputs = K.values.map((_, i) => {
+    const input = el("input", { type: "number", step: "0.1", id: `kernel${i}` });
+    input.setAttribute("aria-label", `Filter weight ${i + 1}`);
+    input.oninput = () => { K.values[i] = parseFloat(input.value) || 0; markPreset(); compute(); };
+    $("kernelInputs").append(input);
+    return input;
+  });
+  const syncInputs = () => inputs.forEach((input, i) => (input.value = K.values[i]));
+  const markPreset = () => [...$("kernelPresets").children].forEach((b) => b.setAttribute("aria-pressed", PRESETS[b.textContent].every((v, i) => v === K.values[i])));
+  Object.keys(PRESETS).forEach((name) => {
+    const b = el("button", { className: "chip", type: "button", textContent: name });
+    b.onclick = () => { K.values = [...PRESETS[name]]; syncInputs(); markPreset(); compute(); };
+    $("kernelPresets").append(b);
+  });
+  function at(x, y) { return x < 0 || y < 0 || x >= SIZE || y >= SIZE ? 0 : K.gray[y * SIZE + x]; }
+  function compute() {
+    for (let i = 0; i < K.gray.length; i++) K.gray[i] = (0.299 * S.shown[i * 3] + 0.587 * S.shown[i * 3 + 1] + 0.114 * S.shown[i * 3 + 2]) / 127.5 - 1;
+    let top = 1e-6;
+    for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+      let sum = 0;
+      for (let ky = 0; ky < 3; ky++) for (let kx = 0; kx < 3; kx++) sum += K.values[ky * 3 + kx] * at(x + kx - 1, y + ky - 1);
+      K.out[y * SIZE + x] = sum; top = Math.max(top, Math.abs(sum));
+    }
+    paint($("convIn"), SIZE, SIZE, (x, y) => { const v = (K.gray[y * SIZE + x] + 1) * 127.5; return [v, v, v]; });
+    paint($("convOut"), SIZE, SIZE, (x, y) => diverging(K.out[y * SIZE + x], top));
+  }
+  const read = (e) => {
+    const c = $("convIn"), b = c.getBoundingClientRect();
+    const x = clamp(Math.floor((e.clientX - b.left) / b.width * SIZE), 0, 31), y = clamp(Math.floor((e.clientY - b.top) / b.height * SIZE), 0, 31);
+    compute();
+    const ctx = c.getContext("2d");
+    ctx.strokeStyle = "#eb6834"; ctx.lineWidth = 1; ctx.strokeRect(x - 1.5, y - 1.5, 3, 3);
+    const terms = [];
+    for (let ky = 0; ky < 3; ky++) terms.push([0, 1, 2].map((kx) => `${at(x + kx - 1, y + ky - 1).toFixed(2).padStart(5)} × ${String(+K.values[ky * 3 + kx].toFixed(2)).padStart(4)}`).join("  +  "));
+    $("convSum").textContent = `${terms.join("\n")}\n= ${K.out[y * SIZE + x].toFixed(3)} at position (${x}, ${y})`;
+  };
+  $("convIn").addEventListener("pointermove", read);
+  $("convIn").addEventListener("pointerdown", read);
+  syncInputs(); markPreset();
+  updaters.push(compute);
+}
+
+// Learned filters
+function buildFilters() {
+  let selected = 0;
+  const tiles = Array.from({ length: 32 }, (_, i) => {
+    const c = el("canvas", { width: 3, height: 3 });
+    const b = el("button", { type: "button" }, c);
+    b.setAttribute("aria-label", `Filter ${i + 1}`);
+    b.onclick = () => { selected = i; update(); };
+    $("filterGrid").append(b);
+    return { b, c };
+  });
+  function update() {
+    const w = WEIGHTS[S.snapshot].conv1_w;
+    tiles.forEach(({ b, c }, ch) => {
+      let top = 1e-6;
+      for (let i = 0; i < 27; i++) top = Math.max(top, Math.abs(w[i * 32 + ch]));
+      paint(c, 3, 3, (x, y) => [0, 1, 2].map((k) => 127.5 + 127.5 * w[((y * 3 + x) * 3 + k) * 32 + ch] / top));
+      b.setAttribute("aria-pressed", ch === selected);
+    });
+    $("filterCap").textContent = `filter ${selected + 1} on your photo`;
+    drawChannel($("filterAct"), S.out.conv1, selected);
+    $("filterNote").textContent = `Each tile shows the filter's 3×3 weights as colours. Grey is zero, and a bright colour means the filter wants that colour there. These are the weights after epoch ${D.snapshots[S.snapshot].epoch}.`;
+  }
+  updaters.push(update);
+}
+
+// Activations
+const STAGES = [
+  ["conv1Raw", "conv 1"], ["conv1", "relu"], ["pool1", "pool"],
+  ["conv2Raw", "conv 2"], ["conv2", "relu"], ["pool2", "pool"],
+  ["conv3Raw", "conv 3"], ["conv3", "relu"],
+];
+function buildActivations() {
+  let stage = 1, selected = null;
+  STAGES.forEach(([key, name], i) => {
+    const b = el("button", { className: "chip", type: "button", textContent: name });
+    b.onclick = () => { stage = i; selected = null; update(); };
+    $("stageTabs").append(b);
+  });
+  const tiles = Array.from({ length: 64 }, () => {
+    const c = el("canvas"), b = el("button", { type: "button" }, c);
+    b.setAttribute("aria-label", "Show this channel larger");
+    $("activationGrid").append(b);
+    return { b, c };
+  });
+  function update() {
+    const [key, name] = STAGES[stage], t = S.out[key];
+    [...$("stageTabs").children].forEach((b, i) => b.setAttribute("aria-pressed", i === stage));
+    const totals = channelTotals(t), order = [...totals.keys()].sort((a, b) => totals[b] - totals[a]);
+    const range = tensorRange(t);
+    if (selected === null || selected >= t.c) selected = order[0];
+    tiles.forEach(({ b, c }, i) => {
+      b.hidden = i >= t.c;
+      if (i >= t.c) return;
+      drawChannel(c, t, order[i], range);
+      b.onclick = () => { selected = order[i]; update(); };
+      b.setAttribute("aria-pressed", order[i] === selected);
+    });
+    let zeros = 0; for (const v of t.data) if (v === 0) zeros++;
+    $("stageStats").replaceChildren(
+      el("span", { innerHTML: `shape <b>${t.h}×${t.w}×${t.c}</b>` }),
+      el("span", { innerHTML: `exact zeros <b>${fmtPct(zeros / t.data.length, 0)}</b>` }),
+      el("span", { innerHTML: `range <b>${range.low.toFixed(2)} to ${range.top.toFixed(2)}</b>` }));
+    $("channelCap").textContent = `${name}, channel ${selected + 1}`;
+    drawChannel($("channelBig"), t, selected, range);
+  }
+  updaters.push(update);
+}
+
+// Receptive fields
+const REACH = [
+  ["conv1", "conv 1", 32, (i) => [i - 1, i + 1]],
+  ["pool1", "pool 1", 16, (i) => [2 * i - 1, 2 * i + 2]],
+  ["conv2", "conv 2", 16, (i) => [2 * i - 3, 2 * i + 4]],
+  ["pool2", "pool 2", 8, (i) => [4 * i - 3, 4 * i + 6]],
+  ["conv3", "conv 3", 8, (i) => [4 * i - 7, 4 * i + 10]],
+];
+const ERF_CENTERS = { conv1: 16, pool1: 8, conv2: 8, pool2: 4, conv3: 4 };
+function buildReach() {
+  let layer = 4, ux = 4, uy = 4;
+  REACH.forEach(([, name], i) => {
+    const b = el("button", { className: "chip", type: "button", textContent: name });
+    b.onclick = () => { const g = REACH[i][2]; ux = Math.round(ux * g / REACH[layer][2]); uy = Math.round(uy * g / REACH[layer][2]); layer = i; update(); };
+    $("reachTabs").append(b);
+  });
+  const stroke = (ctx, box, scale, color, label) => {
+    const [x0, x1, y0, y1] = box;
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.strokeRect(x0 * scale + 1, y0 * scale + 1, (x1 - x0 + 1) * scale - 2, (y1 - y0 + 1) * scale - 2);
+  };
+  function update() {
+    const [key, name, grid, box] = REACH[layer];
+    [...$("reachTabs").children].forEach((b, i) => b.setAttribute("aria-pressed", i === layer));
+    const cv = $("reachCanvas"), ctx = cv.getContext("2d"), scale = cv.width / SIZE, tmp = el("canvas");
+    paintRGB(tmp, S.shown);
+    ctx.imageSmoothingEnabled = false; ctx.drawImage(tmp, 0, 0, cv.width, cv.height);
+    const [x0, x1] = box(ux), [y0, y1] = box(uy);
+    stroke(ctx, [x0, x1, y0, y1], scale, "#ffffff"); ctx.setLineDash([6, 6]); stroke(ctx, [x0, x1, y0, y1], scale, "#d9531e"); ctx.setLineDash([]);
+    $("reachCap").textContent = `${name}: ${x1 - x0 + 1}×${y1 - y0 + 1} pixels, ${grid}×${grid} units`;
+    const field = D.effectiveFields[key], heat = el("canvas");
+    paint(heat, SIZE, SIZE, (x, y) => sequential(Math.sqrt(field[y * SIZE + x]), 1));
+    const e = $("erfCanvas"), ectx = e.getContext("2d");
+    ectx.imageSmoothingEnabled = true; ectx.drawImage(heat, 0, 0, e.width, e.height);
+    const c = ERF_CENTERS[key], [a0, a1] = box(c);
+    stroke(ectx, [a0, a1, a0, a1], scale, "#d9531e");
+  }
+  const place = (e) => {
+    const cv = $("reachCanvas"), b = cv.getBoundingClientRect(), g = REACH[layer][2];
+    ux = clamp(Math.floor((e.clientX - b.left) / b.width * g), 0, g - 1);
+    uy = clamp(Math.floor((e.clientY - b.top) / b.height * g), 0, g - 1);
+    update();
+  };
+  $("reachCanvas").addEventListener("pointermove", place);
+  $("reachCanvas").addEventListener("pointerdown", place);
+  updaters.push(update);
+}
+
+// What channels want
+function buildWants() {
+  let layer = "conv3", selected = D.activity.conv3.indexOf(Math.max(...D.activity.conv3));
+  const order = (name) => [...D.activity[name].keys()].sort((a, b) => D.activity[name][b] - D.activity[name][a]);
+  ["conv3", "conv2"].forEach((name) => {
+    const b = el("button", { className: "chip", type: "button", textContent: name === "conv3" ? "conv 3" : "conv 2" });
+    b.onclick = () => { layer = name; selected = order(name)[0]; draw(); update(); };
+    $("wantTabs").append(b);
+  });
+  const tiles = Array.from({ length: 64 }, (_, i) => {
+    const c = el("canvas", { className: "smooth" }), b = el("button", { type: "button" }, c);
+    b.setAttribute("aria-label", `Channel ${i + 1}`);
+    b.onclick = () => { selected = order(layer)[i]; update(); };
+    $("wantGrid").append(b);
+    return { b, c };
+  });
+  const patchCanvases = Array.from({ length: 6 }, () => {
+    const c = el("canvas", { className: "tile", style: "width:88px;height:88px" });
+    $("wantPatches").append(c);
+    return c;
+  });
+  function draw() {
+    order(layer).forEach((ch, i) => paintRGB(tiles[i].c, VISUALS[layer], SIZE, SIZE, ch * PIXELS));
+    const silent = D.activity[layer].filter((a) => a === 0).length, rare = D.activity[layer].filter((a) => a > 0 && a < 0.01).length;
+    $("wantNote").textContent = `Tiles run from the channel that fires on the most photos to the least. ${silent === 0 ? "All 64 fire on at least some test photos" : silent === 1 ? "One of these 64 channels never fires on any test photo" : `${silent} of these 64 channels never fire on any test photo`}${rare ? `, and ${rare} more fire on fewer than 1% of them` : ""}.`;
+    [...$("wantTabs").children].forEach((b, i) => b.setAttribute("aria-pressed", ["conv3", "conv2"][i] === layer));
+  }
+  function update() {
+    const channels = order(layer);
+    tiles.forEach(({ b }, i) => b.setAttribute("aria-pressed", channels[i] === selected));
+    $("wantCap").textContent = `channel ${selected + 1} fires on ${fmtPct(D.activity[layer][selected], 0)} of test photos`;
+    paintRGB($("wantBig"), VISUALS[layer], SIZE, SIZE, selected * PIXELS);
+    const size = layer === "conv3" ? 18 : 8, bytesEach = size * size * 3;
+    patchCanvases.forEach((c, n) => paintRGB(c, PATCHES[layer], size, size, (selected * 6 + n) * bytesEach));
+    drawChannel($("wantMap"), S.out[layer], selected);
+  }
+  draw();
+  D.classNames.forEach((name, i) => {
+    const c = el("canvas", { className: "tile", style: "width:72px;height:72px" });
+    paintRGB(c, VISUALS.class, SIZE, SIZE, i * PIXELS);
+    $("classVisuals").append(el("div", { className: "col" }, c, el("span", { className: "cap", textContent: name })));
+  });
+  updaters.push(update);
+}
+
+// Decision
+function buildDecision() {
+  D.classNames.forEach((name, i) => {
+    const b = el("button", { className: "chip", type: "button" });
+    b.onclick = () => { S.classIndex = i; update(); };
+    $("classTabs").append(b);
+  });
+  function update() {
+    const cls = S.classIndex ?? S.top, w = WEIGHTS[S.snapshot];
+    [...$("classTabs").children].forEach((b, i) => {
+      b.textContent = `${D.classNames[i]} ${S.out.logits[i].toFixed(1)}`;
+      b.setAttribute("aria-pressed", i === cls);
+    });
+    paintRGB($("paintCanvas"), S.shown);
+    const map = CNN.evidence(S.out.conv3, w, cls);
+    let top = 1e-6, plus = 0, minus = 0;
+    for (const v of map) { top = Math.max(top, Math.abs(v)); if (v > 0) plus += v; else minus += v; }
+    paint($("evidenceCanvas"), 8, 8, (x, y) => diverging(map[y * 8 + x], top));
+    const bias = w.head_b[cls];
+    $("ledger").textContent = `${D.classNames[cls]}: positive cells ${plus.toFixed(2)}  +  negative cells ${minus.toFixed(2)}  +  bias ${bias.toFixed(2)}  =  score ${(plus + minus + bias).toFixed(2).replace(/^-0\.00$/, "0.00")}`;
+    scheduleSweep();
+  }
+  const stroke = (e) => {
+    const c = $("paintCanvas"), b = c.getBoundingClientRect();
+    const px = Math.floor((e.clientX - b.left) / b.width * SIZE), py = Math.floor((e.clientY - b.top) / b.height * SIZE);
+    for (let y = py - 2; y <= py + 2; y++) for (let x = px - 2; x <= px + 2; x++)
+      if (x >= 0 && y >= 0 && x < SIZE && y < SIZE) S.covered[y * SIZE + x] = 1;
+    refresh();
+  };
+  const canvas = $("paintCanvas");
+  canvas.addEventListener("pointerdown", (e) => { canvas.setPointerCapture(e.pointerId); canvas.dataset.down = "1"; stroke(e); });
+  canvas.addEventListener("pointermove", (e) => { if (canvas.dataset.down) stroke(e); });
+  canvas.addEventListener("pointerup", () => delete canvas.dataset.down);
+  canvas.addEventListener("pointercancel", () => delete canvas.dataset.down);
+  $("clearPaint").onclick = () => { S.covered.fill(0); refresh(); };
+
+  // Occlusion needs about 200 forward passes, so it runs in slices and restarts
+  // whenever the photo or model changes.
+  let sweepToken = 0;
+  function scheduleSweep() {
+    const token = ++sweepToken;
+    setTimeout(async () => {
+      if (token !== sweepToken) return;
+      const cls = S.classIndex ?? S.top, weights = WEIGHTS[S.snapshot], base = S.probs[cls], grid = 14;
+      const drops = new Float32Array(grid * grid);
+      $("sweepCap").textContent = "measuring each spot";
+      for (let y = 0; y < grid; y++) {
+        for (let x = 0; x < grid; x++) {
+          const covered = S.covered.slice();
+          for (let j = 0; j < 6; j++) for (let i = 0; i < 6; i++) covered[(y * 2 + j) * SIZE + x * 2 + i] = 1;
+          const { tensor } = effectiveImage(S.dx, covered);
+          drops[y * grid + x] = base - CNN.softmax(CNN.forward(tensor, weights).logits)[cls];
+        }
+        await new Promise((r) => setTimeout(r));
+        if (token !== sweepToken) return;
+      }
+      let top = 1e-6; for (const v of drops) top = Math.max(top, Math.abs(v));
+      paint($("sweepCanvas"), grid, grid, (x, y) => diverging(drops[y * grid + x], top));
+      $("sweepCap").textContent = `covering red spots lowers ${D.classNames[cls]}, by up to ${(100 * top).toFixed(0)} points`;
+    }, 250);
+  }
+  updaters.push(update);
+}
+
+// A small line chart in SVG, drawn from one x and y scale.
+function lineChart(host, series, { x, xLabel, yLabel, yMin, yMax, ticks, marker = null, height = 300 }) {
+  const W = 680, H = height, m = { l: 52, r: 16, t: 12, b: 40 };
+  const sx = (v) => m.l + (v - x[0]) / (x[x.length - 1] - x[0]) * (W - m.l - m.r);
+  const sy = (v) => H - m.b - (v - yMin) / (yMax - yMin) * (H - m.t - m.b);
+  const parts = [];
+  ticks.y.forEach((t) => parts.push(`<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${sy(t)}" y2="${sy(t)}"/><text x="${m.l - 8}" y="${sy(t) + 4}" text-anchor="end">${t <= 1 && yMax <= 1 ? Math.round(t * 100) + "%" : t}</text>`));
+  ticks.x.forEach((t) => parts.push(`<text x="${sx(t)}" y="${H - m.b + 16}" text-anchor="middle">${t}</text>`));
+  parts.push(`<text x="${(W + m.l) / 2}" y="${H - 6}" text-anchor="middle">${xLabel}</text>`);
+  parts.push(`<text x="14" y="${(H - m.b) / 2}" text-anchor="middle" transform="rotate(-90 14 ${(H - m.b) / 2})">${yLabel}</text>`);
+  if (marker !== null) parts.push(`<line x1="${sx(marker)}" x2="${sx(marker)}" y1="${m.t}" y2="${H - m.b}" stroke="var(--warm)" stroke-dasharray="4 4"/>`);
+  series.forEach(({ y, color, xs }) => {
+    const pts = y.map((v, i) => `${sx((xs || x)[i]).toFixed(1)},${sy(clamp(v, yMin, yMax)).toFixed(1)}`).join(" ");
+    parts.push(`<polyline fill="none" stroke="${color}" stroke-width="2.25" points="${pts}"/>`);
+  });
+  host.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${yLabel} against ${xLabel}">${parts.join("")}</svg>`;
+}
+const legend = (host, items) => host.replaceChildren(...items.map(([name, color]) => el("span", {}, Object.assign(el("i"), { style: `background:${color}` }), name)));
+
+// Shift
+function buildShift() {
+  const names = Object.keys(D.shifts), xs = Array.from({ length: 2 * D.maxShift + 1 }, (_, i) => i - D.maxShift);
+  const colors = names.map((_, i) => CLASS_COLORS[i]);
+  legend($("shiftLegend"), names.map((n, i) => [n, colors[i]]));
+  $("shiftSlider").oninput = (e) => { S.dx = +e.target.value; refresh(); };
+  const low = Math.min(...names.flatMap((n) => D.shifts[n]));
+  const yMin = Math.floor(low * 10) / 10, ys = []; for (let t = yMin; t <= 1.0001; t += 0.1) ys.push(+t.toFixed(1));
+  updaters.push(() => {
+    $("shiftValue").textContent = S.dx;
+    lineChart($("shiftChart"), names.map((n, i) => ({ y: D.shifts[n], color: colors[i] })), { x: xs, xLabel: "pixels shifted, all 10,000 test photos", yLabel: "test accuracy", yMin, yMax: 1, ticks: { x: [-8, -4, 0, 4, 8], y: ys }, marker: S.dx, height: 280 });
+  });
+  const a = D.shifts["CNN with augmentation"], c = D.maxShift;
+  $("shiftNote").textContent = `Moving photos 4 pixels takes this model from ${fmtPct(a[c])} to about ${fmtPct((a[c - 4] + a[c + 4]) / 2)}, and 8 pixels to about ${fmtPct((a[c - 8] + a[c + 8]) / 2)}. Gaps left by the shift are filled with the dataset's mean colour.`;
+}
+
+// Failures
+function buildFailures() {
+  const grid = $("confusion"), M = D.confusion;
+  let top = 0;
+  M.forEach((row, i) => row.forEach((v, j) => { if (i !== j) top = Math.max(top, v); }));
+  grid.append(el("span"));
+  D.classNames.forEach((n) => grid.append(el("span", { className: "label top", textContent: n })));
+  const show = (i, j) => {
+    const items = D.labels.map((_, n) => n).filter((n) => D.labels[n] === i && D.predictions[n] === j).slice(0, 18);
+    $("confusionCap").textContent = `${M[i][j]} ${D.classNames[i]} photos predicted ${D.classNames[j]}. Showing ${items.length} from the photos on this page.`;
+    $("confusionPhotos").replaceChildren(...items.map(photoButton));
+  };
+  M.forEach((row, i) => {
+    grid.append(el("span", { className: "label", textContent: D.classNames[i] }));
+    row.forEach((v, j) => {
+      const fill = i === j ? [224, 223, 217] : sequential(v, top * 1.15);
+      const dark = i !== j && v / (top * 1.15) > 0.5;
+      const b = el("button", { type: "button", textContent: v, style: `background:rgb(${fill.join(",")});color:${dark ? "#fff" : "#15161a"}` });
+      b.setAttribute("aria-label", `${v} ${D.classNames[i]} photos predicted ${D.classNames[j]}`);
+      b.onclick = () => show(i, j);
+      grid.append(b);
+    });
+  });
+  const worst = D.labels.map((_, n) => n).filter((n) => D.predictions[n] !== D.labels[n]).sort((a, b) => D.confidence[b] - D.confidence[a]).slice(0, 18);
+  $("mistakes").replaceChildren(...worst.map(photoButton));
+  const pairs = [];
+  M.forEach((r, i) => r.forEach((v, j) => { if (i !== j) pairs.push([v, i, j]); }));
+  pairs.sort((a, b) => b[0] - a[0]);
+  show(pairs[0][1], pairs[0][2]);
+}
+function photoButton(n) {
+  const b = el("button", { className: "thumb", type: "button", title: `labelled ${D.classNames[D.labels[n]]}, predicted ${D.classNames[D.predictions[n]]}, ${fmtPct(D.confidence[n], 0)}` }, thumbCanvas(n));
+  b.setAttribute("aria-label", b.title);
+  b.onclick = () => loadImage(n);
+  return b;
+}
+
+// Feature map
+function buildMap() {
+  $("mapCount").textContent = NUM_IMAGES;
+  let filter = null;
+  const canvas = $("mapCanvas"), ctx = canvas.getContext("2d");
+  const thumbs = D.map.map((_, n) => thumbCanvas(n)), T = 36, pad = 24;
+  const place = (n) => [pad + D.map[n][0] * (canvas.width - 2 * pad - T), pad + D.map[n][1] * (canvas.height - 2 * pad - T)];
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const order = [...D.map.keys()].sort((a, b) => (filter !== null) * ((D.labels[a] === filter) - (D.labels[b] === filter)));
+    order.forEach((n) => {
+      const [x, y] = place(n), on = filter === null || D.labels[n] === filter;
+      ctx.globalAlpha = on ? 1 : 0.12;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(thumbs[n], x, y, T, T);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = CLASS_COLORS[D.labels[n]];
+      if (on) { ctx.lineWidth = 2; ctx.strokeRect(x, y, T, T); }
+    });
+  }
+  const chip = (label, value) => {
+    const b = el("button", { className: "chip", type: "button", textContent: label });
+    b.onclick = () => { filter = value; [...$("mapFilter").children].forEach((c) => c.setAttribute("aria-pressed", c === b)); draw(); };
+    $("mapFilter").append(b);
+    return b;
+  };
+  chip("all", null).setAttribute("aria-pressed", true);
+  D.classNames.forEach((n, i) => chip(n, i));
+  const nearest = (e) => {
+    const b = canvas.getBoundingClientRect(), x = (e.clientX - b.left) / b.width * canvas.width, y = (e.clientY - b.top) / b.height * canvas.height;
+    let best = -1, dist = (T * 1.2) ** 2;
+    D.map.forEach((_, n) => { const [px, py] = place(n), d = (px + T / 2 - x) ** 2 + (py + T / 2 - y) ** 2; if (d < dist && (filter === null || D.labels[n] === filter)) { dist = d; best = n; } });
+    return best;
+  };
+  canvas.addEventListener("pointermove", (e) => {
+    const n = nearest(e), tip = $("mapTip");
+    tip.hidden = n < 0;
+    if (n < 0) return;
+    const b = canvas.getBoundingClientRect(), left = e.clientX - b.left, top = e.clientY - b.top;
+    tip.textContent = `${D.classNames[D.labels[n]]}, predicted ${D.classNames[D.predictions[n]]}`;
+    tip.style.left = `${Math.min(left + 12, b.width - 170)}px`; tip.style.top = `${top + 12}px`;
+  });
+  canvas.addEventListener("pointerleave", () => ($("mapTip").hidden = true));
+  canvas.addEventListener("click", (e) => { const n = nearest(e); if (n >= 0) loadImage(n); });
+  draw();
+}
+
+// Depth, from the measured runs.
+function buildDepth() {
+  const noAugmentation = D.shifts["CNN, no augmentation"][D.maxShift];
+  $("depthIntro").textContent = `Without help this CNN memorized its training set: ${fmtPct(0.956, 0)} train accuracy, about ${fmtPct(noAugmentation, 0)} on test. Random flips and shifts removed that gap, and train and test accuracy now match, so more capacity is the next thing to try.`;
+  const ladder = [
+    ["CNN, Adam, 20 epochs", noAugmentation],
+    ["with augmentation, 40 epochs", 0.8128], // Scratch run, same model and data.
+    ["with weight decay and cosine decay", D.testAccuracy],
+    ...[...D.resnets].filter((r) => r.test > D.testAccuracy).sort((a, b) => a.test - b.test).map((r) => [r.name, r.test]),
+  ];
+  $("ladderChart").replaceChildren(el("div", { className: "bars" }, ...ladder.map(([name, value]) => el("div", { className: "bar ladder" },
+    el("span", { textContent: name }),
+    el("div", { className: "track" }, Object.assign(el("div", { className: "fill" }), { style: `width:${100 * value}%` })),
+    el("span", { className: "pct", textContent: fmtPct(value) })))));
+  $("resnetTable").innerHTML = `<thead><tr><th>Network</th><th>Layers</th><th>Skips</th><th>Parameters</th><th>Epochs</th><th>Train</th><th>Test</th></tr></thead><tbody>` +
+    rows().map((r) => `<tr><td>${r.name}</td><td>${r.depth}</td><td>${r.residual === null ? "" : r.residual ? "yes" : "no"}</td><td>${r.params.toLocaleString()}</td><td>${r.epochs}</td><td>${fmtPct(r.train)}</td><td>${fmtPct(r.test)}</td></tr>`).join("") + `</tbody>`;
+  $("resnetNote").textContent = RESNET_NOTE;
+  const curves = D.resnets.filter((r) => r.curve.length), longest = Math.max(...curves.map((r) => r.curve.length));
+  const series = curves.map((r, i) => ({ y: r.curve, xs: r.curve.map((_, n) => n + 1), color: CLASS_COLORS[i] }));
+  lineChart($("depthChart"), series, { x: [1, longest], xLabel: "epoch", yLabel: "test accuracy", yMin: 0.2, yMax: 1, ticks: { x: [1, 10, 20, 30, 40].filter((t) => t <= longest), y: [0.2, 0.4, 0.6, 0.8, 1] }, height: 260 });
+  legend($("depthLegend"), curves.map((r, i) => [r.name, CLASS_COLORS[i]]));
+  $("depthOutro").textContent = DEPTH_OUTRO;
+  function rows() {
+    const cnnParams = Object.values(WEIGHTS[0]).reduce((a, x) => a + x.length, 0);
+    return [{ name: "This CNN", depth: 4, residual: null, params: cnnParams, epochs: 40, train: 0.827, test: D.testAccuracy }, ...D.resnets.map((r) => ({ ...r, epochs: r.curve.length }))];
+  }
+}
+const RESNET_NOTE = "More runs are still training, and this table will grow when they finish. Models with no skip connections are labelled Plain. All use global average pooling before the last layer.";
+const DEPTH_OUTRO = "";
+
+// Parity with JAX, run once on load so the claim on this page is checked.
+function parityCheck() {
+  const w = WEIGHTS[D.snapshots.findIndex((s) => s.epoch === D.parity.epoch)];
+  let worst = 0;
+  for (let n = 0; n < D.parity.count; n++) {
+    const raw = baseImage(n), data = new Float32Array(PIXELS);
+    for (let i = 0; i < PIXELS; i++) data[i] = (raw[i] / 255 - D.mean[i % 3]) / D.std[i % 3];
+    const { logits } = CNN.forward({ data, h: SIZE, w: SIZE, c: 3 }, w);
+    logits.forEach((l, k) => (worst = Math.max(worst, Math.abs(l - D.parity.logits[n][k]))));
+  }
+  $("parityNote").textContent = `Checked on this load: the forward pass in your browser matches JAX on ${D.parity.count} test photos, with a largest score difference of ${worst.toFixed(4)}.`;
+}
+
+function start() {
+  $("heroAcc").textContent = fmtPct(D.testAccuracy);
+  const w = WEIGHTS[0];
+  $("heroParams").textContent = Object.values(w).reduce((a, x) => a + x.length, 0).toLocaleString();
+  buildRail();
+  const first = buildGallery();
+  buildArch(); buildNumbers(); buildConvolution(); buildFilters(); buildActivations();
+  buildReach(); buildWants(); buildDecision(); buildShift(); buildFailures(); buildMap(); buildDepth();
+  parityCheck();
+  S.index = first; S.raw = baseImage(first);
+  run();
+}
+start();
+</script>
