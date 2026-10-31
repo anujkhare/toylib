@@ -159,16 +159,28 @@ class LoggerConfig:
 class WandBLoggerConfig(LoggerConfig):
     logger_cls: type[logger.Logger] = logger.WandBLogger
     project_name: str = ""
-    user_name: str = ""
+    user_name: str = ""  # The wandb entity; blank for the account's default.
+    # Store each checkpoint as a wandb artifact, which ``Experiment.resume`` can
+    # fetch on another machine.
+    upload_checkpoints: bool = False
+    # Also write the JSON-lines log that ``FileLogger`` writes.
+    also_log_to_file: bool = False
 
     def build_logger(self, config_dict: dict) -> logger.Logger:
-        return self.logger_cls(
+        wandb_logger = self.logger_cls(
             config_dict=config_dict,
             output_path=self.log_dir,
             project_name=self.project_name,
             user_name=self.user_name,
             run_id=self.run_id,
+            upload_checkpoints=self.upload_checkpoints,
         )
+        if not self.also_log_to_file:
+            return wandb_logger
+        file_logger = logger.FileLogger(
+            config_dict=config_dict, output_path=self.log_dir, run_id=self.run_id
+        )
+        return logger.MultiLogger([file_logger, wandb_logger])
 
 
 def _serialize_dataclass_config(config) -> typing.Any:
@@ -450,9 +462,13 @@ class Experiment:
             self.opt_state = self.optimizer.init(self.model)
 
         self.step = 0
-        self._train_start_time = time.monotonic()
+        self._restart_speed_clock()
 
         print(f"Model initialized and replicated across {self.num_devices} devices")
+
+    def _restart_speed_clock(self) -> None:
+        self._train_start_step = self.step
+        self._train_start_time = time.monotonic()
 
     def _assert_initialized(self) -> None:
         assert self.model is not None and self.opt_state is not None, (
@@ -481,6 +497,9 @@ class Experiment:
             )
         self.ckpt_manager.save(self.step, args=ocp.args.Composite(**args))
         self.ckpt_manager.wait_until_finished()
+        self.logger_obj.log_checkpoint(
+            self.step, str(self.ckpt_manager.directory / str(self.step))
+        )
 
     def _resolve_latest_saved_checkpoint_step(self) -> int:
         step = self.ckpt_manager.latest_step()
@@ -515,6 +534,24 @@ class Experiment:
         if self.checkpoint_config.checkpoint_dataset_iterator:
             self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
+
+    def resume(self) -> bool:
+        """Continue from the newest checkpoint, if there is one.
+
+        Looks in ``checkpoint_dir``, then asks the logger, which is how a run
+        moves to a new machine. Returns whether a checkpoint was restored; if not,
+        training starts from the beginning.
+        """
+        self._assert_initialized()
+        if self.ckpt_manager.latest_step() is None:
+            self.logger_obj.fetch_checkpoint(self.checkpoint_config.checkpoint_dir)
+            self.ckpt_manager.reload()
+        if self.ckpt_manager.latest_step() is None:
+            return False
+        self.restore_checkpoint()
+        self.step += 1  # A checkpoint is saved after its step has trained.
+        self._restart_speed_clock()
+        return True
 
     # ---- eval --------------------------------------------------------------
 
@@ -604,14 +641,15 @@ class Experiment:
                 f"train/{k}": float(v) for k, v in train_metrics.items()
             }
             elapsed = time.monotonic() - self._train_start_time
-            if elapsed > 0 and self.step > 0:
-                train_metrics_with_prefix["train/steps_per_sec"] = self.step / elapsed
+            steps_done = self.step - self._train_start_step
+            if elapsed > 0 and steps_done > 0:
+                train_metrics_with_prefix["train/steps_per_sec"] = steps_done / elapsed
             self.logger_obj.log(self.step, metrics=train_metrics_with_prefix)
 
     def outer_loop(self):
         finished = self.step >= self.training_config.max_steps
 
-        while True:
+        while not finished:
             epoch_start_step = self.step
             for batch in self.train_task.dataset:
                 with jax.profiler.StepTraceAnnotation("inner_loop", step_num=self.step):
@@ -627,8 +665,6 @@ class Experiment:
                     finished = True
                     break
 
-            if finished:
-                break
             if self.step == epoch_start_step:
                 raise ValueError(f"Dataset for task {self.train_task.name} is empty.")
 

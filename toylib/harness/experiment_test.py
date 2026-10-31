@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from toylib.harness import logger
 from toylib.harness.data import ArrayDataset
 from toylib.harness.experiment import (
     CheckpointConfig,
@@ -312,6 +314,101 @@ def test_dataset_iterator_checkpoint_resumes_mid_epoch(tmp_path: Path) -> None:
     resumed.cleanup()
 
 
+class _LoggerWithRemoteCopy(logger.FileLogger):
+    """Stands in for wandb: holds the last checkpoint outside ``checkpoint_dir``."""
+
+    remote: Path | None = None
+    remote_step: int | None = None
+
+    def log_checkpoint(self, step: int, path: str) -> None:
+        cls = type(self)
+        cls.remote_step = step
+        shutil.rmtree(cls.remote, ignore_errors=True)
+        shutil.copytree(path, cls.remote)
+
+    def fetch_checkpoint(self, checkpoint_dir: str) -> int | None:
+        cls = type(self)
+        if cls.remote_step is None:
+            return None
+        shutil.copytree(cls.remote, Path(checkpoint_dir) / str(cls.remote_step))
+        return cls.remote_step
+
+
+def _resumable_experiment(tmp_path: Path, name: str, max_steps: int) -> Experiment:
+    return Experiment(
+        train_task=Task(
+            "train",
+            ArrayDataset(_frames(16), batch_size=jax.local_device_count(), seed=3),
+        ),
+        forward_fn=_linear_forward_fn,
+        model_factory=_trivial_model_factory,
+        training_config=TrainingConfig(max_steps=max_steps),
+        checkpoint_config=CheckpointConfig(
+            checkpoint_dir=str(tmp_path / name),
+            save_interval_steps=3,
+            checkpoint_dataset_iterator=True,
+        ),
+        logger_config=LoggerConfig(
+            logger_cls=_LoggerWithRemoteCopy, log_dir=str(tmp_path), run_id=name
+        ),
+    )
+
+
+def test_resume_without_a_checkpoint_starts_fresh(tmp_path: Path) -> None:
+    _LoggerWithRemoteCopy.remote_step = None
+    exp = _resumable_experiment(tmp_path, "fresh", max_steps=2)
+    exp.init_state()
+    assert exp.resume() is False
+    assert exp.step == 0
+    exp.cleanup()
+
+
+@pytest.mark.parametrize("new_machine", [False, True])
+def test_interrupted_training_ends_like_uninterrupted(
+    tmp_path: Path, new_machine: bool
+) -> None:
+    _LoggerWithRemoteCopy.remote = tmp_path / "remote"
+    _LoggerWithRemoteCopy.remote_step = None
+
+    whole = _resumable_experiment(tmp_path, "whole", max_steps=7)
+    whole.init_state()
+    whole.outer_loop()
+    whole.cleanup()
+
+    first = _resumable_experiment(tmp_path, "part", max_steps=4)  # Saves step 3.
+    first.init_state()
+    first.outer_loop()
+    first.cleanup()
+
+    second = _resumable_experiment(
+        tmp_path, "elsewhere" if new_machine else "part", max_steps=7
+    )
+    second.init_state()
+    assert second.resume() is True
+    assert second.step == 4
+    second.outer_loop()
+    second.cleanup()
+
+    np.testing.assert_array_equal(second.model["w"], whole.model["w"])
+
+
+def test_resuming_a_finished_run_trains_nothing(tmp_path: Path) -> None:
+    _LoggerWithRemoteCopy.remote = tmp_path / "remote"
+    _LoggerWithRemoteCopy.remote_step = None
+    exp = _resumable_experiment(tmp_path, "done", max_steps=4)
+    exp.init_state()
+    exp.outer_loop()
+    trained = np.asarray(exp.model["w"])
+    exp.cleanup()
+
+    again = _resumable_experiment(tmp_path, "done", max_steps=4)
+    again.init_state()
+    assert again.resume() is True
+    again.outer_loop()
+    np.testing.assert_array_equal(again.model["w"], trained)
+    again.cleanup()
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Regressions
 # ──────────────────────────────────────────────────────────────────────────
@@ -320,6 +417,7 @@ _MULTI_DEVICE_SCRIPT = """
 import os, sys
 os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=" + sys.argv[1]
 import jax, jax.numpy as jnp, numpy as np, optax
+from toylib.harness import logger
 from toylib.harness.data import ArrayDataset
 from toylib.harness.experiment import (CheckpointConfig, Experiment, LoggerConfig,
     MultiOptimizerConfig, OptimizerConfig, Task, TrainingConfig)
