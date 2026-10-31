@@ -7,7 +7,14 @@ import jaxtyping as jt
 import numpy as np
 from beartype import typing
 
-from toylib.nn.layers import Conv2D, Embedding, GroupNorm, Linear, upsample_nearest
+from toylib.nn.layers import (
+    Conv2D,
+    Embedding,
+    GroupNorm,
+    Linear,
+    upsample_nearest,
+    max_pool,
+)
 
 
 class TestLinear:
@@ -125,15 +132,20 @@ class TestConv2D:
     @pytest.mark.parametrize(
         "in_c,out_c,k,stride,in_hw,out_hw",
         [
-            (3, 64, 3, 1, 64, 64),    # SAME, stride 1 preserves spatial
+            (3, 64, 3, 1, 64, 64),  # SAME, stride 1 preserves spatial
             (64, 128, 3, 2, 64, 32),  # SAME, stride 2 halves spatial
-            (4, 8, 1, 1, 8, 8),       # 1x1 conv preserves spatial
+            (4, 8, 1, 1, 8, 8),  # 1x1 conv preserves spatial
         ],
     )
     def test_shapes(self, key, in_c, out_c, k, stride, in_hw, out_hw):
         conv = Conv2D(
-            in_channels=in_c, out_channels=out_c, kernel_size=k,
-            stride=stride, padding="SAME", key=key, use_bias=True,
+            in_channels=in_c,
+            out_channels=out_c,
+            kernel_size=k,
+            stride=stride,
+            padding="SAME",
+            key=key,
+            use_bias=True,
         )
         conv.init()
         x = jnp.zeros((2, in_hw, in_hw, in_c))
@@ -144,8 +156,12 @@ class TestConv2D:
 
     def test_no_bias(self, key):
         conv = Conv2D(
-            in_channels=4, out_channels=8, kernel_size=3,
-            padding="SAME", key=key, use_bias=False,
+            in_channels=4,
+            out_channels=8,
+            kernel_size=3,
+            padding="SAME",
+            key=key,
+            use_bias=False,
         )
         conv.init()
         assert conv.bias is None
@@ -155,12 +171,20 @@ class TestConv2D:
     def test_explicit_integer_padding(self, key):
         """padding=1 must produce the same output shape as padding='SAME' for k=3, s=1."""
         conv_same = Conv2D(
-            in_channels=4, out_channels=4, kernel_size=3,
-            padding="SAME", key=key, use_bias=False,
+            in_channels=4,
+            out_channels=4,
+            kernel_size=3,
+            padding="SAME",
+            key=key,
+            use_bias=False,
         )
         conv_int = Conv2D(
-            in_channels=4, out_channels=4, kernel_size=3,
-            padding=1, key=key, use_bias=False,
+            in_channels=4,
+            out_channels=4,
+            kernel_size=3,
+            padding=1,
+            key=key,
+            use_bias=False,
         )
         conv_same.init()
         conv_int.init()
@@ -169,8 +193,12 @@ class TestConv2D:
 
     def test_gradient_flow(self, key):
         conv = Conv2D(
-            in_channels=4, out_channels=8, kernel_size=3,
-            padding="SAME", key=key, use_bias=True,
+            in_channels=4,
+            out_channels=8,
+            kernel_size=3,
+            padding="SAME",
+            key=key,
+            use_bias=True,
         )
         conv.init()
 
@@ -206,7 +234,7 @@ class TestGroupNorm:
         # Reshape to (B, H, W, G, C/G) and verify per-(B,G) stats.
         y_grouped = y.reshape(2, 4, 4, 4, 2)
         per_group_mean = jnp.mean(y_grouped, axis=(1, 2, 4))  # (B, G)
-        per_group_var = jnp.var(y_grouped, axis=(1, 2, 4))    # (B, G)
+        per_group_var = jnp.var(y_grouped, axis=(1, 2, 4))  # (B, G)
         np.testing.assert_allclose(per_group_mean, jnp.zeros((2, 4)), atol=1e-5)
         np.testing.assert_allclose(per_group_var, jnp.ones((2, 4)), atol=1e-3)
 
@@ -214,6 +242,19 @@ class TestGroupNorm:
         gn = GroupNorm(num_features=10, num_groups=3)  # 10 % 3 != 0
         with pytest.raises(ValueError, match="divisible"):
             gn.init()
+
+
+class TestMaxPool:
+    def test_max_pool(self):
+        x = jnp.arange(2 * 4 * 4 * 3).reshape(2, 4, 4, 3).astype(jnp.float32)
+        y = max_pool(x, factor=2)
+        assert y.shape == (2, 2, 2, 3)
+        np.testing.assert_array_equal(y, x[:, 1::2, 1::2, :])
+
+    def test_all_negative(self):
+        x = jnp.ones((2, 4, 4, 3)) * -5.0
+        y = max_pool(x, factor=2)
+        np.testing.assert_array_equal(y, jnp.full((2, 2, 2, 3), -5.0))
 
 
 class TestUpsampleNearest:

@@ -1,8 +1,7 @@
-import math
 import jax
 import jax.numpy as jnp
 import jaxtyping as jt
-import typing
+import math
 
 from toylib.nn import module
 
@@ -15,11 +14,11 @@ class Linear(module.Module):
     out_features: int
     key: jt.PRNGKeyArray
     use_bias: bool = False
-    init_std: typing.Optional[float] = None
+    init_std: float | None = None
 
     # Trainable parameters
-    weights: typing.Optional[jt.Float[jt.Array, "in_features out_features"]] = None
-    bias: typing.Optional[jt.Float[jt.Array, " out_features"]] = None
+    weights: jt.Float[jt.Array, "in_features out_features"] | None = None
+    bias: jt.Float[jt.Array, " out_features"] | None = None
 
     def init(self) -> None:
         w_key = self.key
@@ -66,7 +65,7 @@ class Embedding(module.Module):
     key: jt.PRNGKeyArray
 
     # Trainable parameters
-    weights: typing.Optional[jt.Float[jt.Array, "vocab_size embedding_dim"]] = None
+    weights: jt.Float[jt.Array, "vocab_size embedding_dim"] | None = None
 
     def init(
         self,
@@ -102,15 +101,13 @@ class Conv2D(module.Module):
     kernel_size: int = 3
     stride: int = 1
     # Either an int (symmetric pad on both spatial dims) or one of "SAME"/"VALID".
-    padding: typing.Union[int, str] = "SAME"
+    padding: int | str = "SAME"
     use_bias: bool = True
-    init_std: typing.Optional[float] = None
+    init_std: float | None = None
 
     # Trainable
-    weights: typing.Optional[
-        jt.Float[jt.Array, "kh kw in_channels out_channels"]
-    ] = None
-    bias: typing.Optional[jt.Float[jt.Array, " out_channels"]] = None
+    weights: jt.Float[jt.Array, "kh kw in_channels out_channels"] | None = None
+    bias: jt.Float[jt.Array, " out_channels"] | None = None
 
     def init(self) -> None:
         k = self.kernel_size
@@ -142,7 +139,7 @@ class Conv2D(module.Module):
             else None
         )
 
-    def _resolved_padding(self) -> typing.Union[str, list[tuple[int, int]]]:
+    def _resolved_padding(self) -> str | list[tuple[int, int]]:
         if isinstance(self.padding, str):
             return self.padding
         p = int(self.padding)
@@ -180,8 +177,8 @@ class GroupNorm(module.Module):
     eps: float = 1e-5
 
     # Trainable per-channel affine.
-    scale: typing.Optional[jt.Float[jt.Array, " num_features"]] = None
-    bias: typing.Optional[jt.Float[jt.Array, " num_features"]] = None
+    scale: jt.Float[jt.Array, " num_features"] | None = None
+    bias: jt.Float[jt.Array, " num_features"] | None = None
 
     def init(self) -> None:
         if self.num_features % self.num_groups != 0:
@@ -210,6 +207,19 @@ class GroupNorm(module.Module):
         return (x32 * scale + bias).astype(orig_dtype)
 
 
+def max_pool(
+    x: jt.Float[jt.Array, "B H W C"], factor: int = 2
+) -> jt.Float[jt.Array, "B H_out W_out C"]:
+    return jax.lax.reduce_window(
+        operand=x,
+        init_value=-jnp.inf,
+        computation=jax.lax.max,
+        window_dimensions=(1, factor, factor, 1),
+        window_strides=(1, factor, factor, 1),
+        padding="VALID",
+    )
+
+
 def upsample_nearest(
     x: jt.Float[jt.Array, "B H W C"], factor: int = 2
 ) -> jt.Float[jt.Array, "B H_out W_out C"]:
@@ -220,9 +230,7 @@ def upsample_nearest(
     artifacts that transposed convolutions exhibit.
     """
     B, H, W, C = x.shape
-    return jax.image.resize(
-        x, (B, H * factor, W * factor, C), method="nearest"
-    )
+    return jax.image.resize(x, (B, H * factor, W * factor, C), method="nearest")
 
 
 def rms_norm(
