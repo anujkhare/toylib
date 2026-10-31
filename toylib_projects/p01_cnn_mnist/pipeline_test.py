@@ -64,6 +64,29 @@ def test_preprocess_roundtrip():
     np.testing.assert_allclose(data.unpreprocess(x, info), images / 255.0, atol=1e-6)
 
 
+def test_cutout_blanks_one_square_per_image():
+    images = np.ones((200, 32, 32, 3), np.float32)
+    out = data.cutout({"image": images, "label": np.zeros(200)}, np.random.default_rng(0))
+    hidden = out["image"][..., 0] == 0
+
+    assert out["image"].dtype == np.float32
+    assert (out["image"] == out["image"][..., :1]).all()  # All channels together.
+    assert hidden.sum(axis=(1, 2)).max() == 16 * 16
+    assert hidden.sum(axis=(1, 2)).min() > 0
+    for mask in hidden:  # Hidden pixels fill their bounding box: one rectangle.
+        rows, cols = np.where(mask.any(axis=1))[0], np.where(mask.any(axis=0))[0]
+        assert mask.sum() == len(rows) * len(cols)
+        assert np.ptp(rows) == len(rows) - 1 and np.ptp(cols) == len(cols) - 1
+    # Centres vary, and a square can hang off the edge.
+    assert len({tuple(m.ravel()) for m in hidden}) > 100
+    assert (hidden[:, 0, :].any(axis=1)).any() and (hidden[:, -1, :].any(axis=1)).any()
+
+
+def test_cutout_size_needs_augment():
+    with pytest.raises(ValueError, match="augment"):
+        data.make_datasets("cifar10", batch_size=8, cutout_size=16)
+
+
 def test_random_flip_and_crop():
     images = np.random.default_rng(0).normal(size=(64, 32, 32, 3)).astype(np.float32)
     batch = {"image": images, "label": np.arange(64)}

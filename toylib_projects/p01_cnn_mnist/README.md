@@ -47,7 +47,7 @@ Each is one session. You write the code; ask for review, tests or debugging.
   full training through `Experiment`, and test-set results from the checkpoint.
 - `01_data_and_pipeline_cifar10.ipynb`: the same notebook for CIFAR-10.
 - `resnet.py`: residual networks for CIFAR-10, kept apart from `model.py`.
-- `01_resnets_colab.ipynb`: the heavier ResNets on a Colab TPU, with metrics on W&B,
+- `01_resnets_colab.ipynb`: the final Wide ResNet-20 on a Colab TPU, with metrics on W&B,
   checkpoints in GCS, and resuming after a lost runtime. `COLAB.md` shows how to run
   it with the Colab CLI.
 - `explorer/`: an interactive page around the trained CNN, with a real forward pass

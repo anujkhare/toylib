@@ -1,6 +1,6 @@
 # Running the heavy models on Colab
 
-`01_resnets_colab.ipynb` trains the runs that are too slow for a laptop CPU. Google's
+`01_resnets_colab.ipynb` trains the final Wide ResNet-20, which is too slow for a laptop CPU. Google's
 [Colab CLI](https://github.com/googlecolab/google-colab-cli) rents a Colab machine and runs
 the notebook on it from a shell, so these commands work from your terminal or a Claude Code
 session.
@@ -77,8 +77,8 @@ This allows 24 hours:
 colab --auth=adc exec -s p01 -f toylib_projects/p01_cnn_mnist/01_resnets_colab.ipynb --timeout 86400
 ```
 
-The notebook installs the repo, checks the bucket and the accelerator, times each model, and
-then trains all three in order. It stops early if the runtime can't read the bucket or has
+The notebook installs the repo, checks the bucket and the accelerator, times the model, and
+then trains it. It stops early if the runtime can't read the bucket or has
 no accelerator. Outputs are written to `01_resnets_colab_output.ipynb` next to the notebook
 when `exec` ends, and that file is gitignored.
 
@@ -106,25 +106,25 @@ colab --auth=adc stop -s p01
 
 ## If the runtime disappears
 
-Repeat **Start a runtime** and **Run**. Each run restores its newest checkpoint from the
-bucket and finished runs are skipped, so you lose at most five epochs of the current model.
+Repeat **Start a runtime** and **Run**. The run restores its newest checkpoint from the
+bucket, so you lose at most five epochs.
 
 A run with a saved checkpoint should print `resuming at step ...`. If it prints
-`starting fresh` instead, stop and check the bucket for that run's folder. The first
+`starting fresh` instead, stop and check the bucket for its folder. The first
 checkpoint is saved as training starts.
 
 ## Getting results back
 
-Each run has a folder of checkpoints in the bucket, one per 5 epochs. To list them:
+The run has a folder of checkpoints in the bucket, one per 5 epochs. To list them:
 
 ```bash
-gcloud storage ls gs://tinystories-checkpoints/toylib-p01-cifar10/resnet56_e40/
+gcloud storage ls gs://tinystories-checkpoints/toylib-p01-cifar10/resnet20w32_cutout_e100/
 ```
 
 Code on this Mac can load them directly, using the bucket path as the checkpoint directory:
 
 ```python
-net = inference.load_model(template, "gs://tinystories-checkpoints/toylib-p01-cifar10/resnet56_e40")
+net = inference.load_model(template, "gs://tinystories-checkpoints/toylib-p01-cifar10/resnet20w32_cutout_e100")
 ```
 
 ## Known limits

@@ -77,6 +77,24 @@ def random_flip_and_crop(
     return {**batch, "image": crops}
 
 
+def cutout(
+    batch: dict[str, np.ndarray], rng: np.random.Generator, size: int = 16
+) -> dict[str, np.ndarray]:
+    """Blank one random ``size`` x ``size`` square in each image (DeVries & Taylor, 2017).
+
+    The square's centre is uniform over the image, so it can hang off an edge and
+    hide less. Pixels are standardized, so zero is the dataset's mean colour.
+    """
+    images = batch["image"]
+    n, h, w, _ = images.shape
+    top = rng.integers(0, h, (n, 1)) - size // 2
+    left = rng.integers(0, w, (n, 1)) - size // 2
+    rows = (np.arange(h) >= top) & (np.arange(h) < top + size)
+    cols = (np.arange(w) >= left) & (np.arange(w) < left + size)
+    hidden = rows[:, :, None] & cols[:, None, :]
+    return {**batch, "image": images * ~hidden[..., None]}
+
+
 def load_arrays(
     name: str, split: str, limit: int | None = None
 ) -> dict[str, np.ndarray]:
@@ -96,6 +114,7 @@ def make_datasets(
     train_limit: int | None = None,
     test_limit: int | None = None,
     augment: bool = False,
+    cutout_size: int = 0,
 ) -> tuple[ArrayDataset, ArrayDataset]:
     """Train and test ``ArrayDataset``s for ``name`` ("mnist" or "cifar10").
 
@@ -103,15 +122,25 @@ def make_datasets(
     restore; test batches come in a fixed order and restart for every
     evaluation, so each eval sees the same examples. ``*_limit`` keeps only the
     first N examples, for quick runs. ``augment`` applies
-    ``random_flip_and_crop`` to training batches; test batches are never augmented.
+    ``random_flip_and_crop`` to training batches, and a non-zero ``cutout_size``
+    follows it with ``cutout``; test batches are never augmented.
     """
     if name not in DATASETS:
         raise ValueError(f"Unknown dataset {name!r}; choose from {sorted(DATASETS)}")
+    if cutout_size and not augment:
+        raise ValueError("cutout_size needs augment=True")
+
+    def flip_crop_and_cutout(batch, rng):
+        return cutout(random_flip_and_crop(batch, rng), rng, cutout_size)
+
+    transform = random_flip_and_crop if augment else None
+    if cutout_size:
+        transform = flip_crop_and_cutout
     train = ArrayDataset(
         load_arrays(name, "train", train_limit),
         batch_size=batch_size,
         seed=seed,
-        transform=random_flip_and_crop if augment else None,
+        transform=transform,
     )
     test = ArrayDataset(
         load_arrays(name, "test", test_limit),
