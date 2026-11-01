@@ -5,13 +5,14 @@ the shared library. Longer projects (`tinystories`, `wm`, `dotsAndBoxes`,
 `bundler`) have their own READMEs. The rest of this page is about the posts.
 
 One `pNN_*` folder per blog post. Each post trains a small model on a known
-dataset and answers one question about its insides with a figure.
+dataset and builds intuition for one question by looking inside the model. Figures
+come first: a post doesn't need a measured comparison of architectures.
 
 | Post | Folder | Question | Status |
 | --- | --- | --- | --- |
 | 0 | [`p00_module_from_scratch`](p00_module_from_scratch/) | What is a pytree, and how did "every array is a parameter" end up training our RoPE tables? | Draft notebooks |
-| 1 | [`p01_cnn_mnist`](p01_cnn_mnist/) | Why does a CNN work? | Draft post |
-| 2 | [`p02_char_gpt`](p02_char_gpt/) | When does a small GPT learn to copy? | Not started |
+| 1 | [`p01_cnn_mnist`](p01_cnn_mnist/) | Why does a CNN work? | Published |
+| 2 | [`p02_tinystories`](p02_tinystories/) | How does a small GPT keep a story straight? | Draft post |
 
 ## Layout of a post
 
@@ -22,11 +23,12 @@ pNN_slug/
   data.py        preprocessing -> ArrayDataset
   model.py       the model (yours to write)
   train.py       data -> ArrayDataset -> Experiment -> checkpoints + logs (yours)
-  figures.py     every figure in the post, rebuilt from checkpoints and logs
+  figures.py     every figure, rebuilt from checkpoints and logs
   *_test.py      tests next to the code they test
   POST.md        the post itself
-  figures/       final figures the post embeds (committed)
+  figures/       final figures (committed)
   outputs/       checkpoints, logs, scratch figures (gitignored)
+  explorer/      optional interactive page, with build_data.py to export its data
 ```
 
 Run anything as a module from the repo root, e.g.
@@ -57,7 +59,20 @@ need the same thing, it moves into `toylib`.
 - **Predict first.** Write the prediction in `POST.md` before running the
   experiment that answers it.
 - **Figures are rebuilt by code.** Every figure in `figures/` comes from
-  `figures.py`, so re-running training regenerates the post.
+  `figures.py`, so re-running training regenerates the post. Passing figure names
+  rebuilds only those.
+- **Look before you claim.** A post states what its figure shows, checked by opening the
+  figure. Exploratory results get rechecked when they become figures, and if the
+  prediction was wrong, the post says so. Label a suggestion as one: a few
+  evidence maps can suggest a cause but don't measure one.
+- **Heavy training runs remotely.** Use a Colab TPU for anything slow on a laptop, with
+  metrics on W&B and checkpoints in GCS, as in `p01_cnn_mnist/COLAB.md`. Checkpoints are
+  saved every 50 epochs or so, so a lost runtime can resume. Run only one training job
+  at a time on the Mac.
+- **Explorers run the real model.** Export it to plain JavaScript, with no framework, and
+  check the forward pass against JAX with a parity script. Save results for chosen photos
+  so the page opens at once, and load the weights in a Web Worker only when a reader
+  asks for a live run.
 
 ## Post template (`POST.md`)
 
@@ -69,3 +84,24 @@ need the same thing, it moves into `toylib`.
 6. **Try it yourself**: one command, and one thing to change.
 
 1,500 to 2,500 words and three to five figures, each with a one-sentence takeaway as its caption.
+
+## Publishing
+
+Posts go on [anujkhare.github.io](https://anujkhare.github.io/), a Hugo site built from a
+separate repo. Add the post to `POSTS` in `publish.py`, then copy it across:
+
+```bash
+uv run python -m toylib_projects.publish p01_cnn_mnist --site ../anujkhare.github.io
+```
+
+`POST.md` stays the source of truth, so make edits here and publish again. Write it for
+readers of the website: link code with full GitHub URLs, link the explorer as
+`/explorers/<name>/`, and keep private resources such as the GCS bucket out of it.
+
+Then build from the website repo and push both its repos. The source is the repo itself,
+and the live site is the separate repo in `public/`. Use a plain `hugo` build, because
+`hugo server` writes localhost links into `public/`:
+
+```bash
+hugo
+```

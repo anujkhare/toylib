@@ -87,7 +87,7 @@ All done.
 4. ~~**`return_intermediates`.**~~ On the small CNN and the ResNet.
 5. ~~**`figures.py`.**~~ Every figure, rebuilt from checkpoints.
 6. ~~**The explorer.**~~ The Imagenette ResNet, with a live forward pass in the browser.
-7. ~~**`POST.md`.**~~ A draft for you to edit.
+7. ~~**`POST.md`.**~~ Published on the website.
 
 ## Files
 

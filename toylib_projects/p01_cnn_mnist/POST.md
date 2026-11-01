@@ -1,7 +1,7 @@
 # Why does a CNN work?
 
-*Draft. The interactive version follows one photo through the network and runs it in your
-browser: [the explorer](https://claude.ai/artifact/7PHGAvw9eTgFG61rAKUhwY) (private until shared).*
+*[The explorer](/explorers/why-cnn/) follows one photo through the network and runs it in
+your browser.*
 
 A photo shows a man holding a large fish. A trained network says "tench", and it is right.
 It has no notion of men or fish. It has 2.8 million numbers and 18 layers of arithmetic.
@@ -79,7 +79,7 @@ average over positions       256
 linear                        10
 ```
 
-Code: [`resnet.py`](resnet.py). The block is two 3x3 convolutions with GroupNorm, plus a skip.
+Code: [`resnet.py`](https://github.com/anujkhare/toylib/blob/master/toylib_projects/p01_cnn_mnist/resnet.py). The block is two 3x3 convolutions with GroupNorm, plus a skip.
 
 ## What the layers see
 
@@ -163,11 +163,9 @@ augmentation, so 200 epochs took about 40 minutes.
 
 ## Try it yourself
 
-Rebuild every figure from the checkpoints:
+Open [the explorer](/explorers/why-cnn/), upload your own photo, and cover the part you think
+matters. Try something outside the ten classes, and see how sure it still is.
 
-```bash
-GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.figures
-```
-
-Then upload your own photo to the explorer and cover the part you think matters. Try
-something outside the ten classes, and see how sure it still is.
+All the code is in [toylib](https://github.com/anujkhare/toylib/tree/master/toylib_projects/p01_cnn_mnist).
+To see weight sharing for yourself, change the channels of the small CNN in `model.py`, count
+its parameters, and compare that with the MLP.
