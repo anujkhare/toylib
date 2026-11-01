@@ -62,7 +62,7 @@ over 5 times larger in the last.
 | --- | --- | --- | --- |
 | Linear | 36.8% | 35.5% | `01_imagenette_baselines.ipynb`, 768,000 parameters |
 | MLP, 256 hidden units | 63.9% | 58.1% | `01_imagenette_baselines.ipynb`, 19.7M parameters |
-| Small CNN | | 80.8% at epoch 100, on 3,600 test images | Paused: see `COLAB.md` on bucket access. 368,842 parameters |
+| Small CNN | 99.3% | 82.9% | `01_imagenette_baselines.ipynb`, 368,842 parameters |
 | ResNet-18 shape, width 32 | 100% | 87.4% | `01_imagenette_colab.ipynb`, 2.8M parameters |
 
 Every model uses the same recipe: 200 epochs, the same augmentation and the same optimizer.
@@ -78,8 +78,7 @@ debugging. Figure code is fair game for help.
 
 1. ~~**Data and the final model.**~~ Done: loaders, `resnet.py`, and the trained checkpoints.
 2. ~~**Linear model and MLP**~~ Done: `model.py`, with figures from `figures.py`.
-3. **A small CNN on Imagenette,** your CNN with pooling added for 160x160. The model is
-   done and overfits one batch. *Done when:* the paused run finishes and it's in the table.
+3. ~~**A small CNN on Imagenette**~~ Done: your CNN with pooling added for 160x160.
 4. ~~**`return_intermediates`**~~ Done for the small CNN.
 5. **`figures.py`** with the views in sections 5, 7, 8 and 9. *Done when:* each figure has a
    one-sentence takeaway you can defend.
