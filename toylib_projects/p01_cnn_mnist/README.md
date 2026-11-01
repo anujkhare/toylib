@@ -38,7 +38,8 @@ Each is one session. You write the code; ask for review, tests or debugging.
 
 ## Files so far
 
-- `mnist.py`, `cifar10.py`: download once, return raw uint8 NHWC arrays and int32 labels.
+- `mnist.py`, `cifar10.py`, `imagenette.py`: download once, return raw uint8 NHWC arrays
+  and int32 labels.
 - `data.py`: MNIST / CIFAR-10 -> standardized float32 NHWC -> `ArrayDataset`.
 - `model.py`: `ModelConfig`, `build_model`, `forward` (harness wiring) around the
   `CNN` and `loss_fn`.
@@ -47,6 +48,7 @@ Each is one session. You write the code; ask for review, tests or debugging.
   full training through `Experiment`, and test-set results from the checkpoint.
 - `01_data_and_pipeline_cifar10.ipynb`: the same notebook for CIFAR-10.
 - `resnet.py`: residual networks for CIFAR-10, kept apart from `model.py`.
+- `01_imagenette_colab.ipynb`: a ResNet-18-shaped model on 160x160 Imagenette, on a Colab TPU.
 - `01_resnets_colab.ipynb`: the final Wide ResNet-20 on a Colab TPU, with metrics on W&B,
   checkpoints in GCS, and resuming after a lost runtime. `COLAB.md` shows how to run
   it with the Colab CLI.

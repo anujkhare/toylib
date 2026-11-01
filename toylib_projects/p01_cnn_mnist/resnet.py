@@ -12,6 +12,10 @@ Two differences from the paper:
 * ``residual=False`` drops the skip connections, leaving a plain network of the
   same depth, to measure what they contribute.
 
+Larger images need a wider view, so the config can also add stages and give the
+stem a larger, strided kernel. The Imagenette model has ``num_stages=4``,
+``blocks_per_stage=2`` and a 7x7 stem with stride 2, the layout of ResNet-18.
+
 It reuses ``model.forward`` and ``model.loss_fn``: only the architecture differs.
 """
 
@@ -33,6 +37,9 @@ class ResNetConfig:
     blocks_per_stage: int = 3
     residual: bool = True
     num_groups: int = 8
+    num_stages: int = 3
+    stem_kernel_size: int = 3
+    stem_stride: int = 1
 
 
 class ResidualBlock(module.Module):
@@ -97,16 +104,24 @@ class ResNet(module.Module):
     blocks_per_stage: int = 3
     residual: bool = True
     num_groups: int = 8
+    num_stages: int = 3
+    stem_kernel_size: int = 3
+    stem_stride: int = 1
     key: jt.PRNGKeyArray
 
     def init(self) -> None:
         c = self.image_shape[-1]
-        stages = (self.width, 2 * self.width, 4 * self.width)
+        stages = [self.width * 2**i for i in range(self.num_stages)]
         num_blocks = len(stages) * self.blocks_per_stage
         keys = jax.random.split(self.key, num_blocks + 2)
 
         self.stem = layers.Conv2D(
-            in_channels=c, out_channels=self.width, use_bias=False, key=keys[0]
+            in_channels=c,
+            out_channels=self.width,
+            kernel_size=self.stem_kernel_size,
+            stride=self.stem_stride,
+            use_bias=False,
+            key=keys[0],
         )
         self.stem_norm = layers.GroupNorm(
             num_features=self.width, num_groups=self.num_groups
@@ -162,6 +177,9 @@ def build_resnet(config: ResNetConfig, key: jax.Array) -> ResNet:
         blocks_per_stage=config.blocks_per_stage,
         residual=config.residual,
         num_groups=config.num_groups,
+        num_stages=config.num_stages,
+        stem_kernel_size=config.stem_kernel_size,
+        stem_stride=config.stem_stride,
         key=key,
     )
     net.init()

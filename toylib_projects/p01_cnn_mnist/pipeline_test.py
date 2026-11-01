@@ -82,6 +82,34 @@ def test_cutout_blanks_one_square_per_image():
     assert (hidden[:, 0, :].any(axis=1)).any() and (hidden[:, -1, :].any(axis=1)).any()
 
 
+def test_random_resized_crop_of_a_constant_image_stays_constant():
+    images = np.full((16, 200, 200, 3), 90, np.uint8)
+    out = data.random_resized_crop(images, np.random.default_rng(0), 160)
+    assert out.shape == (16, 160, 160, 3)
+    assert out.dtype == np.uint8
+    assert (out == 90).all()
+
+
+def test_random_resized_crop_samples_inside_the_box():
+    # Pixel values equal their row, so a crop's values give its position.
+    rows = np.arange(200, dtype=np.uint8)[:, None, None] * np.ones((1, 200, 3), np.uint8)
+    images = np.stack([rows] * 64)
+    out = data.random_resized_crop(images, np.random.default_rng(1), 160)
+    assert out.min() >= 0 and out.max() <= 199
+    steps = np.diff(out[:, :, 0, 0], axis=1)
+    assert (steps >= 0).all()  # No flips or reordering of rows.
+    # Different zooms: narrower boxes advance fewer source rows per output row.
+    zoom = steps.mean(axis=1)
+    assert zoom.min() < 0.8 < 1.1 < zoom.max()
+
+
+def test_center_crop_takes_the_middle():
+    images = np.arange(10 * 10).reshape(1, 10, 10, 1)
+    out = data.center_crop(images, 4)
+    assert out.shape == (1, 4, 4, 1)
+    assert out[0, 0, 0, 0] == 33
+
+
 def test_cutout_size_needs_augment():
     with pytest.raises(ValueError, match="augment"):
         data.make_datasets("cifar10", batch_size=8, cutout_size=16)

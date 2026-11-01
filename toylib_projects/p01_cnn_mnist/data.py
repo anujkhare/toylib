@@ -7,11 +7,13 @@ model trains on (float32, standardized per channel, NHWC) and wraps them in
     {"image": float32 (B, H, W, C), "label": int32 (B,)}
 """
 
+import concurrent.futures
 import dataclasses
 
 import numpy as np
+from PIL import Image
 
-from toylib_projects.p01_cnn_mnist import cifar10, mnist
+from toylib_projects.p01_cnn_mnist import cifar10, imagenette, mnist
 from toylib.harness.data import ArrayDataset
 
 
@@ -40,11 +42,20 @@ DATASETS = {
         mean=(0.4914, 0.4822, 0.4465),
         std=(0.2470, 0.2435, 0.2616),
     ),
+    # Stored at 200x200; ``make_imagenette_datasets`` crops to 160x160 per batch.
+    # Statistics are ImageNet's, which Imagenette is a subset of.
+    "imagenette": DatasetInfo(
+        load=imagenette.load,
+        image_shape=(160, 160, 3),
+        class_names=imagenette.CLASS_NAMES,
+        mean=(0.485, 0.456, 0.406),
+        std=(0.229, 0.224, 0.225),
+    ),
 }
 
 
 def preprocess(images: np.ndarray, info: DatasetInfo) -> np.ndarray:
-    """uint8 [0, 255] -> float32, zero mean and unit variance per channel."""
+    """[0, 255] -> float32, zero mean and unit variance per channel."""
     x = images.astype(np.float32) / 255.0
     return (x - np.asarray(info.mean, np.float32)) / np.asarray(info.std, np.float32)
 
@@ -93,6 +104,48 @@ def cutout(
     cols = (np.arange(w) >= left) & (np.arange(w) < left + size)
     hidden = rows[:, :, None] & cols[:, None, :]
     return {**batch, "image": images * ~hidden[..., None]}
+
+
+_RESIZE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+
+
+def random_resized_crop(
+    images: np.ndarray,
+    rng: np.random.Generator,
+    size: int,
+    scale: tuple[float, float] = (0.35, 1.0),
+    ratio: tuple[float, float] = (3 / 4, 4 / 3),
+) -> np.ndarray:
+    """Crop a random box from each uint8 image and resize it to ``size``.
+
+    The box covers a fraction of the image drawn from ``scale``, with an aspect
+    ratio drawn from ``ratio``, so the model sees objects at many sizes.
+    """
+    n, h, w, c = images.shape
+    area = rng.uniform(*scale, n) * h * w
+    aspect = np.exp(rng.uniform(*np.log(ratio), n))
+    box_h = np.minimum(np.sqrt(area / aspect), h)
+    box_w = np.minimum(np.sqrt(area * aspect), w)
+    top = rng.uniform(0, 1, n) * (h - box_h)
+    left = rng.uniform(0, 1, n) * (w - box_w)
+
+    crops = np.empty((n, size, size, c), dtype=np.uint8)
+
+    def resize_one(i):
+        box = (left[i], top[i], left[i] + box_w[i], top[i] + box_h[i])
+        crops[i] = Image.fromarray(images[i]).resize(
+            (size, size), Image.Resampling.BILINEAR, box=box
+        )
+
+    list(_RESIZE_POOL.map(resize_one, range(n)))  # PIL resizes outside the GIL.
+    return crops
+
+
+def center_crop(images: np.ndarray, size: int) -> np.ndarray:
+    """The central ``size`` x ``size`` square of each image."""
+    top = (images.shape[1] - size) // 2
+    left = (images.shape[2] - size) // 2
+    return images[:, top : top + size, left : left + size]
 
 
 def load_arrays(
@@ -147,5 +200,50 @@ def make_datasets(
         batch_size=eval_batch_size,
         shuffle=False,
         restart_each_iter=True,
+    )
+    return train, test
+
+
+def make_imagenette_datasets(
+    batch_size: int,
+    eval_batch_size: int = 400,
+    seed: int = 0,
+    cutout_size: int = 0,
+    limit: int | None = None,
+) -> tuple[ArrayDataset, ArrayDataset]:
+    """Train and test ``ArrayDataset``s for Imagenette.
+
+    Unlike ``make_datasets``, the arrays stay uint8 and every batch is cropped
+    and standardized as it is served, since float32 copies would take 8 GB.
+    Training batches get a random resized crop, a flip, and ``cutout`` if
+    ``cutout_size`` is set. Test batches get a centre crop. ``limit`` keeps only
+    the first N examples of each split, for quick runs.
+    """
+    info = DATASETS["imagenette"]
+    size = info.image_shape[0]
+
+    def augment(batch, rng):
+        images = random_resized_crop(batch["image"], rng, size)
+        flip = rng.random(len(images)) < 0.5
+        images[flip] = images[flip, :, ::-1]
+        out = {**batch, "image": preprocess(images, info)}
+        return cutout(out, rng, cutout_size) if cutout_size else out
+
+    def evaluate(batch, rng):
+        return {**batch, "image": preprocess(center_crop(batch["image"], size), info)}
+
+    def arrays(split):
+        images, labels = info.load(split)
+        return {"image": images[:limit], "label": labels[:limit]}
+
+    train = ArrayDataset(
+        arrays("train"), batch_size=batch_size, seed=seed, transform=augment
+    )
+    test = ArrayDataset(
+        arrays("test"),
+        batch_size=eval_batch_size,
+        shuffle=False,
+        restart_each_iter=True,
+        transform=evaluate,
     )
     return train, test

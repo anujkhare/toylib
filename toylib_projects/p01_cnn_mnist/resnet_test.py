@@ -23,6 +23,24 @@ def test_shapes_through_the_stages(residual):
     assert acts["block8"].shape == (4, 8, 8, 64)
 
 
+def test_imagenette_layout_ends_at_10x10():
+    config = resnet.ResNetConfig(
+        image_shape=(160, 160, 3),
+        width=32,
+        blocks_per_stage=2,
+        num_stages=4,
+        stem_kernel_size=7,
+        stem_stride=2,
+    )
+    net = resnet.build_resnet(config, jax.random.key(0))
+    logits, acts = net(jnp.zeros((2, 160, 160, 3)), return_intermediates=True)
+
+    assert logits.shape == (2, 10)
+    assert net.stem.weights.shape == (7, 7, 3, 32)
+    assert acts["stem"].shape == (2, 80, 80, 32)
+    assert acts["block7"].shape == (2, 10, 10, 256)
+
+
 def test_only_stage_changes_get_a_projection():
     net = resnet.build_resnet(resnet.ResNetConfig(), jax.random.key(0))
     assert [i for i, b in enumerate(net.blocks) if b.project is not None] == [3, 6]

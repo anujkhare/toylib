@@ -1,16 +1,22 @@
 # Running a notebook on a Colab TPU
 
-`01_resnets_colab.ipynb` trains the final Wide ResNet-20, which is too slow for a laptop
-CPU. Google's [Colab CLI](https://github.com/googlecolab/google-colab-cli) rents a Colab
+Two notebooks train models too slow for a laptop CPU. Google's [Colab CLI](https://github.com/googlecolab/google-colab-cli) rents a Colab
 machine and runs the notebook on it from a shell, so these commands work from your terminal
 or a Claude Code session.
+
+| Notebook | Model | Bucket folder | W&B project |
+| --- | --- | --- | --- |
+| `01_imagenette_colab.ipynb` | ResNet-18 shape, width 32, 160px | `toylib-p01-imagenette/resnet18w32_e200` | `toylib-p01-imagenette` |
+| `01_resnets_colab.ipynb` | Wide ResNet-20, CIFAR-10 | `toylib-p01-cifar10/resnet20w32_cutout_e100` | `toylib-p01-cifar10` |
+
+The commands below use the Imagenette notebook, so swap the names for the other one.
 
 Three things to know first:
 
 - Colab gets the code from GitHub, not your working copy, so **push before you run**. The
   notebook's `BRANCH` says which branch it clones.
 - Files on the runtime disappear with it, so checkpoints go straight to
-  `gs://tinystories-checkpoints/toylib-p01-cifar10/` and metrics go to W&B.
+  `gs://tinystories-checkpoints/` and metrics go to W&B.
 - A runtime is billed while it exists, even when idle. A `v5e1` costs about 3.1 compute
   units an hour. Stop it when you're done.
 
@@ -117,13 +123,13 @@ Each run adds a key, and an account can only hold 10, so remove old ones when yo
 this allows 24 hours. The `--env` values are file paths and a project name, not secrets.
 
 ```bash
-colab --auth=adc exec -s p01 -f toylib_projects/p01_cnn_mnist/01_resnets_colab.ipynb --timeout 86400 --env GOOGLE_APPLICATION_CREDENTIALS=/content/.gcs_key.json --env CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=/content/.gcs_key.json --env GOOGLE_CLOUD_PROJECT=practicalml-db49f
+colab --auth=adc exec -s p01 -f toylib_projects/p01_cnn_mnist/01_imagenette_colab.ipynb --timeout 86400 --env GOOGLE_APPLICATION_CREDENTIALS=/content/.gcs_key.json --env CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=/content/.gcs_key.json --env GOOGLE_CLOUD_PROJECT=practicalml-db49f
 ```
 
 The notebook installs the repo, checks the bucket and the accelerator, times the model, and
 then trains it. It stops early if the runtime can't read the bucket, has no accelerator, or
 has no W&B key. Live output appears only in the terminal running this command. Outputs are
-saved to `01_resnets_colab_output.ipynb` when `exec` ends, and that file is gitignored.
+saved to a `_output.ipynb` file next to the notebook when `exec` ends, and that file is gitignored.
 
 If this command loses its connection or times out, the training cell should keep running on
 the kernel.
@@ -135,10 +141,10 @@ colab --auth=adc status -s p01
 ```
 
 ```bash
-gcloud storage ls gs://tinystories-checkpoints/toylib-p01-cifar10/resnet20w32_cutout_e100/
+gcloud storage ls gs://tinystories-checkpoints/toylib-p01-imagenette/resnet18w32_e200/
 ```
 
-Curves are on W&B in the project `toylib-p01-cifar10`. A checkpoint at step 0 and a W&B run
+Curves are on W&B in the notebook's project. A checkpoint at step 0 and a W&B run
 mean the bucket and the key both work.
 
 ## Finish
@@ -166,7 +172,7 @@ gcloud iam service-accounts keys delete KEY_ID --iam-account=toylib-colab@practi
 ## If the runtime disappears
 
 Repeat **Start a runtime** and **Run**. The run restores its newest checkpoint from the
-bucket, so you lose at most five epochs. It should print `resuming at step ...`. If it prints
+bucket, so you lose only the epochs since it, at most 10 on Imagenette. It should print `resuming at step ...`. If it prints
 `starting fresh` instead, stop and check the bucket for its folder.
 
 ## Change what runs
@@ -182,11 +188,12 @@ finds.
 
 ## Getting results back
 
-The run has a folder of checkpoints in the bucket, one per 5 epochs. Code on your machine can
-load them directly, using the bucket path as the checkpoint directory:
+The run has a folder of checkpoints in the bucket. Code on your machine can
+load them directly, using the bucket path as the checkpoint directory. Set
+`GOOGLE_CLOUD_PROJECT=practicalml-db49f` in the environment first:
 
 ```python
-net = inference.load_model(template, "gs://tinystories-checkpoints/toylib-p01-cifar10/resnet20w32_cutout_e100")
+net = inference.load_model(template, "gs://tinystories-checkpoints/toylib-p01-imagenette/resnet18w32_e200")
 ```
 
 ## Known limits
