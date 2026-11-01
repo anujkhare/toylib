@@ -1,15 +1,11 @@
 import jax
 import jaxtyping
-import typing
 
 from toylib.nn import layers
 from toylib.nn import module
 
 
 class MLP(module.Module):
-    output_layer: layers.Linear
-    hidden_layers: typing.List[module.Module]
-
     in_features: int
     hidden_dims: list[int]
     out_features: int
