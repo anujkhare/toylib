@@ -13,13 +13,17 @@ exploratory runs on the trained model, and those figures still need writing up p
 
 1. **The hook.** The trained network looks at a rat holding a French horn and says French
    horn. What happened in between?
-2. **One template per class.** A linear model learns one image per class. *Tried:* its
-   templates are noise, and it scores 73% on train and 30% on test. A church has no single
-   average appearance. Why it fails: one template, tied to fixed pixel positions.
-3. **Hidden layers.** An MLP can combine features, but a first layer of 256 units on
-   160x160 photos already needs 19.7M weights, seven times the whole final model, and it
-   must relearn every pattern at every position. Show its hidden weights, and what a small
-   shift does to its output.
+2. **One template per class.** A linear model learns one image per class. Its templates
+   are noise, and it scores 35.5% on test. Without augmentation, on 40x40 pixels, it reaches
+   73% on train and only 30% on test: it can memorize photos but not learn them. A church
+   has no single average appearance, and one template tied to fixed pixel positions
+   can't describe one.
+3. **Hidden layers.** Hidden units let an MLP combine features, and it reaches 58.1%. Its
+   hidden weights are the argument for what comes next: they are real patterns, such as
+   colour blobs, stripes and bars, but each spans the whole image and is fixed to one place
+   in the frame. The same stripe elsewhere needs a new unit. That took 19.7M weights, seven
+   times the whole final model, and more than 50 times the small CNN, which beats it.
+   Add what a small shift does to its output.
 4. **Convolution.** Share one small filter across every position. Work one by hand, then
    show that the output keeps the input's layout: a feature map.
 5. **What the layers see.** One photo through the stages, 80x80 down to 10x10. *Tried:* this
@@ -56,10 +60,13 @@ over 5 times larger in the last.
 
 | Model | Train | Test | Source |
 | --- | --- | --- | --- |
-| Linear, 40x40 pixels | 73% | 30% | Exploratory; 1,500 Adam steps, no augmentation |
-| MLP | | | Milestone 2 |
-| Small CNN | | | Milestone 3 |
-| ResNet-18 shape, width 32 | 100% | 87.4% | `01_imagenette_colab.ipynb`, checkpoints in GCS |
+| Linear | 36.8% | 35.5% | `01_imagenette_baselines.ipynb`, 768,000 parameters |
+| MLP, 256 hidden units | 63.9% | 58.1% | `01_imagenette_baselines.ipynb`, 19.7M parameters |
+| Small CNN | | 80.8% at epoch 100, on 3,600 test images | Paused: see `COLAB.md` on bucket access. 368,842 parameters |
+| ResNet-18 shape, width 32 | 100% | 87.4% | `01_imagenette_colab.ipynb`, 2.8M parameters |
+
+Every model uses the same recipe: 200 epochs, the same augmentation and the same optimizer.
+Train accuracy is on clean images, and test accuracy uses all 3,925 images.
 
 CIFAR-10 work before this: the small CNN reached 81.9% and Wide ResNet-20 93.1%.
 `EXPLAINER_PLAN.md` covers the interactive page.
@@ -70,13 +77,10 @@ Each is one session. You write the models and training code; ask for review, tes
 debugging. Figure code is fair game for help.
 
 1. ~~**Data and the final model.**~~ Done: loaders, `resnet.py`, and the trained checkpoints.
-2. **Linear model and MLP** on Imagenette, in `model.py`. *Done when:* both have test
-   accuracy in the table, and you have a figure of the linear templates and of the MLP's
-   hidden weights.
-3. **A small CNN on Imagenette,** your CNN with pooling added for 160x160. *Done when:* it's
-   in the table, and it overfits one batch first.
-4. **`return_intermediates`** on the small CNN, so `figures.py` can treat both CNNs alike.
-   *Done when:* a shape trace matches your hand calculation.
+2. ~~**Linear model and MLP**~~ Done: `model.py`, with figures from `figures.py`.
+3. **A small CNN on Imagenette,** your CNN with pooling added for 160x160. The model is
+   done and overfits one batch. *Done when:* the paused run finishes and it's in the table.
+4. ~~**`return_intermediates`**~~ Done for the small CNN.
 5. **`figures.py`** with the views in sections 5, 7, 8 and 9. *Done when:* each figure has a
    one-sentence takeaway you can defend.
 6. **The explorer** on the Imagenette model, per `EXPLAINER_PLAN.md`.
@@ -94,6 +98,8 @@ debugging. Figure code is fair game for help.
   full training through `Experiment`, and test-set results from the checkpoint.
 - `01_data_and_pipeline_cifar10.ipynb`: the same notebook for CIFAR-10.
 - `resnet.py`: residual networks for CIFAR-10, kept apart from `model.py`.
+- `01_imagenette_baselines.ipynb`: the linear model, MLP and small CNN on Imagenette.
+- `figures.py`: the post's figures, from checkpoints in the bucket.
 - `01_imagenette_colab.ipynb`: a ResNet-18-shaped model on 160x160 Imagenette, on a Colab TPU.
 - `01_resnets_colab.ipynb`: the final Wide ResNet-20 on a Colab TPU, with metrics on W&B,
   checkpoints in GCS, and resuming after a lost runtime. `COLAB.md` shows how to run

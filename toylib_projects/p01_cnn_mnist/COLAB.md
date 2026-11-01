@@ -1,12 +1,13 @@
 # Running a notebook on a Colab TPU
 
-Two notebooks train models too slow for a laptop CPU. Google's [Colab CLI](https://github.com/googlecolab/google-colab-cli) rents a Colab
+Three notebooks train models too slow for a laptop CPU. Google's [Colab CLI](https://github.com/googlecolab/google-colab-cli) rents a Colab
 machine and runs the notebook on it from a shell, so these commands work from your terminal
 or a Claude Code session.
 
 | Notebook | Model | Bucket folder | W&B project |
 | --- | --- | --- | --- |
 | `01_imagenette_colab.ipynb` | ResNet-18 shape, width 32, 160px | `toylib-p01-imagenette/resnet18w32_e200` | `toylib-p01-imagenette` |
+| `01_imagenette_baselines.ipynb` | Linear, MLP and small CNN. Pick with `--env RUNS_TO_TRAIN=small_cnn` | `toylib-p01-imagenette/<run>_e200` | `toylib-p01-imagenette` |
 | `01_resnets_colab.ipynb` | Wide ResNet-20, CIFAR-10 | `toylib-p01-cifar10/resnet20w32_cutout_e100` | `toylib-p01-cifar10` |
 
 The commands below use the Imagenette notebook, so swap the names for the other one.
@@ -81,6 +82,14 @@ gcloud iam service-accounts create toylib-colab --project=practicalml-db49f --di
 
 ```bash
 gcloud storage buckets add-iam-policy-binding gs://tinystories-checkpoints --member=serviceAccount:toylib-colab@practicalml-db49f.iam.gserviceaccount.com --role=roles/storage.objectAdmin
+```
+
+The account also needs to read the bucket's metadata. Without this, a run fails with a
+`403` and `storage.buckets.get` as soon as checkpoints already exist, which means it can't
+resume:
+
+```bash
+gcloud storage buckets add-iam-policy-binding gs://tinystories-checkpoints --member=serviceAccount:toylib-colab@practicalml-db49f.iam.gserviceaccount.com --role=roles/storage.legacyBucketReader
 ```
 
 If the first command says the IAM API is off, enable it and run the command again:
