@@ -1,6 +1,6 @@
 """Every figure in the post, from checkpoints in the GCS bucket.
 
-    GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.figures
+    GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.post.figures
 
 Writes PNGs to ``figures/``. The ResNet passes run on the CPU, so this takes minutes.
 Name figures after the command to rebuild only those.
@@ -23,7 +23,7 @@ from toylib_projects.p01_cnn_mnist import data, imagenette, model, resnet
 
 CHECKPOINT_ROOT = "gs://tinystories-checkpoints/toylib-p01-imagenette"
 IMAGE_SHAPE = (160, 160, 3)
-OUTPUT_DIR = pathlib.Path(model.__file__).parent / "figures"
+OUTPUT_DIR = pathlib.Path(__file__).parent / "figures"
 INFO = data.DATASETS["imagenette"]
 
 SMALL_CNN = model.ModelConfig(IMAGE_SHAPE, channels=(32, 64, 128, 128), pools=(True,) * 4)

@@ -3,7 +3,7 @@
 Reads the checkpoints in the bucket and writes ``data.js`` and ``weights.js`` next to
 this file. ``weights.js`` loads only when a reader asks for a live forward pass::
 
-    GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.explorer.build_data
+    GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.post.explorer.build_data
 """
 
 import base64
@@ -14,7 +14,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from toylib_projects.p01_cnn_mnist import data, figures, imagenette
+from toylib_projects.p01_cnn_mnist import data, imagenette
+from toylib_projects.p01_cnn_mnist.post import figures
 
 HERE = pathlib.Path(__file__).parent
 # Channels kept per stage: the strongest on each photo, scaled to uint8.

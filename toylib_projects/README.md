@@ -31,6 +31,9 @@ pNN_slug/
   explorer/      optional interactive page, with build_data.py to export its data
 ```
 
+`p01_cnn_mnist` keeps its notebooks and their Colab guide in `notebooks/`, and everything for
+the post, including `figures.py` and `explorer/`, in `post/`.
+
 Run anything as a module from the repo root, e.g.
 `uv run python -m toylib_projects.p01_cnn_mnist.train`.
 
@@ -66,7 +69,7 @@ need the same thing, it moves into `toylib`.
   prediction was wrong, the post says so. Label a suggestion as one: a few
   evidence maps can suggest a cause but don't measure one.
 - **Heavy training runs remotely.** Use a Colab TPU for anything slow on a laptop, with
-  metrics on W&B and checkpoints in GCS, as in `p01_cnn_mnist/COLAB.md`. Checkpoints are
+  metrics on W&B and checkpoints in GCS, as in `p01_cnn_mnist/notebooks/COLAB.md`. Checkpoints are
   saved every 50 epochs or so, so a lost runtime can resume. Run only one training job
   at a time on the Mac.
 - **Explorers run the real model.** Export it to plain JavaScript, with no framework, and

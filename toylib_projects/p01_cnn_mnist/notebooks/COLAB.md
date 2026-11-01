@@ -6,9 +6,9 @@ or a Claude Code session.
 
 | Notebook | Model | Bucket folder | W&B project |
 | --- | --- | --- | --- |
-| `01_imagenette_colab.ipynb` | ResNet-18 shape, width 32, 160px | `toylib-p01-imagenette/resnet18w32_e200` | `toylib-p01-imagenette` |
-| `01_imagenette_baselines.ipynb` | Linear, MLP and small CNN. Pick with `--env RUNS_TO_TRAIN=small_cnn` | `toylib-p01-imagenette/<run>_e200` | `toylib-p01-imagenette` |
-| `01_resnets_colab.ipynb` | Wide ResNet-20, CIFAR-10 | `toylib-p01-cifar10/resnet20w32_cutout_e100` | `toylib-p01-cifar10` |
+| `05_imagenette_resnet_colab.ipynb` | ResNet-18 shape, width 32, 160px | `toylib-p01-imagenette/resnet18w32_e200` | `toylib-p01-imagenette` |
+| `04_imagenette_baselines.ipynb` | Linear, MLP and small CNN. Pick with `--env RUNS_TO_TRAIN=small_cnn` | `toylib-p01-imagenette/<run>_e200` | `toylib-p01-imagenette` |
+| `03_cifar10_resnet_colab.ipynb` | Wide ResNet-20, CIFAR-10 | `toylib-p01-cifar10/resnet20w32_cutout_e100` | `toylib-p01-cifar10` |
 
 The commands below use the Imagenette notebook, so swap the names for the other one.
 
@@ -132,7 +132,7 @@ Each run adds a key, and an account can only hold 10, so remove old ones when yo
 this allows 24 hours. The `--env` values are file paths and a project name, not secrets.
 
 ```bash
-colab --auth=adc exec -s p01 -f toylib_projects/p01_cnn_mnist/01_imagenette_colab.ipynb --timeout 86400 --env GOOGLE_APPLICATION_CREDENTIALS=/content/.gcs_key.json --env CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=/content/.gcs_key.json --env GOOGLE_CLOUD_PROJECT=practicalml-db49f
+colab --auth=adc exec -s p01 -f toylib_projects/p01_cnn_mnist/05_imagenette_resnet_colab.ipynb --timeout 86400 --env GOOGLE_APPLICATION_CREDENTIALS=/content/.gcs_key.json --env CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=/content/.gcs_key.json --env GOOGLE_CLOUD_PROJECT=practicalml-db49f
 ```
 
 The notebook installs the repo, checks the bucket and the accelerator, times the model, and

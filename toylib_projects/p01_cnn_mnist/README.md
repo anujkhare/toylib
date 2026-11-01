@@ -8,8 +8,8 @@ shapes.
 
 ## The story
 
-Each section ends on a problem that the next one solves. `POST.md` is the written version,
-and `figures.py` rebuilds every figure.
+Each section ends on a problem that the next one solves. `post/POST.md` is the written version,
+and `post/figures.py` rebuilds every figure.
 
 1. **The hook.** The trained network looks at a man holding a fish and says tench, and the
    evidence sits on the fish. What happened in between?
@@ -66,28 +66,28 @@ the last.
 
 | Model | Train | Test | Source |
 | --- | --- | --- | --- |
-| Linear | 36.8% | 35.5% | `01_imagenette_baselines.ipynb`, 768,000 parameters |
-| MLP, 256 hidden units | 63.9% | 58.1% | `01_imagenette_baselines.ipynb`, 19.7M parameters |
-| Small CNN | 99.3% | 82.9% | `01_imagenette_baselines.ipynb`, 368,842 parameters |
-| ResNet-18 shape, width 32 | 100% | 87.4% | `01_imagenette_colab.ipynb`, 2.8M parameters |
+| Linear | 36.8% | 35.5% | `notebooks/04_imagenette_baselines.ipynb`, 768,000 parameters |
+| MLP, 256 hidden units | 63.9% | 58.1% | `notebooks/04_imagenette_baselines.ipynb`, 19.7M parameters |
+| Small CNN | 99.3% | 82.9% | `notebooks/04_imagenette_baselines.ipynb`, 368,842 parameters |
+| ResNet-18 shape, width 32 | 100% | 87.4% | `notebooks/05_imagenette_resnet_colab.ipynb`, 2.8M parameters |
 
 Every model uses the same recipe: 200 epochs, the same augmentation and the same optimizer.
 Train accuracy is on clean images, and test accuracy uses all 3,925 images.
 
 CIFAR-10 work before this: the small CNN reached 81.9% and Wide ResNet-20 93.1%.
-The interactive page is `explorer/`, and `EXPLAINER_PLAN.md` records how it was planned.
+The interactive page is `post/explorer/`, and `post/EXPLAINER_PLAN.md` records how it was planned.
 
 ## Milestones
 
 All done.
 
 1. ~~**Data and the final model.**~~ Loaders, `resnet.py`, and the trained checkpoints.
-2. ~~**Linear model and MLP.**~~ `model.py`, with figures from `figures.py`.
+2. ~~**Linear model and MLP.**~~ `model.py`, with figures from `post/figures.py`.
 3. ~~**A small CNN on Imagenette.**~~ Your CNN with pooling added for 160x160.
 4. ~~**`return_intermediates`.**~~ On the small CNN and the ResNet.
-5. ~~**`figures.py`.**~~ Every figure, rebuilt from checkpoints.
+5. ~~**`post/figures.py`.**~~ Every figure, rebuilt from checkpoints.
 6. ~~**The explorer.**~~ The Imagenette ResNet, with a live forward pass in the browser.
-7. ~~**`POST.md`.**~~ Published on the website.
+7. ~~**`post/POST.md`.**~~ Published on the website.
 
 ## Files
 
@@ -97,20 +97,20 @@ All done.
 - `model.py`: `ModelConfig`, `build_model`, `forward` (harness wiring) around the
   `CNN` and `loss_fn`.
 - `metrics.py`: `Accuracy` for `Task(metrics=[...])`.
-- `01_data_and_pipeline.ipynb`: MNIST data, shape trace, overfitting one batch,
+- `notebooks/01_mnist.ipynb`: MNIST data, shape trace, overfitting one batch,
   full training through `Experiment`, and test-set results from the checkpoint.
-- `01_data_and_pipeline_cifar10.ipynb`: the same notebook for CIFAR-10.
+- `notebooks/02_cifar10.ipynb`: the same notebook for CIFAR-10.
 - `resnet.py`: residual networks for CIFAR-10, kept apart from `model.py`.
-- `01_imagenette_baselines.ipynb`: the linear model, MLP and small CNN on Imagenette.
-- `figures.py`: the post's figures, from checkpoints in the bucket, written to `figures/`.
-- `POST.md`: the post.
-- `01_imagenette_colab.ipynb`: a ResNet-18-shaped model on 160x160 Imagenette, on a Colab TPU.
-- `01_resnets_colab.ipynb`: the final Wide ResNet-20 on a Colab TPU, with metrics on W&B,
-  checkpoints in GCS, and resuming after a lost runtime. `COLAB.md` shows how to run
+- `notebooks/04_imagenette_baselines.ipynb`: the linear model, MLP and small CNN on Imagenette.
+- `post/figures.py`: the post's figures, from checkpoints in the bucket, written to `post/figures/`.
+- `post/POST.md`: the post.
+- `notebooks/05_imagenette_resnet_colab.ipynb`: a ResNet-18-shaped model on 160x160 Imagenette, on a Colab TPU.
+- `notebooks/03_cifar10_resnet_colab.ipynb`: the final Wide ResNet-20 on a Colab TPU, with metrics on W&B,
+  checkpoints in GCS, and resuming after a lost runtime. `notebooks/COLAB.md` shows how to run
   it with the Colab CLI.
-- `explorer/`: an interactive page around the trained ResNet, with a real forward pass
-  in the browser. `explorer/build_data.py` regenerates `data.js` and `weights.js`, and
-  `node explorer/parity_check.js` checks `cnn.js` against JAX.
+- `post/explorer/`: an interactive page around the trained ResNet, with a real forward pass
+  in the browser. `post/explorer/build_data.py` regenerates `data.js` and `weights.js`, and
+  `node post/explorer/parity_check.js` checks `cnn.js` against JAX.
 - `pipeline_test.py`: the same wiring on synthetic data. `model_test.py`: the
   model and loss. `resnet_test.py`: the ResNet. `datasets_test.py`: the loaders.
 
@@ -119,6 +119,6 @@ All done.
 ```bash
 uv sync --extra posts
 uv run pytest toylib_projects/p01_cnn_mnist
-GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.figures
-GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.explorer.build_data
+GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.post.figures
+GOOGLE_CLOUD_PROJECT=practicalml-db49f uv run python -m toylib_projects.p01_cnn_mnist.post.explorer.build_data
 ```

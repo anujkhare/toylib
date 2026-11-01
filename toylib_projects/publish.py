@@ -29,6 +29,7 @@ class Post:
     description: str
     tags: tuple[str, ...]
     explorer: str | None = None  # Its folder under /explorers/ on the site.
+    folder: str = "."  # Where the post's files sit inside the project.
 
 
 POSTS = {
@@ -38,6 +39,7 @@ POSTS = {
         description="From a linear model to a ResNet on Imagenette, looking inside at each step.",
         tags=("CNN", "visualization", "from scratch"),
         explorer="why-cnn",
+        folder="post",
     ),
 }
 
@@ -83,7 +85,8 @@ def to_standalone_page(html: str, post_url: str) -> str:
 
 
 def publish(name: str, site: pathlib.Path) -> None:
-    post, source = POSTS[name], PROJECTS / name
+    post = POSTS[name]
+    source = PROJECTS / name / post.folder
     text = (source / "POST.md").read_text()
     bundle = site / "content" / "posts" / post.slug
     (bundle / "figures").mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,8 @@ import jax
 import numpy as np
 
 from toylib.nn import layers
-from toylib_projects.p01_cnn_mnist import figures, resnet
+from toylib_projects.p01_cnn_mnist import resnet
+from toylib_projects.p01_cnn_mnist.post import figures
 
 
 def test_as_images_centers_on_grey():
