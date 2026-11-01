@@ -1,7 +1,10 @@
 # Why does a CNN work?
 
-*[The explorer](/explorers/why-cnn/) follows one photo through the network and runs it in
-your browser.*
+*The interactive figures here follow one photo through the real network. Pick another or
+upload your own in the bar below, and it stays with you as you read. A new photo runs the
+whole network in your browser.*
+
+<!-- explorer: photo -->
 
 A photo shows a man holding a large fish. A trained network says "tench", and it is right.
 It has no notion of men or fish. It has 2.8 million numbers and 18 layers of arithmetic.
@@ -63,8 +66,12 @@ as accurate by being right about different photos.
 A convolution takes a small grid of weights and slides it across the image. At each position
 it multiplies and adds, so the output is high where the patch matches. Two things follow.
 The weights are shared, so a stripe detector works everywhere. And the output keeps the
-input's layout, which makes it a map: this feature, at these places. Stack these with some
-downsampling and each layer works on the previous layer's maps.
+input's layout, which makes it a map: this feature, at these places. Try one on your photo,
+and change its weights:
+
+<!-- explorer: convolution -->
+
+Stack these with some downsampling and each layer works on the previous layer's maps.
 
 The final model looks like this:
 
@@ -93,11 +100,18 @@ than the weights.
 
 The arches, the horn's tubing and the outline of the fish are all clear in the early maps.
 By 10x10 the picture is gone, and what's left is a statement of what the network found.
+Here are the same stages for your photo. Select a channel to enlarge it.
+
+<!-- explorer: stages -->
 
 Late units can do this because their reach grows. A unit after the first convolution can see
 7 pixels across. By the last stage it can see 219, more than the whole photo. The gradient
 of a central unit shows that it mostly uses the middle of that reach, as
 [Luo et al.](https://arxiv.org/abs/1701.04128) found.
+
+![Effective receptive fields](figures/effective_fields.png)
+
+*A unit can reach the whole box, but it mostly depends on the pixels near its centre.*
 
 ## Going deep breaks things
 
@@ -125,6 +139,11 @@ arithmetic and not an approximation. The first figure in this post is that map. 
 lands on the object, with exceptions: the parachute's evidence sits on the skydiver and the
 smoke trail, not the canopy.
 
+Here is the same split for your photo, for any class. Drag across the photo to cover part of
+it, and the network runs again.
+
+<!-- explorer: evidence -->
+
 ## Where it fails
 
 Chain saws and gas pumps are the weakest classes, at 78%. The most confused pair is gas pumps
@@ -136,7 +155,9 @@ and cassette players, in both directions: 24 and 22 test photos.
 
 The evidence for the wrong class gathers around those panels. That's a suggestion from a
 handful of maps, not a measured cause, but it's a better explanation than the accuracy table
-gives.
+gives. Open a mistake below to check its evidence for yourself.
+
+<!-- explorer: mistakes -->
 
 The model is also sure of itself. It's at 100% on clean training images, and its median top
 probability is 99.98% on correct test photos and still 78.5% on wrong ones.
@@ -163,7 +184,7 @@ augmentation, so 200 epochs took about 40 minutes.
 
 ## Try it yourself
 
-Open [the explorer](/explorers/why-cnn/), upload your own photo, and cover the part you think
+Upload your own photo in the bar at the top of the post, and cover the part you think
 matters. Try something outside the ten classes, and see how sure it still is.
 
 All the code is in [toylib](https://github.com/anujkhare/toylib/tree/master/toylib_projects/p01_cnn_mnist).

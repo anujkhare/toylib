@@ -75,7 +75,8 @@ Every model uses the same recipe: 200 epochs, the same augmentation and the same
 Train accuracy is on clean images, and test accuracy uses all 3,925 images.
 
 CIFAR-10 work before this: the small CNN reached 81.9% and Wide ResNet-20 93.1%.
-The interactive page is `post/explorer/`, and `post/EXPLAINER_PLAN.md` records how it was planned.
+The interactive views are in `post/explorer/`, and `post/EXPLAINER_PLAN.md` records how they
+were planned.
 
 ## Milestones
 
@@ -86,7 +87,7 @@ All done.
 3. ~~**A small CNN on Imagenette.**~~ Your CNN with pooling added for 160x160.
 4. ~~**`return_intermediates`.**~~ On the small CNN and the ResNet.
 5. ~~**`post/figures.py`.**~~ Every figure, rebuilt from checkpoints.
-6. ~~**The explorer.**~~ The Imagenette ResNet, with a live forward pass in the browser.
+6. ~~**The explorer.**~~ Views inside the post, with a live forward pass in the browser.
 7. ~~**`post/POST.md`.**~~ Published on the website.
 
 ## Files
@@ -108,8 +109,8 @@ All done.
 - `notebooks/03_cifar10_resnet_colab.ipynb`: the final Wide ResNet-20 on a Colab TPU, with metrics on W&B,
   checkpoints in GCS, and resuming after a lost runtime. `notebooks/COLAB.md` shows how to run
   it with the Colab CLI.
-- `post/explorer/`: an interactive page around the trained ResNet, with a real forward pass
-  in the browser. `post/explorer/build_data.py` regenerates `data.js` and `weights.js`, and
+- `post/explorer/`: interactive views for the post, around the trained ResNet, with a real
+  forward pass in the browser. `post/explorer/build_data.py` regenerates `data.js` and `weights.js`, and
   `node post/explorer/parity_check.js` checks `cnn.js` against JAX.
 - `pipeline_test.py`: the same wiring on synthetic data. `model_test.py`: the
   model and loss. `resnet_test.py`: the ResNet. `datasets_test.py`: the loaders.

@@ -1,0 +1,68 @@
+/* Views embedded in a post. Colours come from the site theme's own variables, so its
+   light and dark modes both apply. Colours that encode data are fixed in explorer.js. */
+.explorer {
+  --ex-accent: #3a86e0; --ex-warm: #e0622a;
+  --ex-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  margin-block: 28px; display: grid; gap: 12px; min-width: 0; font-size: 1rem;
+}
+.explorer canvas { display: block; max-width: 100%; }
+.explorer [hidden] { display: none !important; }
+.explorer .ex-loading { color: var(--secondary); font-family: var(--ex-mono); font-size: 0.75rem; }
+.explorer[data-view="convolution"] { min-height: 330px; }
+.explorer[data-view="stages"] { min-height: 420px; }
+.explorer[data-view="evidence"] { min-height: 400px; }
+.explorer[data-view="mistakes"] { min-height: 520px; }
+.ex-cap { font-family: var(--ex-mono); font-size: 0.72rem; line-height: 1.4; color: var(--secondary); }
+.ex-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.ex-col { display: grid; gap: 6px; min-width: 0; }
+.ex-tile { background: var(--code-bg); border: 1px solid var(--border); }
+.ex-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ex-chip, .ex-btn { border: 1px solid var(--border); background: transparent; color: var(--primary); padding: 4px 10px;
+  font-family: var(--ex-mono); font-size: 0.72rem; line-height: 1.4; cursor: pointer; border-radius: 0; }
+.ex-chip:hover, .ex-btn:hover { border-color: var(--ex-accent); }
+.ex-chip[aria-pressed="true"] { background: var(--ex-accent); border-color: var(--ex-accent); color: #fff; }
+.explorer :focus-visible { outline: 2px solid var(--ex-accent); outline-offset: 2px; }
+.ex-sum { margin: 0; font-family: var(--ex-mono); font-size: 0.72rem; line-height: 1.6; white-space: pre-wrap; background: var(--code-bg); padding: 8px 10px; }
+
+/* The photo bar stays pinned while the post scrolls. */
+.explorer[data-view="photo"] { position: sticky; top: 0; z-index: 10; background: var(--theme); border-block: 1px solid var(--border);
+  padding-block: 8px; gap: 8px; min-height: 66px; }
+.ex-bar { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.ex-bar canvas { width: 48px; height: 48px; }
+.ex-verdict { font-weight: 700; font-size: 0.95rem; line-height: 1.2; }
+.ex-truth { color: var(--secondary); font-size: 0.75rem; line-height: 1.3; }
+.ex-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.ex-bar .ex-cap { grid-column: 1 / -1; }
+.ex-bar .ex-cap:empty { display: none; }
+.ex-upload { position: relative; display: inline-block; }
+.ex-upload input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.ex-upload input:focus-visible + span { outline: 2px solid var(--ex-accent); outline-offset: 2px; }
+.ex-gallery { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ex-drawer { max-height: 46vh; overflow-y: auto; display: grid; gap: 8px; }
+.ex-thumb { padding: 0; border: 2px solid transparent; background: none; cursor: pointer; line-height: 0; }
+.ex-thumb canvas { width: 52px; height: 52px; }
+.ex-thumb[aria-pressed="true"] { border-color: var(--ex-warm); }
+
+.ex-kernel { display: grid; grid-template-columns: repeat(3, 52px); gap: 3px; }
+.ex-kernel input { width: 100%; text-align: center; padding: 6px 2px; border: 1px solid var(--border); background: var(--theme);
+  color: var(--primary); font-family: var(--ex-mono); font-size: 0.76rem; }
+.ex-square { width: 180px; height: 180px; }
+.ex-channels { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 3px; flex: 1 1 260px; min-width: 0; }
+.ex-channels button { padding: 0; border: 2px solid transparent; background: none; cursor: pointer; line-height: 0; }
+.ex-channels canvas { width: 100%; height: auto; image-rendering: pixelated; }
+.ex-channels button[aria-pressed="true"] { border-color: var(--ex-warm); }
+.ex-big { width: 180px; height: 180px; image-rendering: pixelated; }
+.ex-paint { touch-action: none; cursor: crosshair; }
+.ex-scroll { overflow-x: auto; }
+.ex-confusion { display: grid; grid-template-columns: 112px repeat(10, minmax(28px, 1fr)); gap: 1px; font-family: var(--ex-mono); font-size: 0.6rem; min-width: 420px; }
+.ex-confusion .ex-label { color: var(--secondary); display: flex; align-items: center; overflow: hidden; white-space: nowrap; }
+.ex-confusion .ex-top { writing-mode: vertical-rl; transform: rotate(180deg); height: 92px; justify-content: flex-start; }
+.ex-confusion .ex-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; }
+@media (max-width: 520px) {
+  .ex-square, .ex-big { width: 100%; height: auto; }
+  .ex-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .ex-pair .ex-wide { order: 3; grid-column: 1 / -1; }
+  .ex-truth { display: none; }
+  .ex-bar { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 8px; }
+  .ex-bar canvas { width: 40px; height: 40px; }
+}

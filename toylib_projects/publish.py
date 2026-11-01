@@ -3,8 +3,9 @@
     uv run python -m toylib_projects.publish p01_cnn_mnist --site ../anujkhare.github.io
 
 The post becomes a page bundle, so ``figures/`` links keep working. Only figures the post
-embeds are copied. The explorer goes under ``static/``, with the document head that the
-artifact host would otherwise add. Rebuilding and pushing the site is a separate step.
+embeds are copied. A line ``<!-- explorer: stages -->`` in ``POST.md`` becomes one interactive
+view, through the site's ``explorer`` shortcode, and the view's files go under ``static/``.
+Rebuilding and pushing the site is a separate step.
 """
 
 import argparse
@@ -14,12 +15,7 @@ import re
 import shutil
 
 PROJECTS = pathlib.Path(__file__).parent
-EXPLORER_FILES = ("index.html", "data.js", "weights.js", "cnn.js", "worker.js")
-EXPLORER_HEAD = """<!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-"""
+EXPLORER_FILES = ("explorer.css", "explorer.js", "data.js", "weights.js", "cnn.js", "worker.js")
 
 
 @dataclasses.dataclass
@@ -64,24 +60,31 @@ UseHugoToc: true
 """
 
 
+def embed_views(post: Post, text: str) -> str:
+    """Turn each ``<!-- explorer: view -->`` line into the site's shortcode."""
+    return re.sub(
+        r"^<!-- explorer: (\w+) -->$",
+        lambda m: f'{{{{< explorer "{post.explorer}" "{m[1]}" >}}}}',
+        text,
+        flags=re.MULTILINE,
+    )
+
+
 def to_bundle(post: Post, text: str) -> str:
     """``POST.md`` -> a Hugo page; its first line is the ``# title``."""
     heading, _, body = text.partition("\n")
     if not heading.startswith("# "):
         raise ValueError(f"POST.md must start with a '# title' line, not {heading!r}")
-    return front_matter(post, heading[2:]) + body
+    return front_matter(post, heading[2:]) + embed_views(post, body)
 
 
 def embedded_figures(text: str) -> list[str]:
     return re.findall(r"!\[[^\]]*\]\(figures/([^)]+)\)", text)
 
 
-def to_standalone_page(html: str, post_url: str) -> str:
-    """Add the document head, and a link back to the post."""
-    if "<footer>" not in html:
-        raise ValueError("the explorer page has no <footer>")
-    link = f'<footer>\n    <p><a href="{post_url}">Read the post</a></p>'
-    return EXPLORER_HEAD + html.replace("<footer>", link, 1)
+def redirect_page(url: str) -> str:
+    """The page left at the explorer's old address."""
+    return f'<!doctype html>\n<meta charset="utf-8">\n<meta http-equiv="refresh" content="0; url={url}">\n<link rel="canonical" href="{url}">\n<a href="{url}">Read the post</a>\n'
 
 
 def publish(name: str, site: pathlib.Path) -> None:
@@ -100,8 +103,7 @@ def publish(name: str, site: pathlib.Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     for file in EXPLORER_FILES:
         shutil.copy(source / "explorer" / file, target / file)
-    page = (source / "explorer" / "index.html").read_text()
-    (target / "index.html").write_text(to_standalone_page(page, f"/posts/{post.slug}/"))
+    (target / "index.html").write_text(redirect_page(f"/posts/{post.slug}/"))
 
 
 if __name__ == "__main__":

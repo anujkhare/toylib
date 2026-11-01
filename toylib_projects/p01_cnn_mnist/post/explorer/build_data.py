@@ -1,4 +1,4 @@
-"""Export the trained ResNet and everything the explorer page shows.
+"""Export the trained ResNet and everything the post's interactive views show.
 
 Reads the checkpoints in the bucket and writes ``data.js`` and ``weights.js`` next to
 this file. ``weights.js`` loads only when a reader asks for a live forward pass::
@@ -11,10 +11,9 @@ import json
 import pathlib
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 
-from toylib_projects.p01_cnn_mnist import data, imagenette
+from toylib_projects.p01_cnn_mnist import imagenette
 from toylib_projects.p01_cnn_mnist.post import figures
 
 HERE = pathlib.Path(__file__).parent
@@ -22,7 +21,6 @@ HERE = pathlib.Path(__file__).parent
 CHANNELS = {"stem": 8, "block1": 8, "block3": 12, "block5": 16, "block7": 16}
 CORRECT_PER_CLASS = 2
 MISTAKES = 10
-FIELD_PHOTOS = 32
 
 
 def b64(array: np.ndarray, dtype: str) -> str:
@@ -97,44 +95,6 @@ def export_activations(acts: dict[str, np.ndarray]) -> dict:
     return out
 
 
-def fields(net) -> dict[str, dict]:
-    """The effective receptive field of a central unit, at 80x80, as uint8."""
-    images = jnp.asarray(data.preprocess(figures.test_set()[1][:FIELD_PHOTOS], figures.INFO))
-    sizes = figures.receptive_fields(figures.RESNET)
-    out = {}
-    for stage, side in figures.STAGES.items():
-
-        def unit(x, stage=stage, side=side):
-            return net(x, return_intermediates=True)[1][stage][:, side // 2, side // 2, :].sum()
-
-        field = np.abs(np.asarray(jax.grad(unit)(images))).mean((0, 3))
-        small = field.reshape(80, 2, 80, 2).mean((1, 3))
-        out[stage] = {
-            "reach": sizes[stage],
-            "side": side,
-            "map": b64(np.sqrt(small / small.max()) * 255, "u1"),
-        }
-    return out
-
-
-def depth_curves() -> dict:
-    _, raw, labels = figures.test_set()
-    images = jax.image.resize(
-        jnp.asarray(data.preprocess(raw[:64], figures.INFO)), (64, 32, 32, 3), "bilinear"
-    )
-    runs = {
-        "no norm, no skips": (False, False),
-        "GroupNorm": (False, True),
-        "skips": (True, False),
-        "GroupNorm and skips": (True, True),
-    }
-    out = {}
-    for name, (residual, norm) in runs.items():
-        grads, acts = figures._depth_probe(images, jnp.asarray(labels[:64]), residual, norm)
-        out[name] = {"gradient": grads, "activation": acts}
-    return out
-
-
 def main() -> None:
     net = figures.trained_resnet()
     _, raw, labels = figures.test_set()
@@ -168,8 +128,6 @@ def main() -> None:
         "logits": logits[picks].round(3).tolist(),
         "cams": b64(np.moveaxis(cams, -1, 1), "<f4"),
         "activations": export_activations(acts),
-        "fields": fields(net),
-        "depth": depth_curves(),
         "confusion": confusion.tolist(),
         "testAccuracy": round(float(right.mean()), 4),
         "medianConfidence": {

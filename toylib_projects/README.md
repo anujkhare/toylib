@@ -28,7 +28,7 @@ pNN_slug/
   POST.md        the post itself
   figures/       final figures (committed)
   outputs/       checkpoints, logs, scratch figures (gitignored)
-  explorer/      optional interactive page, with build_data.py to export its data
+  explorer/      optional interactive views, with build_data.py to export their data
 ```
 
 `p01_cnn_mnist` keeps its notebooks and their Colab guide in `notebooks/`, and everything for
@@ -98,8 +98,8 @@ uv run python -m toylib_projects.publish p01_cnn_mnist --site ../anujkhare.githu
 ```
 
 `POST.md` stays the source of truth, so make edits here and publish again. Write it for
-readers of the website: link code with full GitHub URLs, link the explorer as
-`/explorers/<name>/`, and keep private resources such as the GCS bucket out of it.
+readers of the website: link code with full GitHub URLs, and keep private resources such
+as the GCS bucket out of it. A line `<!-- explorer: stages -->` places an interactive view.
 
 Then build from the website repo and push both its repos. The source is the repo itself,
 and the live site is the separate repo in `public/`. Use a plain `hugo` build, because
