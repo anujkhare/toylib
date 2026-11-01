@@ -21,34 +21,20 @@ is cheap, a real forward pass running in the reader's browser.
 
 ## The story
 
-The narrative is now the post's: see "The story" in `README.md`. The published page still
-follows the earlier CIFAR-10 story, and it needs moving to the Imagenette model.
+The narrative is the post's: see "The story" in `README.md`. The published page follows it
+on the Imagenette model.
 
 ## How it is built
 
-The Imagenette model is about 100 times more work per photo than the small CNN: about 1
-billion multiply-adds against 11 million. Scaling from today's 4 ms suggests about 0.4 s per
-photo in plain JavaScript, which is an estimate, not a measurement. That is too slow for
+The Imagenette model takes about 1 billion multiply-adds per photo. In plain JavaScript that
+measured about 0.3 s, and it matches JAX to 0.00001 on four photos. That is too slow for
 sliders, so the page splits into two kinds of view.
 
-- **Cached, instant:** activations for about 30 chosen photos across the stages, weights at
-  a few checkpoints, and the depth curves. The evidence map stays live for these photos,
-  because the head is one linear layer over cached 10x10 activations.
+- **Cached, instant:** activations and every class's evidence map for 30 chosen photos,
+  the effective receptive fields, and the depth curves, in `data.js` (8.5 MB).
 - **Live, on demand:** one forward pass in a Web Worker when a reader uploads or edits a
-  photo, with a progress state. It needs GroupNorm, strided convolutions and skips added to
-  `cnn.js`, and it keeps the parity check against JAX.
-- **Size:** one set of weights is 11 MB, or 15 MB as base64, which is close to the page's
-  16 MB limit per file. Ship one snapshot as a binary file.
-- **Measure first:** time the JavaScript pass before building around it. If it's much
-  slower than 0.4 s, drop live uploads rather than adding a framework.
-
-## Order of work
-
-1. Port the forward pass and pass the parity check, with timing.
-2. Export the cached photos and rebuild the activation view.
-3. Add the evidence map, the depth curves and the mistakes view.
-4. Add upload and painting if timing allows.
-5. Check it at phone width and in both themes.
+  photo. `worker.js` is the only thing that loads `weights.js` (15 MB), so a reader who
+  never asks for a live pass never downloads the weights.
 
 **Not doing:** 3D views, adversarial examples, loss landscapes, and backpropagation
 in the browser. Each is a stretch goal that doesn't serve the core story.

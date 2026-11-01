@@ -1,35 +1,32 @@
-// The post 1 CNN's forward pass in plain JavaScript, on Float32Arrays in HWC order.
-// Every intermediate tensor is returned so the page can draw it.
+// The post's ResNet-18-shaped model in plain JavaScript, on Float32Arrays in HWC order.
+// Each stage's activations are returned so the page can draw them.
 (function (root) {
-  const SHAPES = { conv1: [3, 32], conv2: [32, 64], conv3: [64, 64] };
+  const NUM_GROUPS = 8, EPS = 1e-5;
 
   function decode(base64) {
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     return new Float32Array(bytes.buffer);
   }
 
-  function decodeWeights(w) {
-    const out = {};
-    for (const key of Object.keys(w)) out[key] = decode(w[key]);
-    return out;
-  }
-
   // A tensor is { data, h, w, c }, with data[(y * w + x) * c + channel].
-  function conv3x3(x, weights, bias, outChannels) {
+  // SAME padding, matching jax.lax.conv_general_dilated. Weights are HWIO.
+  function conv(x, weights, kernel, stride, outChannels) {
     const { data, h, w, c } = x;
-    const out = new Float32Array(h * w * outChannels);
-    for (let y = 0; y < h; y++) {
-      for (let px = 0; px < w; px++) {
-        const o = (y * w + px) * outChannels;
-        for (let ky = -1; ky <= 1; ky++) {
-          const sy = y + ky;
-          if (sy < 0 || sy >= h) continue; // SAME padding: outside counts as zero.
-          for (let kx = -1; kx <= 1; kx++) {
-            const sx = px + kx;
+    const oh = Math.ceil(h / stride), ow = Math.ceil(w / stride);
+    const padY = Math.floor(Math.max((oh - 1) * stride + kernel - h, 0) / 2);
+    const padX = Math.floor(Math.max((ow - 1) * stride + kernel - w, 0) / 2);
+    const out = new Float32Array(oh * ow * outChannels);
+    for (let y = 0; y < oh; y++) {
+      for (let px = 0; px < ow; px++) {
+        const o = (y * ow + px) * outChannels;
+        for (let ky = 0; ky < kernel; ky++) {
+          const sy = y * stride - padY + ky;
+          if (sy < 0 || sy >= h) continue; // Outside the image counts as zero.
+          for (let kx = 0; kx < kernel; kx++) {
+            const sx = px * stride - padX + kx;
             if (sx < 0 || sx >= w) continue;
             const s = (sy * w + sx) * c;
-            // Weights are HWIO: (kernel row, kernel column, input, output).
-            const k = ((ky + 1) * 3 + (kx + 1)) * c * outChannels;
+            const k = (ky * kernel + kx) * c * outChannels;
             for (let i = 0; i < c; i++) {
               const v = data[s + i];
               if (v === 0) continue;
@@ -38,10 +35,32 @@
             }
           }
         }
-        for (let oc = 0; oc < outChannels; oc++) out[o + oc] += bias[oc];
       }
     }
-    return { data: out, h, w, c: outChannels };
+    return { data: out, h: oh, w: ow, c: outChannels };
+  }
+
+  // Normalizes per group over height, width and the group's channels, one image at a time.
+  function groupNorm(x, scale, bias) {
+    const { data, c } = x, perGroup = c / NUM_GROUPS, pixels = data.length / c;
+    const out = new Float32Array(data.length);
+    for (let g = 0; g < NUM_GROUPS; g++) {
+      const first = g * perGroup;
+      let sum = 0, squares = 0;
+      for (let p = 0; p < pixels; p++) {
+        for (let i = first; i < first + perGroup; i++) {
+          const v = data[p * c + i];
+          sum += v; squares += v * v;
+        }
+      }
+      const n = pixels * perGroup, mean = sum / n, inverse = 1 / Math.sqrt(squares / n - mean * mean + EPS);
+      for (let p = 0; p < pixels; p++) {
+        for (let i = first; i < first + perGroup; i++) {
+          out[p * c + i] = (data[p * c + i] - mean) * inverse * scale[i] + bias[i];
+        }
+      }
+    }
+    return { ...x, data: out };
   }
 
   function relu(x) {
@@ -50,61 +69,47 @@
     return { ...x, data: out };
   }
 
-  function maxPool(x) {
-    const { data, h, w, c } = x;
-    const oh = h >> 1;
-    const ow = w >> 1;
-    const out = new Float32Array(oh * ow * c);
-    for (let y = 0; y < oh; y++) {
-      for (let px = 0; px < ow; px++) {
-        for (let i = 0; i < c; i++) {
-          const a = data[((2 * y) * w + 2 * px) * c + i];
-          const b = data[((2 * y) * w + 2 * px + 1) * c + i];
-          const d = data[((2 * y + 1) * w + 2 * px) * c + i];
-          const e = data[((2 * y + 1) * w + 2 * px + 1) * c + i];
-          out[(y * ow + px) * c + i] = Math.max(a, b, d, e);
-        }
-      }
-    }
-    return { data: out, h: oh, w: ow, c };
+  function add(a, b) {
+    const out = new Float32Array(a.data.length);
+    for (let i = 0; i < out.length; i++) out[i] = a.data[i] + b.data[i];
+    return { ...a, data: out };
   }
 
-  function forward(image, weights) {
-    const conv1Raw = conv3x3(image, weights.conv1_w, weights.conv1_b, 32);
-    const conv1 = relu(conv1Raw);
-    const pool1 = maxPool(conv1);
-    const conv2Raw = conv3x3(pool1, weights.conv2_w, weights.conv2_b, 64);
-    const conv2 = relu(conv2Raw);
-    const pool2 = maxPool(conv2);
-    const conv3Raw = conv3x3(pool2, weights.conv3_w, weights.conv3_b, 64);
-    const conv3 = relu(conv3Raw);
+  function block(x, w, name, outChannels, stride) {
+    let y = relu(groupNorm(conv(x, w[name + ".conv1"], 3, stride, outChannels), w[name + ".norm1.scale"], w[name + ".norm1.bias"]));
+    y = groupNorm(conv(y, w[name + ".conv2"], 3, 1, outChannels), w[name + ".norm2.scale"], w[name + ".norm2.bias"]);
+    const project = w[name + ".project"];
+    return relu(add(y, project ? conv(x, project, 1, stride, outChannels) : x));
+  }
 
+  function forward(image, w) {
+    const acts = {};
+    let x = relu(groupNorm(conv(image, w.stem, 7, 2, 32), w["stem_norm.scale"], w["stem_norm.bias"]));
+    acts.stem = x;
+    for (let i = 0; i < 8; i++) {
+      const stage = i >> 1;
+      x = block(x, w, `block${i}`, 32 << stage, stage > 0 && i % 2 === 0 ? 2 : 1);
+      acts[`block${i}`] = x;
+    }
     const logits = new Float32Array(10);
-    for (let k = 0; k < 10; k++) logits[k] = weights.head_b[k];
-    const flat = conv3.data;
-    for (let i = 0; i < flat.length; i++) {
-      const v = flat[i];
-      if (v === 0) continue;
-      const row = i * 10;
-      for (let k = 0; k < 10; k++) logits[k] += v * weights.head_w[row + k];
-    }
-    return { conv1Raw, conv1, pool1, conv2Raw, conv2, pool2, conv3Raw, conv3, logits };
-  }
-
-  // How much each of the 8x8 positions adds to one class's score. The sum of
-  // these plus the head's bias is exactly that class's logit.
-  function evidence(conv3, weights, classIndex) {
-    const out = new Float32Array(conv3.h * conv3.w);
-    const { c } = conv3;
-    for (let p = 0; p < out.length; p++) {
-      let sum = 0;
-      for (let i = 0; i < c; i++) {
-        const v = conv3.data[p * c + i];
-        if (v !== 0) sum += v * weights.head_w[(p * c + i) * 10 + classIndex];
+    for (let k = 0; k < 10; k++) {
+      let sum = w["head.bias"][k];
+      for (let i = 0; i < x.c; i++) {
+        let mean = 0;
+        for (let p = i; p < x.data.length; p += x.c) mean += x.data[p];
+        sum += (mean / (x.h * x.w)) * w["head.weights"][i * 10 + k];
       }
-      out[p] = sum;
+      logits[k] = sum;
     }
-    return out;
+    // What each of the 10x10 positions adds to each class, 100 values per class.
+    const cam = new Float32Array(x.h * x.w * 10);
+    for (let p = 0; p < x.h * x.w; p++) {
+      for (let i = 0; i < x.c; i++) {
+        const v = x.data[p * x.c + i];
+        if (v !== 0) for (let k = 0; k < 10; k++) cam[k * x.h * x.w + p] += v * w["head.weights"][i * 10 + k];
+      }
+    }
+    return { acts, logits, cam };
   }
 
   function softmax(logits) {
@@ -114,7 +119,13 @@
     return exp.map((e) => e / total);
   }
 
-  const api = { decode, decodeWeights, conv3x3, relu, maxPool, forward, evidence, softmax, SHAPES };
+  function decodeWeights(bundle) {
+    const all = decode(bundle.data), out = {};
+    for (const [name, offset, length] of bundle.index) out[name] = all.subarray(offset, offset + length);
+    return out;
+  }
+
+  const api = { decode, decodeWeights, conv, groupNorm, relu, forward, softmax };
   if (typeof module !== "undefined") module.exports = api;
   root.CNN = api;
-})(typeof window !== "undefined" ? window : globalThis);
+})(typeof self !== "undefined" ? self : globalThis);

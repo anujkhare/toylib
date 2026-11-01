@@ -10,7 +10,7 @@ dataset and answers one question about its insides with a figure.
 | Post | Folder | Question | Status |
 | --- | --- | --- | --- |
 | 0 | [`p00_module_from_scratch`](p00_module_from_scratch/) | What is a pytree, and how did "every array is a parameter" end up training our RoPE tables? | Draft notebooks |
-| 1 | [`p01_cnn_mnist`](p01_cnn_mnist/) | Is a CNN translation-invariant? | Data and pipeline ready; model next |
+| 1 | [`p01_cnn_mnist`](p01_cnn_mnist/) | Why does a CNN work? | Draft post |
 | 2 | [`p02_char_gpt`](p02_char_gpt/) | When does a small GPT learn to copy? | Not started |
 
 ## Layout of a post
