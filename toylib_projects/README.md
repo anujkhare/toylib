@@ -18,7 +18,7 @@ come first: a post doesn't need a measured comparison of architectures.
 
 ```
 pNN_slug/
-  README.md      the plan: question, milestones, how to run
+  README.md      what it is, results, how to run
   <dataset>.py   loaders for the post's datasets (raw NumPy arrays)
   data.py        preprocessing -> ArrayDataset
   model.py       the model (yours to write)
@@ -59,6 +59,8 @@ need the same thing, it moves into `toylib`.
   `"blocks.0.attn_weights"` to arrays. Under `jit`, mark the flag static.
 - **Checkpoints over training.** Save at fixed step intervals (not only at the
   end); "X over training" figures read them with `inference.checkpoint_steps`.
+- **Plans stay private.** Story outlines, milestones and design docs go in the private
+  plans repo, not here. This repo holds code, published posts and how to run them.
 - **Predict first.** Write the prediction in `POST.md` before running the
   experiment that answers it.
 - **Figures are rebuilt by code.** Every figure in `figures/` comes from
