@@ -11,8 +11,7 @@ library; everything specific to one model or dataset lives in `toylib_projects/`
 | Visualization | `toylib/viz` | Shared figure style, image grids, training curves, heatmaps, GIFs |
 | Projects | `toylib_projects/*` | Posts and longer projects: datasets, models, training scripts, figures |
 
-`toylib_projects/` holds the blog posts (`pNN_*`, see
-[`toylib_projects/README.md`](toylib_projects/README.md)) and longer projects:
+`toylib_projects/` holds the blog posts (`pNN_*`) and longer projects:
 
 - `tinystories`: a GPT-2-style decoder-only language model, following nanochat.
 - `wm`: a text- and action-conditioned video world model trained on Atari Breakout.
