@@ -4,13 +4,13 @@ import dataclasses
 
 # import datasets as hf_datasets
 import jax.numpy as jnp
+import numpy as np
 import pathlib
 import pyarrow.parquet as pq
 import typing
 
 import grain.python as grain
 
-from transformers import AutoTokenizer
 
 
 @dataclasses.dataclass
@@ -18,6 +18,61 @@ class DatasetState:
     """Serializable state for dataset checkpointing."""
 
     pass
+
+
+@dataclasses.dataclass
+class TokenBinDataset:
+    """Random windows from one flat file of uint16 token ids (nanoGPT's `get_batch`).
+
+    The file is memory-mapped, so it can be far larger than RAM. Rows come from
+    random offsets, which keeps a batch from being one contiguous run of text.
+    Iterating never ends. Each batch is a pure function of `(seed, batch index)`, so
+    resuming only needs the index.
+
+    With `repeatable=True` (validation), every `iter()` restarts from the same
+    batches, so eval curves compare like with like.
+    """
+
+    path: str
+    batch_size: int
+    seq_len: int
+    seed: int = 0
+    repeatable: bool = False
+    # Exposed for sampling evaluation; only `Experiment.sampling_evaluation` reads it.
+    tokenizer: typing.Any = None
+
+    def __post_init__(self):
+        self.tokens = np.memmap(self.path, dtype=np.uint16, mode="r")
+        if len(self.tokens) <= self.seq_len:
+            raise ValueError(f"{self.path} is shorter than seq_len ({self.seq_len})")
+        self._index = 0
+
+    def _batch(self, index: int) -> dict[str, np.ndarray]:
+        rng = np.random.default_rng([self.seed, index])
+        offsets = rng.integers(
+            0, len(self.tokens) - self.seq_len, size=self.batch_size
+        )
+        windows = np.stack(
+            [self.tokens[i : i + self.seq_len + 1] for i in offsets]
+        ).astype(np.int32)
+        return {
+            "inputs": windows[:, :-1],
+            "targets": windows[:, 1:],
+            "mask": np.ones_like(windows[:, 1:]),
+        }
+
+    def __iter__(self) -> typing.Iterator[dict[str, np.ndarray]]:
+        if self.repeatable:
+            self._index = 0
+        while True:
+            self._index += 1
+            yield self._batch(self._index - 1)
+
+    def get_state(self) -> dict[str, int]:
+        return {"index": self._index}
+
+    def restore_state(self, state: dict[str, typing.Any]) -> None:
+        self._index = int(state["index"])
 
 
 @dataclasses.dataclass
@@ -31,25 +86,42 @@ class BatchedTokenizedDataset(abc.ABC):
     tokenizer_batch_size: int = 8
     batch_size: int = 128
 
+    # Restart from the first batch on every `iter()`, for validation sets: the
+    # harness iterates anew for each eval and stops after a few batches.
+    repeatable: bool = False
+
     @abc.abstractmethod
     def _get_dataset_iterator(self) -> typing.Iterator:
         raise NotImplementedError
 
     def __post_init__(self):
+        from transformers import AutoTokenizer  # Only the older text loaders need it.
+
         self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
         self.bos_token = self.tokenizer.bos_token_id
         self.token_buffer = collections.deque()  # buffer to hold tokens across batches
 
         self.dataset_iter = self._get_dataset_iterator()
 
+    def _rewind(self) -> None:
+        self.token_buffer.clear()
+        self.dataset_iter = self._get_dataset_iterator()
+
     def __iter__(self):
+        if self.repeatable:
+            self._rewind()
         return self
 
     def __next__(self) -> jnp.ndarray:
         token_needed = self.batch_size * self.seq_len + 1  # 1 for the last target token
         while len(self.token_buffer) < token_needed:
             # Load tokenizer_batch_size sequences from the dataset
-            input_batch = next(self.dataset_iter)
+            try:
+                input_batch = next(self.dataset_iter)
+            except StopIteration:
+                # End of the epoch. Rewind, so that the next `for` loop starts over.
+                self._rewind()
+                raise
             texts = input_batch["text"]
 
             # Tokenize all sequences
@@ -68,6 +140,8 @@ class BatchedTokenizedDataset(abc.ABC):
 
         # Extract needed tokens from the buffer
         tokens = [self.token_buffer.popleft() for _ in range(token_needed)]
+        # The last target is the next batch's first input.
+        self.token_buffer.appendleft(tokens[-1])
 
         # Create jax arrays for inputs and targets
         inputs = jnp.array(tokens[:-1], dtype=jnp.uint16).reshape(
@@ -116,6 +190,10 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
         self._state = DatasetStateParquet()
         super().__post_init__()
 
+    def _rewind(self) -> None:
+        self._state = DatasetStateParquet()
+        super()._rewind()
+
     def list_files(self) -> list[pathlib.Path]:
         base_path = pathlib.Path(self.dataset_path) / self.split
         # Sort for deterministic ordering across runs
@@ -132,8 +210,9 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
 
             # Read row groups from the current file
             for rg_idx in range(self._state.row_group_index, pf.num_row_groups):
-                self._state.row_group_index = rg_idx
                 rg = pf.read_row_group(rg_idx)
+                # Point at the next unread group, so a checkpoint taken now resumes there.
+                self._state.row_group_index = rg_idx + 1
                 yield {"text": rg.column("text").to_pylist()}
 
             # Reset row group index for next file
@@ -147,7 +226,7 @@ class BatchedTokenizedDatasetParquet(BatchedTokenizedDataset):
     def restore_state(self, state: dict[str, typing.Any]) -> None:
         """Restore iterator position from checkpoint."""
         self._state = DatasetStateParquet(**state)
-        self._state.token_buffer = collections.deque(state["token_buffer"])
+        self.token_buffer = collections.deque(state["token_buffer"])
 
         # Recreate the iterator starting from the restored position
         self.dataset_iter = self._get_dataset_iterator()
@@ -184,6 +263,10 @@ class BatchedTokenizedDatasetGrain(BatchedTokenizedDataset):
         # Initialize state tracking before calling parent
         self._state = DatasetStateGrain()
         super().__post_init__()
+
+    def _rewind(self) -> None:
+        self._state = DatasetStateGrain()
+        super()._rewind()
 
     def list_files(self) -> list[pathlib.Path]:
         """List parquet files for the split."""
@@ -227,7 +310,7 @@ class BatchedTokenizedDatasetGrain(BatchedTokenizedDataset):
         """
         # Save the current iterator state
         self._state.sampler_state = self._grain_iterator.get_state()
-        self._state.token_buffer = self.token_buffer.copy()
+        self._state.token_buffer = list(self.token_buffer)
         return dataclasses.asdict(self._state)
 
     def restore_state(self, state: dict[str, typing.Any]) -> None:
@@ -237,7 +320,7 @@ class BatchedTokenizedDatasetGrain(BatchedTokenizedDataset):
             state: State dictionary containing sampler state and token buffer.
         """
         self._state = DatasetStateGrain(**state)
-        self._state.token_buffer = state["token_buffer"].copy()
+        self.token_buffer = collections.deque(state["token_buffer"])
 
         # Recreate the iterator with the restored state
         self.dataset_iter = self._get_dataset_iterator()

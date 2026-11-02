@@ -1,8 +1,7 @@
 # Projects and posts
 
 Everything specific to one model or dataset lives here; `toylib/` keeps only
-the shared library. Longer projects (`tinystories`, `wm`, `dotsAndBoxes`,
-`bundler`) have their own READMEs. The rest of this page is about the posts.
+the shared library. Longer projects (`wm`, `dotsAndBoxes`, `bundler`) have their own READMEs. The rest of this page is about the posts.
 
 One `pNN_*` folder per blog post. Each post trains a small model on a known
 dataset and builds intuition for one question by looking inside the model. Figures
@@ -12,7 +11,7 @@ come first: a post doesn't need a measured comparison of architectures.
 | --- | --- | --- | --- |
 | 0 | [`p00_module_from_scratch`](p00_module_from_scratch/) | What is a pytree, and how did "every array is a parameter" end up training our RoPE tables? | Draft notebooks |
 | 1 | [`p01_cnn_mnist`](p01_cnn_mnist/) | Why does a CNN work? | Published |
-| 2 | [`p02_tinystories`](p02_tinystories/) | How does a small GPT keep a story straight? | Draft post |
+| 2 | [`p02_tinystories`](p02_tinystories/) | How does a small GPT keep a story straight? | First figures from a small local run; d20 run on Colab next |
 
 ## Layout of a post
 

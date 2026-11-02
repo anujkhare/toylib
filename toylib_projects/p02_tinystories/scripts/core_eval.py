@@ -23,11 +23,11 @@ import numpy as np
 import orbax.checkpoint as ocp
 import transformers
 
-import toylib_projects.tinystories.data as ts_data
-import toylib_projects.tinystories.decoder_only_model as ts_model
-import toylib_projects.tinystories.metrics as ts_metrics
-import toylib_projects.tinystories.train as ts_train
-import toylib_projects.tinystories.tokenizer.bytes_per_token as ts_bpt
+import toylib_projects.p02_tinystories.data as ts_data
+import toylib_projects.p02_tinystories.decoder_only_model as ts_model
+import toylib_projects.p02_tinystories.metrics as ts_metrics
+import toylib_projects.p02_tinystories.train as ts_train
+import toylib_projects.p02_tinystories.tokenizer.bytes_per_token as ts_bpt
 
 EVAL_BUNDLE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

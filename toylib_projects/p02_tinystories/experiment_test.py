@@ -11,8 +11,8 @@ from unittest.mock import Mock, MagicMock, patch
 
 from toylib.harness import logger
 from toylib.harness import metrics
-from toylib_projects.tinystories import decoder_only_model
-from toylib_projects.tinystories import experiment
+from toylib_projects.p02_tinystories import decoder_only_model
+from toylib_projects.p02_tinystories import experiment
 import optax
 
 
@@ -70,11 +70,11 @@ class TestExperiment:
         assert exp.model is None
 
     @patch(
-        "toylib_projects.tinystories.experiment.jax.device_put",
+        "toylib_projects.p02_tinystories.experiment.jax.device_put",
         side_effect=lambda x, *a, **kw: x,
     )
     @patch(
-        "toylib_projects.tinystories.experiment.decoder_only_model.DecoderOnlyTransformer"
+        "toylib_projects.p02_tinystories.experiment.decoder_only_model.DecoderOnlyTransformer"
     )
     @patch("optax.adam")
     def test_init_state(self, mock_opt, mock_model_class, mock_device_put):
@@ -625,7 +625,7 @@ class TestExperimentE2E:
 class TestMultiOptimizer:
     """Tests for multi-optimizer functionality."""
 
-    @patch("toylib_projects.tinystories.experiment.optax.multi_transform")
+    @patch("toylib_projects.p02_tinystories.experiment.optax.multi_transform")
     def test_default_single_optimizer(self, mock_multi_transform):
         """Test that default behavior uses a single optimizer for all parameters."""
         mock_dataset = MagicMock()  # iterable, as the Dataset protocol requires
@@ -802,4 +802,60 @@ class TestMultiOptimizer:
             "Parameters should be updated after training step"
         )
 
+        exp.cleanup()
+
+
+class TestSamplingEvaluation:
+    class FakeTokenizer:
+        bos_token_id = 7
+
+        def __call__(self, texts, **_):
+            return {"input_ids": [[1, 2, 3] for _ in texts]}
+
+        def decode(self, ids):
+            return " ".join(str(i) for i in ids)
+
+    def _experiment(self, tmp_path, tokenizer):
+        logged = []
+        dataset = MagicMock(batch_size=2, tokenizer=tokenizer)
+        exp = experiment.Experiment(
+            train_task=experiment.Task(name="train", dataset=dataset),
+            model_config=decoder_only_model.ModelConfig(
+                num_layers=1, num_heads=2, qkv_dim=16, vocab_size=10, seq_len=8
+            ),
+            checkpoint_config=experiment.CheckpointConfig(
+                checkpoint_dir=str(tmp_path / "checkpoints")
+            ),
+            logger_config=experiment.LoggerConfig(log_dir=str(tmp_path)),
+            sampling_prompts=["a prompt"],
+            sampling_max_tokens=3,
+        )
+        exp.init_state()
+        exp.logger_obj = MagicMock()
+        exp.logger_obj.log.side_effect = lambda step, metrics: logged.append(metrics)
+        return exp, logged
+
+    def test_logs_a_sample_per_prompt(self, tmp_path):
+        exp, logged = self._experiment(tmp_path, self.FakeTokenizer())
+        exp.sampling_evaluation()
+        samples = logged[0]["samples"]
+        assert [s["prompt"] for s in samples] == ["a prompt"]
+        assert len(samples[0]["output"].split()) == 3
+        exp.cleanup()
+
+    def test_prompts_start_with_bos(self, tmp_path):
+        exp, _ = self._experiment(tmp_path, self.FakeTokenizer())
+        with patch.object(
+            decoder_only_model, "jit_sample", return_value=jnp.zeros(3, jnp.int32)
+        ) as sample:
+            exp.sampling_evaluation()
+        padded, prompt_len = sample.call_args.args[1:3]
+        assert padded[:4].tolist() == [7, 1, 2, 3]
+        assert prompt_len == 4
+        exp.cleanup()
+
+    def test_skipped_without_a_tokenizer(self, tmp_path):
+        exp, logged = self._experiment(tmp_path, None)
+        exp.sampling_evaluation()
+        assert logged == []
         exp.cleanup()

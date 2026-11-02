@@ -7,7 +7,7 @@ This module provides:
 - Profiled step execution
 
 Usage:
-    from toylib_projects.tinystories.scripts.compile import (
+    from toylib_projects.p02_tinystories.scripts.compile import (
         DummyDataset,
         analyze_memory,
         extract_hlo,

@@ -12,9 +12,9 @@ library; everything specific to one model or dataset lives in `toylib_projects/`
 | Projects | `toylib_projects/*` | Posts and longer projects: datasets, models, training scripts, figures |
 
 `toylib_projects/` holds the blog posts (`pNN_*`, see
-[`toylib_projects/README.md`](toylib_projects/README.md)) and longer projects:
+[`toylib_projects/README.md`](toylib_projects/README.md); `p02_tinystories` is a
+GPT-2-style language model, following nanochat) and longer projects:
 
-- `tinystories`: a GPT-2-style decoder-only language model, following nanochat.
 - `wm`: a text- and action-conditioned video world model trained on Atari Breakout.
 - `dotsAndBoxes`: Monte Carlo tree search for the game Dots and Boxes.
 - `bundler`: bundles a script and the local modules it imports into one file.
@@ -34,7 +34,7 @@ library; everything specific to one model or dataset lives in `toylib_projects/`
 
 ```bash
 uv sync --extra posts --extra dev        # library, harness, viz, data: enough for every post
-uv sync --extra tinystories              # plus the language-model project
+uv sync --extra tinystories              # plus the language-model post (p02)
 uv sync --package toylib-wm              # plus the world-model project
 uv sync --all-extras --all-packages      # everything
 ```
@@ -48,7 +48,7 @@ The core package needs only JAX, optax, einops and jaxtyping. The `harness`,
 ```bash
 uv run pytest toylib                     # core library, harness, viz
 uv run pytest toylib_projects/p01_cnn_mnist # one post
-uv run pytest toylib toylib_projects     # everything (slow; some tinystories tests need network)
+uv run pytest toylib toylib_projects     # everything (slow; some p02 tests need network)
 ```
 
 ## Key locations for AI sessions

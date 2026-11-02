@@ -126,7 +126,7 @@ def token_heatmap(
         color = cmap(norm(value))
         ax.add_patch(mpatches.Rectangle((c, r + 0.08), w, 0.84, facecolor=color, linewidth=0))
         ax.text(c + w / 2, r + 0.5, text, ha="center", va="center", family="monospace",
-                fontsize=9, color=_ink_for(color))
+                fontsize=9, color=_ink_for(color), parse_math=False)
     if title:
         ax.set_title(title, loc="left")
     if colorbar_label:

@@ -5308,12 +5308,14 @@ posts = [
 tinystories = [
     { name = "grain", version = "0.2.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "grain", version = "0.2.15", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "httpx" },
     { name = "jupyter" },
     { name = "orbax-checkpoint" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow" },
     { name = "pyarrow" },
+    { name = "tqdm" },
     { name = "transformers" },
     { name = "wandb" },
 ]
@@ -5336,6 +5338,7 @@ requires-dist = [
     { name = "flask-cors", marker = "extra == 'dotsandboxes-web'", specifier = ">=4.0.0" },
     { name = "gcsfs", marker = "extra == 'gcs'", specifier = ">=2024.0.0" },
     { name = "grain", marker = "extra == 'tinystories'", specifier = ">=0.0.4" },
+    { name = "httpx", marker = "extra == 'tinystories'", specifier = ">=0.24.0" },
     { name = "jax", specifier = ">=0.4.0" },
     { name = "jaxtyping", specifier = ">=0.2.0" },
     { name = "jupyter", marker = "extra == 'tinystories'", specifier = ">=1.0.0" },
@@ -5352,6 +5355,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "toylib", extras = ["harness"], marker = "extra == 'tinystories'" },
     { name = "toylib", extras = ["harness", "viz", "data", "gcs"], marker = "extra == 'posts'" },
+    { name = "tqdm", marker = "extra == 'tinystories'", specifier = ">=4.60.0" },
     { name = "transformers", marker = "extra == 'tinystories'", specifier = ">=4.30.0" },
     { name = "wandb", marker = "extra == 'harness'", specifier = ">=0.25.1" },
 ]
@@ -5439,7 +5443,7 @@ dev = [
 [[package]]
 name = "toylib-tinystories"
 version = "0.0.1"
-source = { editable = "toylib_projects/tinystories" }
+source = { editable = "toylib_projects/p02_tinystories" }
 dependencies = [
     { name = "grain", version = "0.2.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "grain", version = "0.2.15", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },

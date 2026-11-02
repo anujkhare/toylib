@@ -34,7 +34,7 @@ There are a few key differences: framework (jax vs pytorch), nn libary (nanochat
   * [ ] Per-layer scalers
   * [ ] SSSL attention
   * [ ] Value embeddings
-  * [ ] LR schedule
+  * [x] LR schedule
   * [x] Chinchilla optimal total FLOPs
 * [ ] Scaling
   * [x] Memory and parameter analysis
@@ -60,7 +60,7 @@ The `compile.py` script analyzes JAX compilation, memory usage, and generates pr
 ### CLI Usage
 
 ```bash
-python -m toylib_projects.tinystories.scripts.compile \
+python -m toylib_projects.p02_tinystories.scripts.compile \
     --num_devices 8 \
     --output_dir /tmp/compile_analysis \
     --trace_steps 3 \
@@ -72,11 +72,11 @@ python -m toylib_projects.tinystories.scripts.compile \
 
 ```python
 # IMPORTANT: Setup fake devices BEFORE any JAX imports
-from toylib_projects.tinystories.scripts.compile import setup_fake_devices
+from toylib_projects.p02_tinystories.scripts.compile import setup_fake_devices
 setup_fake_devices(num_devices=1)
 
 # Now import and run
-from toylib_projects.tinystories.scripts.compile import CompileConfig, main
+from toylib_projects.p02_tinystories.scripts.compile import CompileConfig, main
 
 config = CompileConfig(
     num_devices=1,

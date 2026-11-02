@@ -3,11 +3,12 @@
 import pathlib
 import tempfile
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from toylib_projects.tinystories import data
+from toylib_projects.p02_tinystories import data
 
 
 @pytest.mark.skip(reason="removed the code for now")
@@ -103,7 +104,6 @@ class TestParquetDataset:
         assert targets.shape == (2, 32)
         assert (inputs[:, 1:] == targets[:, :-1]).all().tolist()
 
-    @pytest.mark.xfail(reason="off-by-one error")
     def test_checkpointing(self, temp_parquet_files):
         """Test saving and restoring dataset state."""
         base_path, split, _ = temp_parquet_files
@@ -370,3 +370,98 @@ class TestGrainDataset:
         # They should produce the same results (same sequence of tokens)
         assert (batch1["inputs"] == batch2["inputs"]).all().tolist()
         assert (batch1["targets"] == batch2["targets"]).all().tolist()
+
+
+class TestParquetEpochs:
+    """The harness loops over a dataset once per epoch and once per eval."""
+
+    @pytest.fixture
+    def dataset_path(self, tmp_path):
+        split_dir = tmp_path / "train"
+        split_dir.mkdir()
+        rows = [f"story {i} has a few words in it" for i in range(8)]
+        pq.write_table(pa.table({"text": rows}), split_dir / "a.parquet", row_group_size=2)
+        return str(tmp_path)
+
+    def test_second_epoch_has_batches(self, dataset_path):
+        dataset = data.BatchedTokenizedDatasetParquet(
+            dataset_path=dataset_path, batch_size=1, seq_len=8, tokenizer_batch_size=2
+        )
+        first = [np.asarray(b["inputs"]) for b in dataset]
+        second = [np.asarray(b["inputs"]) for b in dataset]
+        assert len(first) > 0
+        assert len(first) == len(second)
+        np.testing.assert_array_equal(first[0], second[0])
+
+    def test_repeatable_restarts_on_iter(self, dataset_path):
+        dataset = data.BatchedTokenizedDatasetParquet(
+            dataset_path=dataset_path,
+            batch_size=1,
+            seq_len=8,
+            tokenizer_batch_size=2,
+            repeatable=True,
+        )
+        first = next(iter(dataset))
+        second = next(iter(dataset))
+        np.testing.assert_array_equal(first["inputs"], second["inputs"])
+
+    def test_batches_are_contiguous(self, dataset_path):
+        """No token falls between one batch's targets and the next batch's inputs."""
+        dataset = data.BatchedTokenizedDatasetParquet(
+            dataset_path=dataset_path, batch_size=1, seq_len=8, tokenizer_batch_size=2
+        )
+        first, second = next(dataset), next(dataset)
+        assert first["targets"][0, -1] == second["inputs"][0, 0]
+
+
+class TestTokenBinDataset:
+    @pytest.fixture
+    def path(self, tmp_path):
+        path = tmp_path / "tokens.bin"
+        np.arange(1000, dtype=np.uint16).tofile(path)
+        return str(path)
+
+    def test_targets_are_inputs_shifted_by_one(self, path):
+        batch = next(iter(data.TokenBinDataset(path, batch_size=4, seq_len=16)))
+        assert batch["inputs"].shape == (4, 16)
+        np.testing.assert_array_equal(batch["targets"], batch["inputs"] + 1)
+        assert batch["mask"].all()
+
+    def test_rows_come_from_different_places(self, path):
+        batch = next(iter(data.TokenBinDataset(path, batch_size=4, seq_len=16)))
+        assert len(set(batch["inputs"][:, 0].tolist())) > 1
+
+    def test_never_runs_past_the_end(self, path):
+        dataset = iter(data.TokenBinDataset(path, batch_size=64, seq_len=999))
+        for _ in range(20):
+            batch = next(dataset)
+        assert batch["targets"].max() == 999
+
+    def test_batches_differ_until_restarted_if_repeatable(self, path):
+        dataset = data.TokenBinDataset(path, batch_size=4, seq_len=16, repeatable=True)
+        iterator = iter(dataset)
+        first, second = next(iterator), next(iterator)
+        assert not np.array_equal(first["inputs"], second["inputs"])
+        np.testing.assert_array_equal(first["inputs"], next(iter(dataset))["inputs"])
+
+    def test_training_stream_continues_across_iters(self, path):
+        """Each harness epoch loop must see new batches, not the same ones again."""
+        dataset = data.TokenBinDataset(path, batch_size=4, seq_len=16)
+        first = next(iter(dataset))
+        second = next(iter(dataset))
+        assert not np.array_equal(first["inputs"], second["inputs"])
+
+    def test_resume_gives_the_same_next_batch(self, path):
+        dataset = data.TokenBinDataset(path, batch_size=4, seq_len=16)
+        iterator = iter(dataset)
+        next(iterator)
+        state = dataset.get_state()
+        expected = next(iterator)
+
+        resumed = data.TokenBinDataset(path, batch_size=4, seq_len=16)
+        resumed.restore_state(state)
+        np.testing.assert_array_equal(expected["inputs"], next(iter(resumed))["inputs"])
+
+    def test_rejects_a_file_shorter_than_a_window(self, path):
+        with pytest.raises(ValueError, match="shorter"):
+            data.TokenBinDataset(path, batch_size=1, seq_len=1000)

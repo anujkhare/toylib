@@ -7,7 +7,7 @@ import orbax.checkpoint as ocp
 import pytest
 from pathlib import Path
 
-from toylib_projects.tinystories.scripts.core_eval import (
+from toylib_projects.p02_tinystories.scripts.core_eval import (
     _build_fewshot_prefix,
     _encode_pair,
     _evaluate_task,
@@ -15,8 +15,8 @@ from toylib_projects.tinystories.scripts.core_eval import (
     load_model_from_checkpoint,
     run_sampling,
 )
-from toylib_projects.tinystories import decoder_only_model
-from toylib_projects.tinystories.train import get_model_config
+from toylib_projects.p02_tinystories import decoder_only_model
+from toylib_projects.p02_tinystories.train import get_model_config
 
 
 # ---------------------------------------------------------------------------
