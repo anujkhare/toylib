@@ -11,7 +11,7 @@ come first: a post doesn't need a measured comparison of architectures.
 | --- | --- | --- | --- |
 | 0 | [`p00_module_from_scratch`](p00_module_from_scratch/) | What is a pytree, and how did "every array is a parameter" end up training our RoPE tables? | Draft notebooks |
 | 1 | [`p01_cnn_mnist`](p01_cnn_mnist/) | Why does a CNN work? | Published |
-| 2 | [`p02_tinystories`](p02_tinystories/) | How does a small GPT keep a story straight? | First figures from a small local run; d20 run on Colab next |
+| 2 | [`p02_gpt_web`](p02_gpt_web/) | Does a GPT read, or just remember? | d20 run on Colab next |
 
 ## Layout of a post
 

@@ -1,4 +1,4 @@
-"""Tests for metrics.py. ``BitsPerByte`` is tested with p02_tinystories, where it lives."""
+"""Tests for metrics.py. ``BitsPerByte`` is tested with p02_gpt_web, where it lives."""
 
 import jax.numpy as jnp
 

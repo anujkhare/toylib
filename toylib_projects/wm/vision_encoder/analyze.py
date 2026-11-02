@@ -1,7 +1,7 @@
 """Reporting helpers for VAE training: parameter counts, dataset sizing, and
 capacity analysis.
 
-Mirrors the shape of ``toylib_projects/p02_tinystories/analyze.py`` so the train
+Mirrors the shape of ``toylib_projects/p02_gpt_web/analyze.py`` so the train
 script has the same ergonomics: build the experiment, init state, then call
 ``print_*`` helpers to dump a human-readable summary to stdout (and to the
 WandB run config via the standard logger plumbing).

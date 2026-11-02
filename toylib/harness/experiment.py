@@ -31,7 +31,7 @@ Usage::
     exp.cleanup()
 
 Projects add domain-specific behaviour by subclassing; for example
-``toylib_projects.p02_tinystories.experiment.Experiment`` samples text during eval.
+``toylib_projects.p02_gpt_web.experiment.Experiment`` samples text during eval.
 """
 
 import dataclasses
