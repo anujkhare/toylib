@@ -42,6 +42,7 @@ learn as they go, with help as needed.
   explicitly asked. Do review diffs, explain, write tests, and debug.
 - Infrastructure that isn't the learning goal is fine to write: `toylib/harness`,
   `toylib/viz`, data plumbing, and figure helpers.
-- Each post's `README.md` holds its plan: the question, milestones with
-  success criteria, and commands. `toylib_projects/README.md` holds the shared
-  conventions and the post template.
+- Each post's `README.md` says what it is, its results and its commands.
+  `toylib_projects/README.md` holds the shared conventions and the post template.
+- Don't add plans, milestones or design docs to this repo. It's public, and they
+  belong in the private plans repo. `CLAUDE.local.md` says where it is.

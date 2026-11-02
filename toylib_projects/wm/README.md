@@ -2,7 +2,7 @@
 
 Toy from-scratch world model in JAX, trained on Gymnasium Atari Breakout.
 
-See [docs/designs/plan.md](docs/designs/plan.md) for the project plan and [docs/designs/dataset.md](docs/designs/dataset.md) for the dataset pipeline spec. Learning walkthroughs (one per track) live in [docs/walkthroughs/](docs/walkthroughs/); authoring guidelines are in [docs/walkthrough_guidelines.md](docs/walkthrough_guidelines.md).
+The design docs are private. References to `docs/designs/` or `dataset.md` in code comments point to them.
 
 ## Project layout
 
@@ -13,9 +13,6 @@ toylib_projects/wm/
 ├── pyproject.toml
 ├── docs/
 │   ├── walkthrough_guidelines.md  — how to author a walkthrough doc
-│   ├── designs/
-│   │   ├── plan.md             — staged project plan & architecture decisions
-│   │   └── dataset.md          — Stage 1 / Stage 2 dataset spec
 │   └── walkthroughs/           — one learning walkthrough per implementation track
 ├── datagen/                    — Stage 1 raw episode generation + Stage 2 compilers
 │   ├── breakout.py             — env + RAM state extraction
@@ -76,7 +73,7 @@ Three entry points, in order of decreasing convenience.
 
 ### A. Canonical full sweep (`run_stage1.py`)
 
-Bakes in the `docs/dataset.md` §2 plan: 4 Breakout modes × 2 difficulties × 125 episodes = **1,000 episodes total, ~3.6 GB on disk**.
+Bakes in the planned sweep: 4 Breakout modes × 2 difficulties × 125 episodes = **1,000 episodes total, ~3.6 GB on disk**.
 
 ```bash
 uv run python -m datagen.run_stage1                  # full run
@@ -130,7 +127,7 @@ data/raw/
 └── mode_40_diff_1/episodes_shard_NNNN.h5
 ```
 
-Each `episodes_shard_NNNN.h5` contains multiple `episode_NNNNNN/` groups. See `docs/designs/dataset.md` §2 for the full schema.
+Each `episodes_shard_NNNN.h5` contains multiple `episode_NNNNNN/` groups.
 
 ## Stage 2: vision-encoder dataset
 
@@ -248,7 +245,7 @@ rm -rf viz_out                   # nuke the viz output
 
 ## Known open issues
 
-See `docs/designs/dataset.md` §5. Current outstanding items:
+Current outstanding items:
 
 - **`bricks_remaining` RAM address**: `RAM[76]` is the wrong byte — the brick state is a bitmap across multiple bytes, not a single int. The field is currently stuck at 0 in all episodes.
 - **Brick-clear level reset**: not yet handled. Episodes that span an all-bricks-cleared reset will see a discontinuous state transition.

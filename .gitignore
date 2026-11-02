@@ -3,6 +3,7 @@
 **/wandb/**
 *.egg-info/
 .DS_Store
+CLAUDE.local.md
 .all_objects.cache
 .idea
 .pymon
