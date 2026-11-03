@@ -177,7 +177,7 @@ On a Colab A100 it runs at 31,500 tokens per second, so the full run needs about
 209 compute units (`BENCHMARK.md`), and a 3% trial passed every health check. A full d12
 run, `RUNS["d12"]`, reached 0.949 bits per byte against nanochat's 0.87 to 0.90 at the same
 size, about 6 to 10% behind. Porting nanochat's current architecture and optimizer,
-`RUNS["d12_nanochat"]`, puts it 0.05 to 0.06 ahead of that baseline from step 1,000 on, and
+`RUNS["d12_nanochat"]`, reached 0.877, 7.6% below that baseline and inside nanochat's range, and
 d20 trains with that recipe, `RUNS["d20_nanochat"]`. `EXPERIMENTS.md` has every run and the
 full list of what was ported. The notebook
 itself has only run locally so far. Figures read checkpoints from the bucket

@@ -11,7 +11,7 @@ W&B project.
 | `health_a100_8x32` | `RUNS["d20"]`'s setup, for 3% of its budget | Every health check passed |
 | `d12` | Our baseline recipe at nanochat's reference size | 0.949, 6 to 10% behind nanochat |
 | `local_nanochat` | nanochat's current recipe, on a laptop | 1.692 against the baseline's 1.753 |
-| `d12_nanochat` | nanochat's current recipe at d12 | 0.890 at step 2,125 of 2,520; final pending |
+| `d12_nanochat` | nanochat's current recipe at d12 | **0.877**, 7.6% ahead of the baseline and inside nanochat's range |
 | `d20_nanochat` | The post's model | Not started |
 
 ## Health run
@@ -192,18 +192,20 @@ training stayed finite.
 The run would stop early if it was 0.02 worse than the baseline at any evaluation from step
 250, or not better by step 750. [W&B run](https://wandb.ai/anujkhare18/toylib-p02-climbmix/runs/d12_nanochat).
 
-**It's ahead at every evaluation, by 0.05 to 0.06 bits per byte from step 1,000 on.**
+**It finished at 0.877 bits per byte on nanochat's 41.9M evaluation tokens, 0.072 or 7.6% below the
+baseline's 0.949, and inside nanochat's 0.87 to 0.90 for this size.** It was ahead at every
+evaluation.
 
-| Step | 125 | 250 | 500 | 1,000 | 1,500 | 1,875 | 2,125 | Final |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Baseline | 1.642 | 1.343 | 1.120 | 1.024 | 0.982 | 0.962 | 0.954 | 0.949 |
-| nanochat recipe | 1.323 | 1.116 | 1.032 | 0.974 | 0.931 | 0.905 | 0.890 | pending |
-| Difference | −0.319 | −0.227 | −0.087 | −0.050 | −0.051 | −0.057 | −0.063 | |
+| Step | 125 | 250 | 500 | 1,000 | 1,500 | 1,875 | 2,125 | 2,500 | Final |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Baseline | 1.642 | 1.343 | 1.120 | 1.024 | 0.982 | 0.962 | 0.954 | 0.946 | 0.949 |
+| nanochat recipe | 1.323 | 1.116 | 1.032 | 0.974 | 0.931 | 0.905 | 0.890 | 0.875 | **0.877** |
+| Difference | −0.319 | −0.227 | −0.087 | −0.050 | −0.051 | −0.057 | −0.063 | −0.071 | −0.072 |
 
 Part of the large early lead is the schedule. nanochat holds the peak learning rate until 35%
 of the run, while the baseline starts decaying sooner. The gap narrows to about 0.05 by step
-1,000, then widens again in the warmdown. By step 1,875 the run is already below the
-baseline's final number and inside nanochat's 0.87 to 0.90 for this size. Without clipping,
+1,000, then widens to 0.07 through the warmdown, so the lead isn't only the early schedule.
+Which pieces contribute most wasn't measured. Without clipping,
 the gradient norm fell from 0.21 at step 210 to 0.12 at step 2,220.
 
 **Speed: about 125,000 tokens per second against the baseline's 85,000**, almost all from
@@ -213,6 +215,8 @@ cuDNN attention.
 checkpoint. The watcher only reported the loss and didn't restart the run, so it sat for six
 hours until it resumed on a new runtime, again without losing steps. For d20 a supervisor
 recreates the session and resumes on its own.
+
+**Cost: about 21 compute units** over the two runtimes, against the baseline's 33.5.
 
 ## Next: d20
 
