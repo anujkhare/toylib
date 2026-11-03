@@ -191,7 +191,6 @@ reasonable time.
 - `webtext.py`: download ClimbMix, train the tokenizer, write token files.
 - `notebooks/`: the d20 Colab notebook and its guide.
 - `BENCHMARK.md`: hardware, configuration, speed and cost.
-  `scripts/benchmark.py` and `scripts/health_check.py` reproduce it.
 - `EXPERIMENTS.md`: the training runs and their results, and the nanochat recipe port.
 - `muon.py`: nanochat's current Muon, as an optax transform.
 - `data.py`: `TokenBinDataset` for token files; older parquet and Grain loaders for text
