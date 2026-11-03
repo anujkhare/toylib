@@ -2,10 +2,11 @@
 
 import jax.numpy as jnp
 import numpy as np
+import types
 import pytest
 from pathlib import Path
 
-from toylib_projects.p02_gpt_web import metrics
+from toylib_projects.p02_gpt_web import decoder_only_model, metrics
 
 
 class TestBitsPerByteMetric:
@@ -118,3 +119,37 @@ class TestBitsPerByteMetric:
         }
         result = bpb_metric(None, {"per_token_loss": jnp.ones((1, 1))}, batch)
         assert jnp.isclose(result["bits_per_byte"], 1.0 / np.log(2), rtol=1e-5)
+
+
+def test_flops_match_nanochat_for_the_d20_shape():
+    config = decoder_only_model.ModelConfig(
+        qkv_dim=1_280, num_layers=20, num_heads=10, vocab_size=32_768, seq_len=2_048
+    )
+    assert metrics.flops_per_token(config) == 3_240_099_840
+
+
+def test_flops_count_windows_and_gates_as_nanochat_does():
+    config = decoder_only_model.ModelConfig(
+        qkv_dim=768, num_layers=12, num_heads=6, vocab_size=32_768, seq_len=2_048,
+        **decoder_only_model.NANOCHAT,
+    )
+    # Blocks, six value gates of 12 x 6, the output layer and the smear gate.
+    matmul_params = 12 * 768**2 * 12 + 6 * 12 * 6 + 768 * 32_768 + 24
+    # SSSL tiled over 12 layers: three see 2,048 tokens and nine see 512.
+    attention = 12 * 768 * (3 * 2_048 + 9 * 512)
+    assert metrics.flops_per_token(config) == 6 * matmul_params + attention
+
+
+@pytest.mark.parametrize(
+    ("kind", "peak"),
+    [
+        ("NVIDIA A100-SXM4-40GB", 312e12),
+        ("NVIDIA H100 80GB HBM3", 989e12),
+        ("NVIDIA H100 PCIe", 756e12),
+        ("cpu", None),
+    ],
+)
+def test_peak_flops_reads_the_device_name(monkeypatch, kind, peak):
+    device = types.SimpleNamespace(device_kind=kind)
+    monkeypatch.setattr(metrics.jax, "devices", lambda: [device])
+    assert metrics.peak_flops() == peak

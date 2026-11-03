@@ -390,6 +390,13 @@ class Experiment:
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
             updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
+            # Before any clipping, and relative to the weights, so both stay readable
+            # at any learning rate or model size.
+            averaged_metrics = {
+                **averaged_metrics,
+                "grad_norm": optax.global_norm(total_grads),
+                "update_to_weight": optax.global_norm(updates) / optax.global_norm(model),
+            }
             model = optax.apply_updates(model, updates)
 
         return model, opt_state, averaged_metrics
@@ -625,6 +632,10 @@ class Experiment:
 
     # ---- main loop ---------------------------------------------------------
 
+    def extra_train_logs(self, steps_per_sec: float) -> dict[str, float]:
+        """Values to log with the training metrics. Subclasses can add to them."""
+        return {}
+
     def inner_loop(self, batch: jt.PyTree):
         self._assert_initialized()
 
@@ -638,8 +649,11 @@ class Experiment:
             }
             elapsed = time.monotonic() - self._train_start_time
             steps_done = self.step - self._train_start_step
+            steps_per_sec = 0.0
             if elapsed > 0 and steps_done > 0:
-                train_metrics_with_prefix["train/steps_per_sec"] = steps_done / elapsed
+                steps_per_sec = steps_done / elapsed
+                train_metrics_with_prefix["train/steps_per_sec"] = steps_per_sec
+            train_metrics_with_prefix.update(self.extra_train_logs(steps_per_sec))
             self.logger_obj.log(self.step, metrics=train_metrics_with_prefix)
 
     def outer_loop(self):

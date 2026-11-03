@@ -448,3 +448,154 @@ class TestSamplingWindow:
             model, padded, 1, jax.random.key(3), max_output_tokens=5, top_k=4
         )
         np.testing.assert_array_equal(actual, expected)
+
+
+# Every nanochat addition on: windows of 2, 2, 2 and 8, value embeddings on layers 1
+# and 3, the residual scalars, smear and backout.
+NANOCHAT_CONFIG = decoder_only_model.ModelConfig(
+    num_layers=4, num_heads=2, qkv_dim=32, vocab_size=10, seq_len=8,
+    **decoder_only_model.NANOCHAT,
+)
+
+
+def _trained_nanochat():
+    """Train enough that smear and the gates move off their initial values."""
+    return _trained_a_little(NANOCHAT_CONFIG)
+
+
+class TestNanochatAdditions:
+    def test_windows_tile_the_pattern_and_end_long(self):
+        assert NANOCHAT_CONFIG.window_sizes() == [2, 2, 2, 8]
+        config = decoder_only_model.ModelConfig(
+            num_layers=12, num_heads=6, qkv_dim=768, seq_len=2_048, window_pattern="SSSL"
+        )
+        assert config.window_sizes() == [512] * 3 + [2_048] + [512] * 3 + [2_048] + [512] * 3 + [2_048]
+
+    def test_rejects_unknown_window_letters(self):
+        with pytest.raises(ValueError, match="window_pattern"):
+            decoder_only_model.ModelConfig(window_pattern="SXL")
+
+    def test_value_embeddings_alternate_and_include_the_last_layer(self):
+        assert [NANOCHAT_CONFIG.has_value_embedding(i) for i in range(4)] == [False, True, False, True]
+        odd = decoder_only_model.ModelConfig(num_layers=3, value_embeddings=True)
+        assert [odd.has_value_embedding(i) for i in range(3)] == [True, False, True]
+
+    def test_adds_only_the_new_parameters(self):
+        paths = {
+            jax.tree_util.keystr(path)
+            for path, _ in jax.tree_util.tree_leaves_with_path(_make_model(NANOCHAT_CONFIG))
+        }
+        extra = {p for p in paths if not p.startswith((".blocks", ".embedding_layer", ".output_layer"))}
+        assert extra == {
+            ".value_embeds[0].weights",
+            ".value_embeds[1].weights",
+            ".resid_lambdas",
+            ".x0_lambdas",
+            ".smear_gate",
+            ".smear_lambda",
+            ".backout_lambda",
+        }
+        gates = {p for p in paths if "value_gate" in p}
+        assert gates == {".blocks[1].causal_attn.value_gate", ".blocks[3].causal_attn.value_gate"}
+
+    def test_off_by_default(self):
+        model = _make_model()
+        assert not hasattr(model, "value_embeds") and not hasattr(model, "smear_gate")
+
+    def test_is_causal(self):
+        model = _trained_nanochat()
+        tokens = jnp.array([1, 2, 3, 4, 5, 6, 7, 8])
+        changed = tokens.at[5].set(9)
+        before, after = model(tokens), model(changed)
+        np.testing.assert_allclose(before[:5], after[:5], atol=1e-5)
+        assert not np.allclose(before[5:], after[5:], atol=1e-5)
+
+    def test_smear_is_learned_and_mixes_the_previous_token(self):
+        model = _trained_nanochat()
+        assert float(jnp.abs(model.smear_lambda[0])) > 0
+
+    def test_short_windows_ignore_older_tokens(self):
+        _, acts = _trained_nanochat()(jnp.arange(8), return_intermediates=True)
+        weights = acts["blocks.0.attn_weights"]  # [heads, query, key]
+        distance = jnp.arange(8)[:, None] - jnp.arange(8)[None, :]
+        np.testing.assert_allclose(jnp.where(distance > 2, weights, 0.0), 0.0, atol=1e-6)
+        np.testing.assert_allclose(weights.sum(-1), 1.0, atol=1e-5)
+        last = acts["blocks.3.attn_weights"]
+        assert float(last[:, 7, 0].min()) > 0  # The long layer still sees the first token.
+
+    def test_batched_matches_unbatched(self):
+        model = _trained_nanochat()
+        tokens = jnp.array([[1, 2, 3, 4, 5, 6, 7, 8], [8, 7, 6, 5, 4, 3, 2, 1]])
+        np.testing.assert_allclose(model(tokens)[1], model(tokens[1]), atol=1e-5)
+
+    def test_shorter_sequences_match_a_prefix(self):
+        model = _trained_nanochat()
+        tokens = jnp.array([1, 2, 3, 4, 5, 6, 7, 8])
+        np.testing.assert_allclose(model(tokens[:5]), model(tokens)[:5], atol=1e-5)
+
+    def test_intermediates_match_the_plain_forward_pass(self):
+        model = _trained_nanochat()
+        logits, acts = model(jnp.arange(8), return_intermediates=True)
+        np.testing.assert_allclose(logits, model(jnp.arange(8)), atol=1e-5)
+        assert set(acts) == {"embedding"} | {
+            f"blocks.{i}.{name}" for i in range(4) for name in ("hidden", "attn_weights")
+        }
+
+    def test_remat_does_not_change_outputs(self):
+        model = _trained_nanochat()
+        remat = jax.tree_util.tree_unflatten(
+            jax.tree_util.tree_structure(
+                _make_model(
+                    decoder_only_model.ModelConfig(
+                        **{**NANOCHAT_CONFIG.__dict__,
+                           "remat_policy": jax.checkpoint_policies.nothing_saveable}
+                    )
+                )
+            ),
+            jax.tree_util.tree_leaves(model),
+        )
+        np.testing.assert_allclose(remat(jnp.arange(8)), model(jnp.arange(8)), atol=1e-6)
+
+    @pytest.mark.parametrize("batched", [False, True])
+    def test_fused_attention_matches_the_masked_matmuls(self, batched):
+        model = _trained_nanochat()
+        fused_config = decoder_only_model.ModelConfig(
+            **{**NANOCHAT_CONFIG.__dict__, "attention_impl": "xla"}
+        )
+        fused = jax.tree_util.tree_unflatten(
+            jax.tree_util.tree_structure(_make_model(fused_config)),
+            jax.tree_util.tree_leaves(model),
+        )
+        tokens = jnp.array([[1, 2, 3, 4, 5, 6, 7, 8], [8, 7, 6, 5, 4, 3, 2, 1]])
+        tokens = tokens if batched else tokens[0]
+        np.testing.assert_allclose(fused(tokens), model(tokens), atol=1e-5)
+
+    def test_one_batch_overfits(self):
+        model = _make_model(NANOCHAT_CONFIG)
+        tokens = jax.random.randint(jax.random.key(1), (2, 8), 0, 10)
+        batch = {"inputs": tokens[:, :-1], "targets": tokens[:, 1:], "mask": jnp.ones((2, 7))}
+        optimizer = optax.adam(3e-2)
+        state = optimizer.init(model)
+
+        @jax.jit
+        def step(model, state):
+            loss, grads = jax.value_and_grad(
+                lambda m: decoder_only_model.train_step(m, batch)[0]
+            )(model)
+            updates, state = optimizer.update(grads, state, model)
+            return optax.apply_updates(model, updates), state, loss
+
+        for _ in range(400):
+            model, state, loss = step(model, state)
+        assert float(loss) < 0.1
+
+    def test_jit_sample_runs(self):
+        model = _trained_nanochat()
+        padded = jnp.zeros(8, dtype=jnp.uint16).at[0].set(3)
+        expected = decoder_only_model.sample(
+            model, padded, 1, jax.random.key(3), max_output_tokens=10, temperature=0
+        )
+        actual = decoder_only_model.jit_sample(
+            model, padded, 1, jax.random.key(3), max_output_tokens=10, temperature=0
+        )
+        np.testing.assert_array_equal(actual, expected)

@@ -28,6 +28,7 @@ from toylib.harness.experiment import (  # noqa: F401  (re-exported)
     _serialize_dataclass_config,
 )
 from toylib_projects.p02_gpt_web import decoder_only_model
+from toylib_projects.p02_gpt_web import metrics as metrics_module
 
 
 DEFAULT_PROMPTS = [
@@ -74,6 +75,23 @@ class Experiment(harness.Experiment):
         default_factory=lambda: list(DEFAULT_PROMPTS)
     )
     sampling_max_tokens: int = 10
+    # With these set, training logs its progress in tokens and its use of the hardware.
+    tokens_per_step: int = 0
+    flops_per_token: float = 0.0
+    lr_multiplier: typing.Callable[[int], float] | None = None
+
+    def extra_train_logs(self, steps_per_sec: float) -> dict[str, float]:
+        logs = {}
+        if self.lr_multiplier is not None:
+            logs["train/lr_multiplier"] = float(self.lr_multiplier(self.step))
+        if self.tokens_per_step:
+            logs["train/tokens_seen"] = (self.step + 1) * self.tokens_per_step
+            tokens_per_second = steps_per_sec * self.tokens_per_step
+            logs["train/tokens_per_second"] = tokens_per_second
+            peak = metrics_module.peak_flops()
+            if peak and self.flops_per_token:
+                logs["train/mfu"] = tokens_per_second * self.flops_per_token / peak
+        return logs
 
     def sampling_evaluation(self) -> None:
         """Sample a continuation of each prompt and log the decoded text.

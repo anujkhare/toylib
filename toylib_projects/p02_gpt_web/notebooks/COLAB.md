@@ -16,9 +16,9 @@ Colab gets the code from GitHub, so **push first**. The notebook's `BRANCH` is
 
 ## Which runtime
 
-Use an A100. The model peaked at 21 GB of RAM on a CPU, even with a tiny batch, and the
-earlier run of this model had 59 GB on an A100. A `v5e1` TPU has about 16 GB, so it's
-unlikely to fit without a smaller batch.
+Use an A100 unless Colab offers an H100 at under about 14.8 compute units an hour; see
+`BENCHMARK.md`. H100 requests failed with 503 for over an hour on 2026-11-02. Colab may give
+you the 40 GB or the 80 GB A100, and the run peaks at about 20 GiB on either. A `v5e1` TPU has about 16 GB, so it's unlikely to fit. See `BENCHMARK.md`.
 
 ## Prepare a runtime
 
@@ -87,7 +87,7 @@ starts. If that's more than you want to spend, stop here, lower `max_steps` in
 `train.RUNS["d20"]`, then commit and push. A changed experiment needs a new name in `RUNS`
 and in the notebook's `RUN_ID`, because reusing one resumes that run.
 
-If it runs out of memory, halve `batch_size` and double `num_microbatches`.
+Memory and speed are measured in `BENCHMARK.md`.
 
 ## Watch it and finish
 
@@ -105,7 +105,7 @@ colab --auth=adc stop -s p02
 ## If the runtime disappears
 
 Repeat the keys and **Train**. It copies the token files back, and should print
-`resuming at step ...`. You lose at most 2,500 steps.
+`resuming at step ...`. You lose at most 500 steps, about 2.3 hours.
 
-The run keeps the newest three checkpoints, about 6 GB each. Figures also read the training
+The run keeps the newest three checkpoints, about 3.5 GB each. Figures also read the training
 log, which lives on the runtime, so the full curves and samples are on W&B.
