@@ -8,7 +8,7 @@ predictions token by token and looking inside for how it reads back. As in post 
 is intuition through looking at the network, not a measured comparison of architectures.
 
 Web text suits the question. It's messy, documents repeat their own rare names and terms,
-and this run sees 5.7B tokens, the range where
+and this run sees 3.5B tokens, inside the range where
 [Olsson et al., 2022](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html)
 saw induction heads, the attention pattern behind [A][B]...[A] -> [B] copying, form.
 
@@ -163,8 +163,9 @@ browser explorer more than for training.
 ## The d20 run
 
 `train.RUNS["d20"]`: 20 blocks, 1,280 dims, 10 heads, 32,768 tokens, a context of 2,048 and
-477M parameters. It sees 5.7B tokens, 12 per parameter, from 120 shards of ClimbMix, the web
-text nanochat trains on. `notebooks/01_d20_climbmix_colab.ipynb` runs it on Colab, and
+477M parameters. It trains on batches of 524,288 tokens, as 32 microbatches of 8, for 3.5B
+tokens from 120 shards of ClimbMix, the web text nanochat trains on. That's 8 tokens per
+parameter by nanochat's count, which leaves out the input embedding. `notebooks/01_d20_climbmix_colab.ipynb` runs it on Colab, and
 `notebooks/COLAB.md` has the commands.
 
 The tokenizer is trained on 8 shards, as nanochat does, and stored at
@@ -172,8 +173,14 @@ The tokenizer is trained on 8 shards, as nanochat does, and stored at
 On held-out text it averages 4.69 bytes per token, and every word in `WORD_GROUPS` is a
 single token. The token files will join it on the first run.
 
-A smoke run of the notebook passes locally, including a resume, and the full model trains
-for a step on CPU. Neither has run on Colab yet. Figures read checkpoints from the bucket
+On a Colab A100 it runs at 31,500 tokens per second, so the full run needs about 31 hours and
+209 compute units (`BENCHMARK.md`), and a 3% trial passed every health check. A full d12
+run, `RUNS["d12"]`, reached 0.949 bits per byte against nanochat's 0.87 to 0.90 at the same
+size, about 6 to 10% behind. Porting nanochat's current architecture and optimizer,
+`RUNS["d12_nanochat"]`, reached 0.877, 7.6% below that baseline and inside nanochat's range, and
+d20 trains with that recipe, `RUNS["d20_nanochat"]`. `EXPERIMENTS.md` has every run and the
+full list of what was ported. The notebook
+itself has only run locally so far. Figures read checkpoints from the bucket
 with `--checkpoint-dir`, and a model this size needs an accelerator to draw them in
 reasonable time.
 
@@ -183,6 +190,9 @@ reasonable time.
 - `tokenizer/bpe.py`: our tokenizer.
 - `webtext.py`: download ClimbMix, train the tokenizer, write token files.
 - `notebooks/`: the d20 Colab notebook and its guide.
+- `BENCHMARK.md`: hardware, configuration, speed and cost.
+- `EXPERIMENTS.md`: the training runs and their results, and the nanochat recipe port.
+- `muon.py`: nanochat's current Muon, as an optax transform.
 - `data.py`: `TokenBinDataset` for token files; older parquet and Grain loaders for text
   shards.
 - `decoder_only_model.py`: the model, loss and sampling.

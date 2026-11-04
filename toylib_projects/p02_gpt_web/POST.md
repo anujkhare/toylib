@@ -5,7 +5,7 @@ Status: predictions only. Everything below waits for the d20 run.
 ## Predictions
 
 Written on 2026-11-01, before the run. Each is about a 20-block, 1,280-dim model with 477M
-parameters, trained on 5.7B tokens of web text, about 0.9 of a pass over 120 shards.
+parameters, trained on 3.5B tokens of web text, about half a pass over 120 shards.
 
 1. **Loss.** Validation loss ends near 2.9 nats per token, or about 0.9 bits per byte. The
    trigram table comes in around 7 bits per token, against about 4.2 for the model.
