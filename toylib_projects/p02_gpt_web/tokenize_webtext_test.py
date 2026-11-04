@@ -68,7 +68,7 @@ def test_prepare_writes_files_and_skips_finished_work(data_dir, monkeypatch):
     assert (val == bpe.EOT_ID).sum() == 1
     assert len(tokenize_webtext.load_tokenizer(262, data_dir)) == 262
 
-    monkeypatch.setattr(webtext, "fetch_shards", lambda *args: pytest.fail("Refetched"))
+    monkeypatch.setattr(tokenize_webtext, "fetch_shards", lambda *args: pytest.fail("Refetched"))
     tokenize_webtext.prepare(262, num_train_shards=2, data_dir=data_dir, workers=1)
 
 
