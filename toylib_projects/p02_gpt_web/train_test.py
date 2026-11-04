@@ -20,7 +20,7 @@ from toylib.viz import curves
 from toylib_projects.p02_gpt_web import decoder_only_model
 from toylib_projects.p02_gpt_web import experiment
 from toylib_projects.p02_gpt_web import train
-from toylib_projects.p02_gpt_web import webtext
+from toylib_projects.p02_gpt_web import tokenize_webtext
 from toylib_projects.p02_gpt_web.tokenizer import bpe
 
 VOCAB_SIZE = 50257
@@ -248,10 +248,10 @@ class TestRunExperiment:
     def data_dir(self, tmp_path):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
-        bpe.Tokenizer([]).save(webtext.tokenizer_path(257, data_dir))
+        bpe.Tokenizer([]).save(tokenize_webtext.tokenizer_path(257, data_dir))
         tokens = np.random.default_rng(0).integers(2, 64, 2_000, dtype=np.uint16)
         for split in ("train", "val"):
-            tokens.tofile(webtext.bin_path(split, 257, data_dir))
+            tokens.tofile(tokenize_webtext.bin_path(split, 257, data_dir))
         return data_dir
 
     def _create(self, data_dir, output_dir):
@@ -310,10 +310,10 @@ def test_every_run_fits_its_token_budget():
 
 
 def test_evaluation_reads_one_microbatch_at_a_time(tmp_path):
-    bpe.Tokenizer([]).save(webtext.tokenizer_path(257, tmp_path))
+    bpe.Tokenizer([]).save(tokenize_webtext.tokenizer_path(257, tmp_path))
     tokens = np.random.default_rng(0).integers(2, 64, 2_000, dtype=np.uint16)
     for split in ("train", "val"):
-        tokens.tofile(webtext.bin_path(split, 257, tmp_path))
+        tokens.tofile(tokenize_webtext.bin_path(split, 257, tmp_path))
     run = dataclasses.replace(
         TestRunExperiment.RUN, batch_size=8, num_microbatches=4
     )
@@ -324,10 +324,10 @@ def test_evaluation_reads_one_microbatch_at_a_time(tmp_path):
 
 
 def test_training_logs_the_health_metrics(tmp_path):
-    bpe.Tokenizer([]).save(webtext.tokenizer_path(257, tmp_path))
+    bpe.Tokenizer([]).save(tokenize_webtext.tokenizer_path(257, tmp_path))
     tokens = np.random.default_rng(0).integers(2, 64, 2_000, dtype=np.uint16)
     for split in ("train", "val"):
-        tokens.tofile(webtext.bin_path(split, 257, tmp_path))
+        tokens.tofile(tokenize_webtext.bin_path(split, 257, tmp_path))
     run = dataclasses.replace(TestRunExperiment.RUN, max_steps=4)
     exp = train.create_run_experiment(run, data_dir=tmp_path, output_dir=tmp_path)
     exp.outer_loop()
@@ -427,10 +427,10 @@ class TestNanochatOptimizer:
         # weight decay with d12's budget over this one's, huge for 480 tokens.
         monkeypatch.setattr(train, "B_REF", 16)
         monkeypatch.setattr(train, "D12_SCALING_PARAMS", 40)
-        bpe.Tokenizer([]).save(webtext.tokenizer_path(257, tmp_path))
+        bpe.Tokenizer([]).save(tokenize_webtext.tokenizer_path(257, tmp_path))
         tokens = np.random.default_rng(0).integers(2, 64, 4_000, dtype=np.uint16)
         for split in ("train", "val"):
-            tokens.tofile(webtext.bin_path(split, 257, tmp_path))
+            tokens.tofile(tokenize_webtext.bin_path(split, 257, tmp_path))
         run = dataclasses.replace(
             TestRunExperiment.RUN, num_layers=4, qkv_dim=32, max_steps=30, warmup_steps=2,
             **train.NANOCHAT_OPTIONS,
