@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterator
 from unittest.mock import Mock, MagicMock, patch
 
+from toylib.harness import experiment as harness_experiment
 from toylib.harness import logger
 from toylib.harness import metrics
 from toylib_projects.p02_gpt_web import decoder_only_model
@@ -625,9 +626,12 @@ class TestExperimentE2E:
 class TestMultiOptimizer:
     """Tests for multi-optimizer functionality."""
 
-    @patch("toylib_projects.p02_gpt_web.experiment.optax.multi_transform")
+    @patch(
+        "toylib_projects.p02_gpt_web.experiment.optax.multi_transform",
+        wraps=optax.multi_transform,
+    )
     def test_default_single_optimizer(self, mock_multi_transform):
-        """Test that default behavior uses a single optimizer for all parameters."""
+        """By default one Adam trains every parameter but RoPE's frozen tables."""
         mock_dataset = MagicMock()  # iterable, as the Dataset protocol requires
         mock_dataset.batch_size = 4
         train_task = experiment.Task(name="train", dataset=mock_dataset)
@@ -635,7 +639,9 @@ class TestMultiOptimizer:
         exp = experiment.Experiment(train_task=train_task)
         exp.init_state()
 
-        mock_multi_transform.assert_not_called()
+        mock_multi_transform.assert_called_once()
+        transforms = mock_multi_transform.call_args.kwargs["transforms"]
+        assert set(transforms) == {"adam", harness_experiment.FROZEN}
 
         exp.cleanup()
 
