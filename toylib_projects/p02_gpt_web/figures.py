@@ -20,7 +20,7 @@ from toylib.harness import inference
 from toylib_projects.p02_gpt_web import experiment
 from toylib_projects.p02_gpt_web import probes
 from toylib_projects.p02_gpt_web import train
-from toylib_projects.p02_gpt_web import webtext
+from toylib_projects.p02_gpt_web import tokenize_webtext
 from toylib_projects.p02_gpt_web.tokenizer import bpe
 
 FIGURES_DIR = pathlib.Path(__file__).parent / "figures"
@@ -72,12 +72,12 @@ class Inspector:
     checkpoint_dir: str | pathlib.Path | None = None
 
     def __post_init__(self):
-        self.data_dir = self.data_dir or webtext.data_dir_for(self.run.num_train_shards)
+        self.data_dir = self.data_dir or tokenize_webtext.data_dir_for(self.run.num_train_shards)
         self.checkpoint_dir = self.checkpoint_dir or self.run_dir.resolve() / "checkpoints"
-        self.tokenizer = webtext.load_tokenizer(self.run.vocab_size, self.data_dir)
+        self.tokenizer = tokenize_webtext.load_tokenizer(self.run.vocab_size, self.data_dir)
         self.steps = inference.checkpoint_steps(self.checkpoint_dir)
         self.val = np.memmap(
-            webtext.bin_path("val", self.run.vocab_size, self.data_dir),
+            tokenize_webtext.bin_path("val", self.run.vocab_size, self.data_dir),
             dtype=np.uint16,
             mode="r",
         )
@@ -92,7 +92,7 @@ class Inspector:
         return (step + 1) * self.run.batch_size * self.run.seq_len
 
     def encode(self, text: str) -> np.ndarray:
-        ids = [webtext.EOT_ID] + self.tokenizer([text])["input_ids"][0]
+        ids = [tokenize_webtext.EOT_ID] + self.tokenizer([text])["input_ids"][0]
         return np.array(ids[: self.run.seq_len])
 
     def labels(self, tokens: np.ndarray) -> list[str]:
@@ -109,7 +109,7 @@ class Inspector:
     def documents(self, min_len: int, max_len: int, limit: int = 512) -> list[np.ndarray]:
         """Return validation documents of these lengths, each starting with its EOT."""
         head = np.asarray(self.val[:2_000_000])
-        starts = np.flatnonzero(head == webtext.EOT_ID)
+        starts = np.flatnonzero(head == tokenize_webtext.EOT_ID)
         spans = [
             (a, b) for a, b in zip(starts, starts[1:]) if min_len <= b - a <= max_len
         ]
@@ -122,7 +122,7 @@ class Inspector:
     def train_counts(self) -> np.ndarray:
         """Return how often each token appears in the first 30M training tokens."""
         tokens = np.memmap(
-            webtext.bin_path("train", self.run.vocab_size, self.data_dir),
+            tokenize_webtext.bin_path("train", self.run.vocab_size, self.data_dir),
             dtype=np.uint16,
             mode="r",
         )
@@ -148,7 +148,7 @@ def fig_baselines(ins: Inspector) -> plt.Figure:
     """What counting achieves, against what the model achieves."""
     vocab = ins.run.vocab_size
     train_tokens = np.memmap(
-        webtext.bin_path("train", vocab, ins.data_dir), dtype=np.uint16, mode="r"
+        tokenize_webtext.bin_path("train", vocab, ins.data_dir), dtype=np.uint16, mode="r"
     )
     bits = probes.ngram_bits(
         np.asarray(train_tokens[:30_000_000]), np.asarray(ins.val), vocab
@@ -444,7 +444,7 @@ def main() -> None:
     )
     if args.find_names:
         tokens = np.memmap(
-            webtext.bin_path("train", ins.run.vocab_size, ins.data_dir),
+            tokenize_webtext.bin_path("train", ins.run.vocab_size, ins.data_dir),
             dtype=np.uint16,
             mode="r",
         )

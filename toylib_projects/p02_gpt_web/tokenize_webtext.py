@@ -10,7 +10,7 @@ in Python, so `prepare` writes these, and training reads them with `TokenBinData
 As in nanochat, the last shard is the validation set. Shards hold about 250M characters.
 
 Run once with:
-    uv run python -m toylib_projects.p02_gpt_web.webtext --num-train-shards 8
+    uv run python -m toylib_projects.p02_gpt_web.tokenize_webtext --num-train-shards 8
 """
 
 import argparse
