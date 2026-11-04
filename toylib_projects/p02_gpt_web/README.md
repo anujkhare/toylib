@@ -149,7 +149,7 @@ browser explorer more than for training.
 ## Milestones
 
 1. ~~**Move the project and review it.**~~ Done: this folder, with fixes and tests.
-2. ~~**Our own tokenizer and token files.**~~ Done: `tokenizer/bpe.py`, `webtext.py`.
+2. ~~**Our own tokenizer and token files.**~~ Done: `tokenizer/bpe.py`, `tokenize_webtext.py`.
 3. ~~**Figures and probes, tried on a small model.**~~ Done: `probes.py`, `figures.py`.
 4. **The d20 run.** See below. *Done when:* it finishes on ClimbMix, and samples read as
    real text.
@@ -187,7 +187,7 @@ reasonable time.
 
 - `POST.md`: the draft, predictions first.
 - `tokenizer/bpe.py`: our tokenizer.
-- `webtext.py`: download ClimbMix, train the tokenizer, write token files.
+- `tokenize_webtext.py`: download ClimbMix, train the tokenizer, write token files.
 - `notebooks/`: the d20 Colab notebook and its guide.
 - `BENCHMARK.md`: hardware, configuration, speed and cost.
   `scripts/benchmark.py` and `scripts/health_check.py` reproduce it.
@@ -214,7 +214,7 @@ uv sync --extra posts --extra webtext --extra dev
 ```
 
 ```bash
-uv run python -m toylib_projects.p02_gpt_web.webtext --num-train-shards 8
+uv run python -m toylib_projects.p02_gpt_web.tokenize_webtext --num-train-shards 8
 ```
 
 ```bash
