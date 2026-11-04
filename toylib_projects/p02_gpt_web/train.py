@@ -22,6 +22,7 @@ The older nanochat-style setup, tokenizing parquet shards as it reads them:
 
 import dataclasses
 import datetime
+import json
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -35,6 +36,7 @@ from toylib_projects.p02_gpt_web import data
 from toylib_projects.p02_gpt_web import decoder_only_model
 from toylib_projects.p02_gpt_web import experiment
 from toylib_projects.p02_gpt_web import metrics as metrics_module
+from toylib_projects.p02_gpt_web import muon
 from toylib_projects.p02_gpt_web import webtext
 from toylib_projects.p02_gpt_web.scripts import compile as compile_utils
 from toylib_projects.p02_gpt_web.tokenizer import bytes_per_token
@@ -53,6 +55,134 @@ def warmup_cosine_schedule(
         warmup_steps=warmup_steps,
         decay_steps=max_steps,
         end_value=peak_lr / 10,
+    )
+
+
+def warmup_warmdown_schedule(
+    peak_lr: float,
+    max_steps: int,
+    warmup_steps: int,
+    warmdown_ratio: float = 0.65,
+    final_lr_frac: float = 0.05,
+) -> optax.Schedule:
+    """nanochat's `get_lr_multiplier`: ramp up, hold, then fall linearly to 5%."""
+    warmdown_steps = round(warmdown_ratio * max_steps)
+
+    def schedule(step):
+        step = jnp.asarray(step, jnp.float32)
+        warmup = (step + 1) / warmup_steps
+        progress = (max_steps - step) / max(warmdown_steps, 1)
+        warmdown = progress + (1 - progress) * final_lr_frac
+        multiplier = jnp.where(
+            step < warmup_steps,
+            warmup,
+            jnp.where(step <= max_steps - warmdown_steps, 1.0, warmdown),
+        )
+        return peak_lr * multiplier
+
+    return schedule
+
+
+def muon_momentum_schedule(max_steps: int, warmdown_ratio: float = 0.65) -> optax.Schedule:
+    """nanochat's `get_muon_momentum`: 0.85 to 0.97 over 400 steps, then down to
+    0.90 through the warmdown."""
+    warmdown_start = max_steps - round(warmdown_ratio * max_steps)
+
+    def schedule(step):
+        step = jnp.asarray(step, jnp.float32)
+        warmup = 0.85 + (0.97 - 0.85) * step / 400
+        progress = (step - warmdown_start) / max(max_steps - warmdown_start, 1)
+        warmdown = 0.97 + (0.90 - 0.97) * progress
+        return jnp.where(step < 400, warmup, jnp.where(step >= warmdown_start, warmdown, 0.97))
+
+    return schedule
+
+
+def cosine_weight_decay_schedule(weight_decay: float, max_steps: int) -> optax.Schedule:
+    """nanochat's `get_weight_decay`: from its full value to zero over the run."""
+    return lambda step: weight_decay * 0.5 * (1 + jnp.cos(jnp.pi * step / max_steps))
+
+
+# nanochat tunes at d12 and transfers: its batch of 2^19 tokens, and 12 tokens per
+# scaling parameter.
+B_REF = 2**19
+D12_SCALING_PARAMS = 110_100_912  # Blocks with value gates, plus the output layer.
+
+
+def scaling_params(config: decoder_only_model.ModelConfig) -> int:
+    """nanochat's count for scaling laws: the blocks' matrices and the output layer."""
+    dim, heads = config.qkv_dim, config.num_heads
+    gates = sum(
+        min(decoder_only_model.VALUE_GATE_CHANNELS, dim) * heads
+        for i in range(config.num_layers)
+        if config.has_value_embedding(i)
+    )
+    return 12 * dim**2 * config.num_layers + gates + config.vocab_size * dim
+
+
+def create_nanochat_optimizer_config(
+    config: decoder_only_model.ModelConfig,
+    max_steps: int,
+    tokens_per_step: int,
+    warmup_steps: int = 40,
+    weight_decay: float = 0.28,
+) -> experiment.MultiOptimizerConfig:
+    """nanochat's optimizer, from its `setup_optimizer` and `base_train.py`.
+
+    Muon for the blocks' matrices and AdamW for the rest, in six groups. Every rate
+    follows `warmup_warmdown_schedule`. Rates scale with sqrt(batch / B_REF), the
+    AdamW ones for embeddings and output with 1/sqrt(dim / 768), and Muon's weight
+    decay with sqrt(batch / B_REF) * (D_REF / tokens), as nanochat derives.
+    """
+    batch_scale = (tokens_per_step / B_REF) ** 0.5
+    dim_scale = (config.qkv_dim / 768) ** -0.5
+    tokens = max_steps * tokens_per_step
+    decay = weight_decay * batch_scale * (12 * D12_SCALING_PARAMS / tokens)
+
+    def lr(peak: float) -> optax.Schedule:
+        return warmup_warmdown_schedule(peak * batch_scale, max_steps, warmup_steps)
+
+    def adamw(peak: float, b1: float, b2: float, wd: float) -> optax.GradientTransformation:
+        return optax.adamw(learning_rate=lr(peak), b1=b1, b2=b2, eps=1e-10, weight_decay=wd)
+
+    optimizers = {
+        "output": adamw(0.008 * dim_scale, 0.8, 0.96, 0.01),
+        "embedding": adamw(0.3 * dim_scale, 0.8, 0.995, 0.001),
+        "value_embeds": adamw(0.3 * dim_scale * 0.5, 0.8, 0.995, 0.01),
+        "resid_lambdas": adamw(0.5 * 0.01, 0.8, 0.95, 0.05),
+        "x0_lambdas": adamw(0.5, 0.96, 0.95, 0.0),
+        # nanochat doesn't scale this group's rate with the batch.
+        "smear": optax.adamw(
+            learning_rate=warmup_warmdown_schedule(0.2, max_steps, warmup_steps),
+            b1=0.8, b2=0.95, eps=1e-10, weight_decay=0.0,
+        ),
+        "muon": muon.muon(
+            learning_rate=lr(0.02),
+            momentum=muon_momentum_schedule(max_steps),
+            weight_decay=cosine_weight_decay_schedule(decay, max_steps),
+        ),
+    }
+    groups = {
+        "output_layer": "output",
+        "embedding_layer": "embedding",
+        "value_embeds": "value_embeds",
+        "resid_lambdas": "resid_lambdas",
+        "x0_lambdas": "x0_lambdas",
+        "smear_gate": "smear",
+        "smear_lambda": "smear",
+        "backout_lambda": "smear",
+    }
+
+    def optimizer_for_param(key_path: tuple) -> str:
+        top = getattr(key_path[0], "name", str(key_path[0]))
+        return groups.get(top, "muon")
+
+    return experiment.MultiOptimizerConfig(
+        optimizer_configs=[
+            experiment.OptimizerConfig(name=name, optimizer=optimizer)
+            for name, optimizer in optimizers.items()
+        ],
+        optimizer_for_param=optimizer_for_param,
     )
 
 
@@ -388,6 +518,9 @@ def create_experiment(
     return exp
 
 
+NANOCHAT_EVAL_TOKENS = 80 * 524_288  # What its bits per byte is measured over.
+
+
 @dataclasses.dataclass(frozen=True)
 class Run:
     """One training configuration, on token files written by webtext.py."""
@@ -401,7 +534,9 @@ class Run:
     vocab_size: int = 32_768
     num_train_shards: int = 8  # About 54M tokens each.
     num_tokenizer_shards: int = 8
-    optimizer: str = "adamw"  # Or "muon", nanochat's split with its learning rates.
+    # "adamw", or "muon" for nanochat's earlier split with its learning rates, or
+    # "nanochat" for its current optimizer and schedules (`create_nanochat_optimizer_config`).
+    optimizer: str = "adamw"
     peak_lr: float = 1e-3  # For AdamW.
     warmup_steps: int = 100
     weight_decay: float = 0.1
@@ -412,6 +547,11 @@ class Run:
     eval_interval_steps: int = 250
     num_eval_steps: int = 20
     save_interval_steps: int = 500
+    final_eval_tokens: int = 0  # 0 ends on a normal evaluation.
+    # "nanochat" turns on every addition in `decoder_only_model.NANOCHAT`.
+    architecture: str = "baseline"
+    # See `ModelConfig.attention_impl`; "cudnn" needs an NVIDIA GPU.
+    attention_impl: str | None = None
 
 
 RUNS = {
@@ -426,14 +566,35 @@ RUNS = {
         num_layers=4, num_heads=8, qkv_dim=256, batch_size=32, max_steps=5_000,
         optimizer="muon",
     ),
-    # 12 tokens per parameter, nanochat's default, at 131,072 tokens a step.
+    # nanochat's reference batch of 524,288 tokens, which its learning rates are tuned
+    # for. 8 tokens per parameter, counted its way: blocks plus output layer, 435M.
     "d20": Run(
-        num_layers=20, num_heads=10, qkv_dim=1_280, batch_size=64, max_steps=44_000,
-        seq_len=2_048, num_train_shards=120, optimizer="muon", warmup_steps=500,
-        num_microbatches=4, dtype=jnp.bfloat16, remat=True, eval_interval_steps=500,
-        save_interval_steps=2_500,
+        num_layers=20, num_heads=10, qkv_dim=1_280, batch_size=256, max_steps=6_640,
+        seq_len=2_048, num_train_shards=120, optimizer="muon", warmup_steps=40,
+        num_microbatches=32, dtype=jnp.bfloat16, remat=True, eval_interval_steps=250,
+        num_eval_steps=200, save_interval_steps=500,
+        final_eval_tokens=NANOCHAT_EVAL_TOKENS,
+    ),
+    # nanochat's reference model, at its default of 12 tokens per parameter, as a
+    # baseline to compare with before spending a full d20 run.
+    "d12": Run(
+        num_layers=12, num_heads=6, qkv_dim=768, batch_size=256, max_steps=2_520,
+        seq_len=2_048, num_train_shards=120, optimizer="muon", warmup_steps=40,
+        num_microbatches=16, dtype=jnp.bfloat16, remat=True, eval_interval_steps=125,
+        num_eval_steps=100, save_interval_steps=500,
+        final_eval_tokens=NANOCHAT_EVAL_TOKENS,
     ),
 }
+# The same, with nanochat's current architecture, optimizer and schedules. It doesn't
+# clip gradients.
+NANOCHAT_OPTIONS = dict(architecture="nanochat", optimizer="nanochat", max_grad_norm=0.0)
+RUNS["local_nanochat"] = dataclasses.replace(RUNS["local"], **NANOCHAT_OPTIONS)
+RUNS["d12_nanochat"] = dataclasses.replace(RUNS["d12"], **NANOCHAT_OPTIONS)
+# cuDNN's fused attention was 47% faster than the masked path for d12_nanochat on an A100.
+# It saves every 250 steps, about an hour, because Colab runtimes end without warning.
+RUNS["d20_nanochat"] = dataclasses.replace(
+    RUNS["d20"], **NANOCHAT_OPTIONS, attention_impl="cudnn", save_interval_steps=250
+)
 
 
 def model_config(run: Run) -> decoder_only_model.ModelConfig:
@@ -448,6 +609,8 @@ def model_config(run: Run) -> decoder_only_model.ModelConfig:
         seq_len=run.seq_len,
         dtype=run.dtype,
         remat_policy=remat_policy,
+        attention_impl=run.attention_impl,
+        **(decoder_only_model.NANOCHAT if run.architecture == "nanochat" else {}),
     )
 
 
@@ -472,10 +635,12 @@ def create_run_experiment(
     bpt_path = run_dir / "bytes_per_token.npy"
     np.save(bpt_path, tokenizer.bytes_per_token())
 
-    def dataset(split: str, seed: int, repeatable: bool) -> data.TokenBinDataset:
+    def dataset(
+        split: str, seed: int, repeatable: bool, batch_size: int
+    ) -> data.TokenBinDataset:
         return data.TokenBinDataset(
             path=str(webtext.bin_path(split, run.vocab_size, data_dir)),
-            batch_size=run.batch_size,
+            batch_size=batch_size,
             seq_len=run.seq_len,
             seed=seed,
             repeatable=repeatable,
@@ -483,9 +648,18 @@ def create_run_experiment(
         )
 
     def schedule(peak_lr: float) -> optax.Schedule:
+        if run.optimizer == "nanochat":
+            return warmup_warmdown_schedule(peak_lr, run.max_steps, run.warmup_steps)
         return warmup_cosine_schedule(peak_lr, run.max_steps, run.warmup_steps)
 
-    if run.optimizer == "muon":
+    if run.optimizer == "nanochat":
+        optimizer_config = create_nanochat_optimizer_config(
+            model_config(run),
+            max_steps=run.max_steps,
+            tokens_per_step=run.batch_size * run.seq_len,
+            warmup_steps=run.warmup_steps,
+        )
+    elif run.optimizer == "muon":
         dmodel_lr_scale = (run.qkv_dim / 768) ** -0.5
         optimizer_config = create_muon_adam_multi_optimizer_config(
             muon_lr=schedule(2e-2),
@@ -521,19 +695,36 @@ def create_run_experiment(
             log_dir=str(run_dir), run_id=run_id, train_log_interval_steps=10
         ),
         train_task=experiment.Task(
-            name="train", dataset=dataset("train", seed=0, repeatable=False)
+            name="train", dataset=dataset("train", seed=0, repeatable=False, batch_size=run.batch_size)
         ),
         eval_task=experiment.Task(
             name="val",
-            dataset=dataset("val", seed=1, repeatable=True),
+            # Evaluation doesn't split batches, so it reads one microbatch at a time.
+            dataset=dataset(
+                "val",
+                seed=1,
+                repeatable=True,
+                batch_size=run.batch_size // run.num_microbatches,
+            ),
             metrics=[harness_metrics.Loss(), metrics_module.BitsPerByte(str(bpt_path))],
         ),
         sampling_max_tokens=40,
+        tokens_per_step=run.batch_size * run.seq_len,
+        flops_per_token=metrics_module.flops_per_token(model_config(run)),
+        lr_multiplier=schedule(1.0),
     )
     exp.init_state()
     analyze.print_estimated_tokens(exp)
     analyze.print_chinchilla_estimate(exp.model)
     return exp
+
+
+def final_evaluation(exp: experiment.Experiment, run: Run) -> dict[str, float]:
+    """Evaluate on as much text as nanochat, for a number comparable with its own."""
+    if run.final_eval_tokens:
+        sequences = run.batch_size // run.num_microbatches
+        exp.eval_config.num_eval_steps = run.final_eval_tokens // (sequences * run.seq_len)
+    return exp.run_validation()
 
 
 def main(use_dummy_data: bool = False, compile: bool = False) -> None:
@@ -569,8 +760,16 @@ if __name__ == "__main__":
         help="Train this configuration",
     )
     parser.add_argument("--run-id", help="Output folder name (default: the --run name)")
+    parser.add_argument("--data-dir", type=pathlib.Path, help="Default: under data/")
+    parser.add_argument("--output-dir", type=pathlib.Path, default=OUTPUT_DIR)
+    parser.add_argument("--checkpoint-dir", help="Can be gs://. Default: under outputs/")
+    parser.add_argument("--wandb-project", help="Default: log to a file only")
+    parser.add_argument("--wandb-entity", default="")
     parser.add_argument(
         "--resume", action="store_true", help="Continue from the newest checkpoint"
+    )
+    parser.add_argument(
+        "--attention", choices=["xla", "cudnn"], help="Default: the run's attention_impl"
     )
     parser.add_argument(
         "--compile",
@@ -580,10 +779,31 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.run:
-        exp = create_run_experiment(RUNS[args.run], run_id=args.run_id or args.run)
+        run, run_id = RUNS[args.run], args.run_id or args.run
+        if args.attention:
+            run = dataclasses.replace(run, attention_impl=args.attention)
+        logger_config = None
+        if args.wandb_project:
+            logger_config = experiment.WandBLoggerConfig(
+                project_name=args.wandb_project,
+                user_name=args.wandb_entity,
+                log_dir=str(args.output_dir / run_id),
+                run_id=run_id,
+                train_log_interval_steps=10,
+                also_log_to_file=True,
+            )
+        exp = create_run_experiment(
+            run,
+            run_id=run_id,
+            data_dir=args.data_dir,
+            output_dir=args.output_dir,
+            checkpoint_dir=args.checkpoint_dir,
+            logger_config=logger_config,
+        )
         if args.resume:
             exp.resume()
         exp.outer_loop()
+        print("FINAL", json.dumps(final_evaluation(exp, run), default=str), flush=True)
         exp.cleanup()
     else:
         _ = main(compile=args.compile, use_dummy_data=args.compile)

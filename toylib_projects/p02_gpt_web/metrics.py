@@ -2,9 +2,36 @@
 
 import dataclasses
 
+import jax
 import jax.numpy as jnp
 import jaxtyping as jt
 import numpy as np
+
+
+# bfloat16 peaks, in the order to match against a device's name, as in nanochat.
+PEAK_FLOPS = (("H100 NVL", 835e12), ("H100 PCIe", 756e12), ("H100", 989e12), ("A100", 312e12))
+
+
+def flops_per_token(config) -> float:
+    """Count matmul FLOPs for forward and backward, as nanochat's `estimate_flops` does.
+
+    The embeddings are lookups, so they cost nothing here. A layer with a sliding
+    window attends to at most that many tokens.
+    """
+    dim, depth, heads = config.qkv_dim, config.num_layers, config.num_heads
+    matmul_params = 12 * dim**2 * depth + config.vocab_size * dim
+    matmul_params += sum(
+        min(12, dim) * heads for i in range(depth) if config.has_value_embedding(i)
+    )
+    matmul_params += min(24, dim) if config.smear else 0
+    seen = sum(min(window, config.seq_len) for window in config.window_sizes())
+    return 6 * matmul_params + 12 * heads * (dim // heads) * seen
+
+
+def peak_flops() -> float | None:
+    """Return the first device's bfloat16 peak, or None for hardware without one."""
+    kind = jax.devices()[0].device_kind
+    return next((peak for name, peak in PEAK_FLOPS if name in kind), None)
 
 
 @dataclasses.dataclass
