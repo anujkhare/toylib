@@ -173,7 +173,7 @@ def test_trains_through_harness(tmp_path: Path, name):
     assert {"train/loss", "train/accuracy"} <= records[0].keys()
     assert any("val/accuracy" in r for r in records)
 
-    assert inference.checkpoint_steps(tmp_path / "ckpt") == [0, 3]
+    assert inference.checkpoint_steps(tmp_path / "ckpt") == [0, 3, 5]
     template = model.build_model(config, jax.random.key(1))
     restored = inference.load_model(template, tmp_path / "ckpt")
     logits = inference.batched_apply(lambda m, b: m(b["image"]), restored, _arrays(5, image_shape), 4)

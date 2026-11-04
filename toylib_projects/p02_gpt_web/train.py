@@ -685,7 +685,6 @@ def create_run_experiment(
         ),
         checkpoint_config=experiment.CheckpointConfig(
             save_interval_steps=run.save_interval_steps,
-            save_final=True,
             max_to_keep=3,
             checkpoint_dir=checkpoint_dir or str(run_dir / "checkpoints"),
             checkpoint_dataset_iterator=True,
