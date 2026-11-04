@@ -12,7 +12,7 @@ W&B project.
 | `d12` | Our baseline recipe at nanochat's reference size | 0.949, 6 to 10% behind nanochat |
 | `local_nanochat` | nanochat's current recipe, on a laptop | 1.692 against the baseline's 1.753 |
 | `d12_nanochat` | nanochat's current recipe at d12 | **0.877**, 7.6% ahead of the baseline and inside nanochat's range |
-| `d20_nanochat` | The post's model | Not started |
+| `d20_nanochat` | The post's model | **0.783**, inside the 0.75 to 0.90 expected |
 
 ## Health run
 
@@ -218,9 +218,27 @@ recreates the session and resumes on its own.
 
 **Cost: about 21 compute units** over the two runtimes, against the baseline's 33.5.
 
-## Next: d20
+## d20 with nanochat's recipe
 
 `RUNS["d20_nanochat"]` trains the post's model with this recipe: 6,640 steps of 524,288 tokens,
-8 tokens per parameter, as 32 microbatches of 8. The baseline d20 measured 31 hours on an A100.
-With cuDNN attention its speed hasn't been measured, but if it gains as much as d12 did, the
-run takes about 20.
+3.5B tokens, 8 tokens per parameter, as 32 microbatches of 8.
+[W&B run](https://wandb.ai/anujkhare18/toylib-p02-climbmix/runs/d20_nanochat).
+
+**It finished at 0.783 bits per byte on nanochat's 41.9M evaluation tokens**, inside the 0.75
+to 0.90 the health run set as healthy, and 0.094 below d12 with the same recipe. It improved at
+every evaluation, and was still falling about 0.003 per 250 steps at the end.
+
+| Step | 250 | 500 | 1,000 | 2,000 | 3,000 | 4,000 | 5,000 | 6,000 | Final |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| d20 | 1.078 | 0.988 | 0.929 | 0.893 | 0.863 | 0.835 | 0.811 | 0.791 | **0.783** |
+
+Without clipping, the gradient norm ended at 0.12, as d12's did.
+
+**Speed: about 46,000 tokens per second at 42.6% MFU**, against the baseline's 31,500 and
+32.7%. That's 1.46 times faster, close to the gain cuDNN attention gave d12. The run took 21.3
+hours on one A100 runtime, against the 31 planned, and never needed to resume.
+
+**Cost: about 145 compute units**, against the 209 planned.
+
+**Not yet checked:** samples. The run printed none, so whether they read as real text, the
+other half of milestone 4, needs the checkpoint.

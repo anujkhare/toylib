@@ -177,8 +177,8 @@ On a Colab A100 it runs at 31,500 tokens per second, so the full run needs about
 run, `RUNS["d12"]`, reached 0.949 bits per byte against nanochat's 0.87 to 0.90 at the same
 size, about 6 to 10% behind. Porting nanochat's current architecture and optimizer,
 `RUNS["d12_nanochat"]`, reached 0.877, 7.6% below that baseline and inside nanochat's range, and
-d20 trains with that recipe, `RUNS["d20_nanochat"]`. `EXPERIMENTS.md` has every run and the
-full list of what was ported. The notebook
+d20 trained with that recipe, `RUNS["d20_nanochat"]`, and reached 0.783 in 21.3 hours for
+about 145 units. `EXPERIMENTS.md` has every run and the full list of what was ported. The notebook
 itself has only run locally so far. Figures read checkpoints from the bucket
 with `--checkpoint-dir`, and a model this size needs an accelerator to draw them in
 reasonable time.
