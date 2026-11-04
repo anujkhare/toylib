@@ -8,6 +8,7 @@ python toylib_projects/p02_gpt_web/tokenizer/bytes_per_token.py \
 
 import argparse
 import numpy as np
+from transformers import AutoTokenizer
 
 
 def parse_command_line_args():
@@ -42,8 +43,6 @@ def token_bytes(tokenizer, token_id: int) -> int:
 
 
 def compute_bytes_per_token(tokenizer_name: str) -> np.ndarray:
-    from transformers import AutoTokenizer  # Only the nanochat-style runs need it.
-
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     special_token_ids = [
         tokenizer.bos_token_id,
@@ -67,8 +66,6 @@ def main():
     np.save(args.output_path, bpt)
     print("Average bytes per token:", np.mean(bpt))
     print("Total number of tokens:", len(bpt))
-    from transformers import AutoTokenizer
-
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     print(f"(Should be the same as the vocab size: {tokenizer.vocab_size})")
 
