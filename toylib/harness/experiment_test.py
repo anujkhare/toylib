@@ -491,17 +491,12 @@ def _run_saving(tmp_path, train_ds, **checkpoint_args):
     return steps
 
 
-def test_save_steps_adds_to_the_interval(tmp_path, train_ds):
-    steps = _run_saving(tmp_path, train_ds, save_interval_steps=5, save_steps=(1, 2))
-    assert steps == [0, 1, 2, 5]
-
-
-def test_save_final_keeps_the_last_step(tmp_path, train_ds):
-    steps = _run_saving(tmp_path, train_ds, save_interval_steps=5, save_final=True)
+def test_saves_the_last_step(tmp_path, train_ds):
+    steps = _run_saving(tmp_path, train_ds, save_interval_steps=5)
     assert steps == [0, 5, 6]
 
 
-def test_save_final_does_not_repeat_a_saved_step(tmp_path, train_ds):
-    steps = _run_saving(tmp_path, train_ds, save_interval_steps=6, save_final=True)
+def test_does_not_repeat_a_saved_last_step(tmp_path, train_ds):
+    steps = _run_saving(tmp_path, train_ds, save_interval_steps=6)
     assert steps == [0, 6]
 
