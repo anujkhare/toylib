@@ -93,7 +93,7 @@ dev = [
 [tool.uv.workspace]
 members = [
     "toylib_projects/bundler",
-    "toylib_projects/tinystories",
+    "toylib_projects/p02_gpt_web",
     "toylib_projects/dotsAndBoxes",
     "toylib_projects/wm",
 ]

@@ -27,7 +27,7 @@ from toylib.harness.experiment import (  # noqa: F401  (re-exported)
     WandBLoggerConfig,
     _serialize_dataclass_config,
 )
-from toylib_projects.tinystories import decoder_only_model
+from toylib_projects.p02_gpt_web import decoder_only_model
 
 
 DEFAULT_PROMPTS = [

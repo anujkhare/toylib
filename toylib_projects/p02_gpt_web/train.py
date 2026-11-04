@@ -1,7 +1,7 @@
 """Training script for TinyStories transformer model.
 
 Usage (Colab/Interactive):
-    from toylib_projects.tinystories import train
+    from toylib_projects.p02_gpt_web import train
 
     # For training:
     exp = train.create_experiment(
@@ -22,13 +22,13 @@ import numpy as np
 
 from toylib.harness import analyze as harness_analyze
 from toylib.harness import metrics as harness_metrics
-from toylib_projects.tinystories import analyze
-from toylib_projects.tinystories import data
-from toylib_projects.tinystories import decoder_only_model
-from toylib_projects.tinystories import experiment
-from toylib_projects.tinystories import metrics as metrics_module
-from toylib_projects.tinystories.scripts import compile as compile_utils
-from toylib_projects.tinystories.tokenizer import bytes_per_token
+from toylib_projects.p02_gpt_web import analyze
+from toylib_projects.p02_gpt_web import data
+from toylib_projects.p02_gpt_web import decoder_only_model
+from toylib_projects.p02_gpt_web import experiment
+from toylib_projects.p02_gpt_web import metrics as metrics_module
+from toylib_projects.p02_gpt_web.scripts import compile as compile_utils
+from toylib_projects.p02_gpt_web.tokenizer import bytes_per_token
 
 
 def create_muon_adam_multi_optimizer_config(

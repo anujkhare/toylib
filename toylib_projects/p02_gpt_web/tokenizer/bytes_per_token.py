@@ -1,9 +1,9 @@
 """Dumps the tokens per byte statistics for the given tokenizer.
 
 Sample command:
-python toylib_projects/tinystories/tokenizer/bytes_per_token.py \
+python toylib_projects/p02_gpt_web/tokenizer/bytes_per_token.py \
   --tokenizer gpt2 \
-  --output-path toylib_projects/tinystories/data/bpt_gpt2.npy
+  --output-path toylib_projects/p02_gpt_web/data/bpt_gpt2.npy
 """
 
 import argparse

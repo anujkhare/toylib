@@ -13,7 +13,7 @@ library; everything specific to one model or dataset lives in `toylib_projects/`
 
 `toylib_projects/` holds the blog posts (`pNN_*`) and longer projects:
 
-- `tinystories`: a GPT-2-style decoder-only language model, following nanochat.
+- `p02_gpt_web`: a GPT-2-style decoder-only language model, following nanochat.
 - `wm`: a text- and action-conditioned video world model trained on Atari Breakout.
 - `dotsAndBoxes`: Monte Carlo tree search for the game Dots and Boxes.
 - `bundler`: bundles a script and the local modules it imports into one file.
@@ -47,7 +47,7 @@ The core package needs only JAX, optax, einops and jaxtyping. The `harness`,
 ```bash
 uv run pytest toylib                     # core library, harness, viz
 uv run pytest toylib_projects/p01_cnn_mnist # one post
-uv run pytest toylib toylib_projects     # everything (slow; some tinystories tests need network)
+uv run pytest toylib toylib_projects     # everything (slow; some p02 tests need network)
 ```
 
 ## Key locations for AI sessions

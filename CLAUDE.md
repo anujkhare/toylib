@@ -11,8 +11,8 @@ uv run pytest -v toylib
 # Run tests for one post
 uv run pytest -v toylib_projects/p01_cnn_mnist
 
-# Run tests for tinystories and toylib (common)
-uv run pytest -v toylib toylib_projects/tinystories
+# Run tests for post 2 and toylib (common)
+uv run pytest -v toylib toylib_projects/p02_gpt_web
 
 # Run tests for all projects (only do if absolutely required)
 uv run pytest -v toylib toylib_projects

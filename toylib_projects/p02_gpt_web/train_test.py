@@ -12,8 +12,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from toylib_projects.tinystories import experiment
-from toylib_projects.tinystories import train
+from toylib_projects.p02_gpt_web import experiment
+from toylib_projects.p02_gpt_web import train
 
 VOCAB_SIZE = 50257
 
