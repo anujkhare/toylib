@@ -470,3 +470,38 @@ def test_restore_checkpoint_defaults_to_latest(tmp_path: Path, train_ds) -> None
     assert exp.step == 7
     np.testing.assert_array_equal(np.asarray(exp.model["w"]), np.full((4,), 7.0))
     exp.cleanup()
+
+
+def _run_saving(tmp_path, train_ds, **checkpoint_args):
+    exp = Experiment(
+        train_task=Task("train", train_ds),
+        forward_fn=_trivial_forward_fn,
+        model_factory=_trivial_model_factory,
+        training_config=TrainingConfig(max_steps=7),
+        checkpoint_config=CheckpointConfig(
+            checkpoint_dir=str(tmp_path / "ckpts"), max_to_keep=None, **checkpoint_args
+        ),
+        logger_config=LoggerConfig(log_dir=str(tmp_path)),
+        jit_computations=False,
+    )
+    exp.init_state()
+    exp.outer_loop()
+    steps = sorted(int(s) for s in exp.ckpt_manager.all_steps())
+    exp.cleanup()
+    return steps
+
+
+def test_save_steps_adds_to_the_interval(tmp_path, train_ds):
+    steps = _run_saving(tmp_path, train_ds, save_interval_steps=5, save_steps=(1, 2))
+    assert steps == [0, 1, 2, 5]
+
+
+def test_save_final_keeps_the_last_step(tmp_path, train_ds):
+    steps = _run_saving(tmp_path, train_ds, save_interval_steps=5, save_final=True)
+    assert steps == [0, 5, 6]
+
+
+def test_save_final_does_not_repeat_a_saved_step(tmp_path, train_ds):
+    steps = _run_saving(tmp_path, train_ds, save_interval_steps=6, save_final=True)
+    assert steps == [0, 6]
+

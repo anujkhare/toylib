@@ -61,6 +61,11 @@ class CheckpointConfig:
     max_to_keep: typing.Optional[int] = 10
     checkpoint_dir: str = "/tmp/checkpoints"  # A local path or gs://bucket/path.
     checkpoint_dataset_iterator: bool = False
+    # Extra steps to save at, e.g. a dense early schedule for "X over training"
+    # figures. Used together with ``save_interval_steps``.
+    save_steps: tuple[int, ...] = ()
+    # Also save after the last step, which the interval usually misses.
+    save_final: bool = False
 
 
 @dataclasses.dataclass
@@ -101,8 +106,9 @@ class TrainingConfig:
 
     max_steps: int = 100_000
 
-    # The effective batch is `dataset.batch_size * num_microbatches`.
-    # The dataset's batch is sharded across local devices.
+    # The dataset's batch is sharded across local devices, then each device's
+    # share is split into this many microbatches whose gradients are averaged.
+    # The effective batch stays `dataset.batch_size`; this only lowers peak memory.
     num_microbatches: int = 1
 
     # A value > 0.0 enables global-norm gradient clipping.
@@ -384,6 +390,13 @@ class Experiment:
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
             updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
+            # Before any clipping, and relative to the weights, so both stay readable
+            # at any learning rate or model size.
+            averaged_metrics = {
+                **averaged_metrics,
+                "grad_norm": optax.global_norm(total_grads),
+                "update_to_weight": optax.global_norm(updates) / optax.global_norm(model),
+            }
             model = optax.apply_updates(model, updates)
 
         return model, opt_state, averaged_metrics
@@ -619,6 +632,10 @@ class Experiment:
 
     # ---- main loop ---------------------------------------------------------
 
+    def extra_train_logs(self, steps_per_sec: float) -> dict[str, float]:
+        """Values to log with the training metrics. Subclasses can add to them."""
+        return {}
+
     def inner_loop(self, batch: jt.PyTree):
         self._assert_initialized()
 
@@ -632,8 +649,11 @@ class Experiment:
             }
             elapsed = time.monotonic() - self._train_start_time
             steps_done = self.step - self._train_start_step
+            steps_per_sec = 0.0
             if elapsed > 0 and steps_done > 0:
-                train_metrics_with_prefix["train/steps_per_sec"] = steps_done / elapsed
+                steps_per_sec = steps_done / elapsed
+                train_metrics_with_prefix["train/steps_per_sec"] = steps_per_sec
+            train_metrics_with_prefix.update(self.extra_train_logs(steps_per_sec))
             self.logger_obj.log(self.step, metrics=train_metrics_with_prefix)
 
     def outer_loop(self):
@@ -645,7 +665,10 @@ class Experiment:
                 with jax.profiler.StepTraceAnnotation("inner_loop", step_num=self.step):
                     self.inner_loop(batch)
 
-                if self.step % self.checkpoint_config.save_interval_steps == 0:
+                if (
+                    self.step % self.checkpoint_config.save_interval_steps == 0
+                    or self.step in self.checkpoint_config.save_steps
+                ):
                     self.save_checkpoint()
                 if self.step % self.eval_config.eval_interval_steps == 0:
                     self.eval()
@@ -657,6 +680,12 @@ class Experiment:
 
             if self.step == epoch_start_step:
                 raise ValueError(f"Dataset for task {self.train_task.name} is empty.")
+
+        if self.checkpoint_config.save_final and self.step == self.training_config.max_steps:
+            self.step -= 1  # Label the checkpoint with the step it finished.
+            if self.step not in self.ckpt_manager.all_steps():
+                self.save_checkpoint()
+            self.step += 1
 
     def cleanup(self):
         """Release logger + checkpoint manager. Call once after training."""
