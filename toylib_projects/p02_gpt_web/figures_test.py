@@ -11,7 +11,7 @@ import pytest
 from toylib import viz
 from toylib_projects.p02_gpt_web import figures
 from toylib_projects.p02_gpt_web import train
-from toylib_projects.p02_gpt_web import webtext
+from toylib_projects.p02_gpt_web import tokenize_webtext
 from toylib_projects.p02_gpt_web.tokenizer import bpe
 
 # Trained on the figures' word groups, which have to be single tokens.
@@ -37,11 +37,11 @@ def inspector(tmp_path_factory):
     root = tmp_path_factory.mktemp("run")
     data_dir = root / "data"
     data_dir.mkdir()
-    TOKENIZER.save(webtext.tokenizer_path(RUN.vocab_size, data_dir))
+    TOKENIZER.save(tokenize_webtext.tokenizer_path(RUN.vocab_size, data_dir))
     tokens = np.random.default_rng(0).integers(2, 64, 8_000, dtype=np.uint16)
-    tokens[::100] = webtext.EOT_ID  # Documents of 100 tokens.
+    tokens[::100] = tokenize_webtext.EOT_ID  # Documents of 100 tokens.
     for split in ("train", "val"):
-        tokens.tofile(webtext.bin_path(split, RUN.vocab_size, data_dir))
+        tokens.tofile(tokenize_webtext.bin_path(split, RUN.vocab_size, data_dir))
 
     exp = train.create_run_experiment(
         RUN, run_id="test", data_dir=data_dir, output_dir=root
@@ -61,7 +61,7 @@ def test_figure_renders(inspector, name, tmp_path):
 
 
 def test_document_starts_with_eot(inspector):
-    assert inspector.document(index=0)[0] == webtext.EOT_ID
+    assert inspector.document(index=0)[0] == tokenize_webtext.EOT_ID
 
 
 def test_shown_blocks_span_the_depth():
