@@ -1,4 +1,5 @@
 import abc
+import copy
 import dataclasses
 import numpy as np
 import jax
@@ -58,10 +59,16 @@ class Module(abc.ABC):
 
         param_dtype: storage dtype for trainable parameters (default float32).
         dtype: compute dtype for forward-pass operations (default float32).
+
+    `freeze()` marks parameters that are saved with the model but never trained,
+    e.g. pretrained weights or RoPE's rotation tables.
     """
 
     param_dtype: np.dtype | type = jnp.float32
     dtype: np.dtype | type = jnp.float32
+
+    # Names of the parameters marked by `freeze()`.
+    _frozen_keys: typing.ClassVar[frozenset[str]] = frozenset()
 
     def __init_subclass__(cls, **kwargs: typing.Any) -> None:
         """Initialize subclass as a dataclass and register as a pytree node.
@@ -93,6 +100,26 @@ class Module(abc.ABC):
     def __call__(self, *args, **kwargs) -> typing.Any:
         """Run a forward pass of the module."""
         pass
+
+    def freeze(self, *names: str) -> None:
+        """Mark parameters as frozen: saved and restored, but never trained.
+
+        Each name is an array or a sub-module (or list of sub-modules) on this
+        module; freezing a sub-module freezes everything in it. Call from `init()`.
+        The harness gives frozen parameters no gradient and no optimizer update.
+        """
+        for name in names:
+            value = self.__dict__.get(name)
+            if not (
+                (_is_array(value) and not _is_random_key(name))
+                or isinstance(value, Module)
+                or (
+                    _is_supported_container(value)
+                    and all(isinstance(elem, Module) for elem in value)
+                )
+            ):
+                raise ValueError(f"{type(self).__name__}.{name} is not a parameter")
+        self._frozen_keys = self._frozen_keys | frozenset(names)
 
     def _get_trainable_param_keys(self) -> list[str]:
         """Get the list of attribute names that are trainable parameters."""
@@ -137,3 +164,41 @@ class Module(abc.ABC):
             obj.__setattr__(k, v)
 
         return obj
+
+
+def trainable_mask(tree: typing.Any) -> typing.Any:
+    """A tree like `tree` with True at each trainable leaf and False at each frozen one.
+
+    Leaves outside any `Module` are trainable. The mask depends only on the tree's
+    structure, so it can be computed inside `jit`.
+    """
+
+    def visit(node: typing.Any, frozen: bool) -> typing.Any:
+        if isinstance(node, Module):
+            masked = copy.copy(node)
+            for k in node._trainable_param_keys:
+                masked.__dict__[k] = visit(node.__dict__[k], frozen or k in node._frozen_keys)
+            return masked
+        if _is_supported_container(node):
+            return type(node)(visit(elem, frozen) for elem in node)
+        return jax.tree.map(lambda _: not frozen, node)
+
+    return jax.tree.map(
+        lambda node: visit(node, False), tree, is_leaf=lambda x: isinstance(x, Module)
+    )
+
+
+def partition(tree: typing.Any, mask: typing.Any) -> tuple[typing.Any, typing.Any]:
+    """Split `tree` by `mask` into (trainable, frozen), with None in place of the other part."""
+    trainable = jax.tree.map(lambda x, m: x if m else None, tree, mask)
+    frozen = jax.tree.map(lambda x, m: None if m else x, tree, mask)
+    return trainable, frozen
+
+
+def combine(*trees: typing.Any) -> typing.Any:
+    """Undo `partition`: at each leaf, take the first tree's value that isn't None."""
+
+    def first(*values):
+        return next((v for v in values if v is not None), None)
+
+    return jax.tree.map(first, *trees, is_leaf=lambda x: x is None)

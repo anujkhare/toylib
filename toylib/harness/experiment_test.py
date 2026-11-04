@@ -16,18 +16,23 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 
+from toylib.harness import inference
 from toylib.harness.data import ArrayDataset
 from toylib.harness.experiment import (
     CheckpointConfig,
     EvalConfig,
     Experiment,
     LoggerConfig,
+    MultiOptimizerConfig,
+    OptimizerConfig,
     Task,
     TrainingConfig,
     _serialize_dataclass_config,
 )
+from toylib.nn import module
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -500,3 +505,147 @@ def test_does_not_repeat_a_saved_last_step(tmp_path, train_ds):
     steps = _run_saving(tmp_path, train_ds, save_interval_steps=6)
     assert steps == [0, 6]
 
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Frozen parameters
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class _WithTable(module.Module):
+    """A trainable vector next to a frozen table; the loss depends on both."""
+
+    frozen_table: bool = True
+
+    def init(self) -> None:
+        self.w = jnp.zeros((4,))
+        self.table = jnp.arange(4.0)
+        if self.frozen_table:
+            self.freeze("table")
+
+    def __call__(self, x):
+        return self.w + self.table
+
+
+class _WithoutTable(module.Module):
+    """`_WithTable` as it was before it had a table."""
+
+    def init(self) -> None:
+        self.w = jnp.zeros((4,))
+
+    def __call__(self, x):
+        return self.w
+
+
+def _table_forward_fn(model, batch):
+    del batch
+    return (model(None) ** 2).mean(), {}
+
+
+def _with_table(config, key):
+    del config, key
+    model = _WithTable()
+    model.init()
+    return model
+
+
+def _adamw_config() -> MultiOptimizerConfig:
+    return MultiOptimizerConfig(
+        [OptimizerConfig("adamw", optax.adamw(0.1, weight_decay=0.5))],
+        lambda path: "adamw",
+    )
+
+
+def _table_experiment(tmp_path, model_factory, optimizer_config=None, max_steps=3):
+    return Experiment(
+        train_task=Task(
+            "train", ArrayDataset(_frames(16), batch_size=jax.local_device_count())
+        ),
+        forward_fn=_table_forward_fn,
+        model_factory=model_factory,
+        training_config=TrainingConfig(
+            max_steps=max_steps, optimizer_config=optimizer_config
+        ),
+        checkpoint_config=CheckpointConfig(
+            checkpoint_dir=str(tmp_path / "ckpts"), save_interval_steps=100
+        ),
+        logger_config=LoggerConfig(log_dir=str(tmp_path)),
+    )
+
+
+@pytest.mark.parametrize("optimizer_config", [None, _adamw_config()], ids=["adam", "adamw"])
+def test_frozen_parameters_do_not_move(tmp_path, optimizer_config):
+    exp = _table_experiment(tmp_path, _with_table, optimizer_config)
+    exp.init_state()
+    exp.outer_loop()
+    np.testing.assert_array_equal(np.asarray(exp.model.table), np.arange(4.0))
+    assert not np.array_equal(np.asarray(exp.model.w), np.zeros(4))
+    exp.cleanup()
+
+
+def test_frozen_parameters_have_no_optimizer_state(tmp_path):
+    def count(factory):
+        exp = _table_experiment(tmp_path / factory.__name__, factory, _adamw_config())
+        exp.init_state()
+        n = len(jax.tree.leaves(exp.opt_state))
+        exp.cleanup()
+        return n
+
+    def unfrozen(config, key):
+        model = _WithTable(frozen_table=False)
+        model.init()
+        return model
+
+    # Adam keeps two arrays per parameter: freezing the table drops its two.
+    assert count(unfrozen) - count(_with_table) == 2
+
+
+def test_an_older_checkpoint_resumes_with_fresh_frozen_parameters(tmp_path):
+    """A checkpoint saved before the model had a frozen table still loads."""
+
+    def without_table(config, key):
+        model = _WithoutTable()
+        model.init()
+        return model
+
+    old = _table_experiment(tmp_path, without_table, _adamw_config())
+    old.init_state()
+    old.outer_loop()
+    trained_w = np.asarray(old.model.w)
+    old.cleanup()
+
+    new = _table_experiment(tmp_path, _with_table, _adamw_config(), max_steps=5)
+    new.init_state()
+    assert new.resume()
+    np.testing.assert_array_equal(np.asarray(new.model.w), trained_w)
+    np.testing.assert_array_equal(np.asarray(new.model.table), np.arange(4.0))
+    new.outer_loop()  # The restored optimizer state trains on.
+    np.testing.assert_array_equal(np.asarray(new.model.table), np.arange(4.0))
+    new.cleanup()
+
+    template = _with_table(None, None)
+    loaded = inference.load_model(template, tmp_path / "ckpts", step=2)
+    np.testing.assert_array_equal(np.asarray(loaded.w), trained_w)
+
+
+def test_a_missing_trainable_parameter_is_an_error(tmp_path):
+    def without_table(config, key):
+        model = _WithoutTable()
+        model.init()
+        return model
+
+    def unfrozen(config, key):
+        model = _WithTable(frozen_table=False)
+        model.init()
+        return model
+
+    old = _table_experiment(tmp_path, without_table, _adamw_config())
+    old.init_state()
+    old.outer_loop()
+    old.cleanup()
+
+    new = _table_experiment(tmp_path, unfrozen, _adamw_config())
+    new.init_state()
+    with pytest.raises(ValueError, match="has no model leaf table"):
+        new.resume()
+    new.cleanup()
