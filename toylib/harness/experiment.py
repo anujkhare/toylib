@@ -61,11 +61,6 @@ class CheckpointConfig:
     max_to_keep: typing.Optional[int] = 10
     checkpoint_dir: str = "/tmp/checkpoints"  # A local path or gs://bucket/path.
     checkpoint_dataset_iterator: bool = False
-    # Extra steps to save at, e.g. a dense early schedule for "X over training"
-    # figures. Used together with ``save_interval_steps``.
-    save_steps: tuple[int, ...] = ()
-    # Also save after the last step, which the interval usually misses.
-    save_final: bool = False
 
 
 @dataclasses.dataclass
@@ -665,10 +660,7 @@ class Experiment:
                 with jax.profiler.StepTraceAnnotation("inner_loop", step_num=self.step):
                     self.inner_loop(batch)
 
-                if (
-                    self.step % self.checkpoint_config.save_interval_steps == 0
-                    or self.step in self.checkpoint_config.save_steps
-                ):
+                if self.step % self.checkpoint_config.save_interval_steps == 0:
                     self.save_checkpoint()
                 if self.step % self.eval_config.eval_interval_steps == 0:
                     self.eval()
@@ -681,7 +673,8 @@ class Experiment:
             if self.step == epoch_start_step:
                 raise ValueError(f"Dataset for task {self.train_task.name} is empty.")
 
-        if self.checkpoint_config.save_final and self.step == self.training_config.max_steps:
+        # Also save the last step, which the interval usually misses.
+        if self.step == self.training_config.max_steps:
             self.step -= 1  # Label the checkpoint with the step it finished.
             if self.step not in self.ckpt_manager.all_steps():
                 self.save_checkpoint()
