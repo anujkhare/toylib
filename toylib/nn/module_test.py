@@ -147,3 +147,85 @@ class TestModule:
         assert not jnp.array_equal(new_model.bias, model.bias)
 
         assert loss > 0
+
+
+class _Inner(module.Module):
+    def init(self) -> None:
+        self.w = jnp.ones((2,))
+
+    def __call__(self, x):
+        return x * self.w
+
+
+class _Outer(module.Module):
+    def init(self) -> None:
+        self.trained = jnp.zeros((3,))
+        self.table = jnp.arange(4.0)
+        self.encoder = _Inner()
+        self.blocks = [_Inner(), _Inner()]
+        self.freeze("table", "encoder")
+
+    def __call__(self, x):
+        return x
+
+
+class TestFreeze:
+    def _model(self):
+        model = _Outer()
+        model.init()
+        return model
+
+    def test_mask_marks_frozen_arrays_and_sub_modules(self):
+        mask = module.trainable_mask(self._model())
+        assert mask.trained is True
+        assert mask.table is False
+        assert mask.encoder.w is False
+        assert [block.w for block in mask.blocks] == [True, True]
+
+    def test_mask_has_the_model_structure(self):
+        model = self._model()
+        assert jax.tree.structure(module.trainable_mask(model)) == jax.tree.structure(
+            jax.tree.map(lambda _: True, model)
+        )
+
+    def test_frozen_arrays_stay_leaves(self):
+        """Frozen arrays go wherever the model goes: jit, checkpoints, sharding."""
+        assert len(jax.tree.leaves(self._model())) == 5
+
+    def test_frozen_keys_survive_flatten_and_unflatten(self):
+        model = jax.tree.map(lambda x: x + 1, self._model())
+        assert jax.tree.leaves(module.trainable_mask(model)) == [True, False, False, True, True]
+
+    def test_mask_works_under_jit(self):
+        @jax.jit
+        def frozen_sum(model):
+            _, frozen = module.partition(model, module.trainable_mask(model))
+            return sum(x.sum() for x in jax.tree.leaves(frozen))
+
+        assert frozen_sum(self._model()) == 6.0 + 2.0  # table and encoder.w
+
+    def test_partition_then_combine_round_trips(self):
+        model = self._model()
+        trainable, frozen = module.partition(model, module.trainable_mask(model))
+        assert len(jax.tree.leaves(trainable)) == 3
+        assert len(jax.tree.leaves(frozen)) == 2
+        restored = module.combine(trainable, frozen)
+        assert jax.tree.structure(restored) == jax.tree.structure(model)
+        for a, b in zip(jax.tree.leaves(restored), jax.tree.leaves(model)):
+            assert jnp.array_equal(a, b)
+
+    def test_trees_without_modules_are_trainable(self):
+        assert module.trainable_mask({"w": jnp.zeros(2)}) == {"w": True}
+
+    def test_rejects_a_name_that_is_not_a_parameter(self):
+        class Bad(module.Module):
+            size: int = 3
+
+            def init(self) -> None:
+                self.freeze("size")
+
+            def __call__(self, x):
+                return x
+
+        with pytest.raises(ValueError, match="not a parameter"):
+            Bad().init()

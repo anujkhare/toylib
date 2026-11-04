@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from toylib.nn import attention
+from toylib.nn import module
 
 
 class TestROPE:
@@ -25,8 +26,11 @@ class TestRotaryPositionalEmbeddingIsFixed:
         rope.init()
         return rope
 
-    def test_has_no_trainable_parameters(self):
-        assert jax.tree.leaves(self._rope()) == []
+    def test_tables_are_frozen(self):
+        """Saved with the model, but never trained."""
+        rope = self._rope()
+        assert len(jax.tree.leaves(rope)) == 2
+        assert jax.tree.leaves(module.trainable_mask(rope)) == [False, False]
 
     def test_position_zero_is_unrotated(self):
         x = jax.random.normal(jax.random.key(0), (1, 8))
