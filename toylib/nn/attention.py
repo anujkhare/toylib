@@ -18,31 +18,31 @@ class RotaryPositionalEmbedding(module.Module):
 
     def init(self) -> None:
         # Construct the frequencies in float32 for precision, then store in param_dtype.
-        positions = jnp.arange(0, self.seq_len)
+        positions = jnp.arange(0, self.seq_len, dtype=jnp.float32)
         freqs = self.base ** (jnp.arange(0, self.qkv_dim, 2) / self.qkv_dim)
         # [seq_len, qkv_dim // 2]
-        self.gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
-        self.cos = jnp.cos(self.gamma).astype(self.param_dtype)
-        self.sin = jnp.sin(self.gamma).astype(self.param_dtype)
+        gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
+        self.cos = jnp.cos(gamma).astype(self.param_dtype)
+        self.sin = jnp.sin(gamma).astype(self.param_dtype)
+        # Saved with the model, so a checkpoint keeps the tables it trained with,
+        # but never trained: a trained table would no longer be a rotation.
+        self.freeze("cos", "sin")
 
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"], t0: int = 0
     ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
         t, d = x.shape[-2:]
-        # The position embeddings are cached for `seq_len` which may be larger
-        # than the maximum sequence length of the model. We index the cached
-        # embeddings equal to the current sequence length `t`. During training,
-        # this length is (likely) equal to the model's `seq_len`. During
-        # inference, this would vary based on the input sequence. `t0` is
-        # used when the starting token is not at time 0 - for instance,
-        # when using a KV cache.
+        # `t` is the current sequence length. During training, this is (likely)
+        # equal to the model's `seq_len`. During inference, this would vary based
+        # on the input sequence. `t0` is used when the starting token is not at
+        # time 0 - for instance, when using a KV cache.
         if t0 + t > self.seq_len:
             raise ValueError(
-                "Position index out of range of RoPE cache:"
+                "Position index out of range of RoPE:"
                 f"t0 ({t0}) + t ({t}) > seq_len ({self.seq_len})"
             )
-        sin = self.sin[t0 : t0 + t, :].astype(self.dtype)
         cos = self.cos[t0 : t0 + t, :].astype(self.dtype)
+        sin = self.sin[t0 : t0 + t, :].astype(self.dtype)
 
         x1, x2 = (
             x[..., : d // 2].astype(self.dtype),

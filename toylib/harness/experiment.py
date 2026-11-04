@@ -46,8 +46,13 @@ import numpy as np
 import optax
 import orbax.checkpoint as ocp
 
+from toylib.harness import inference
 from toylib.harness import logger
 from toylib.harness import metrics as metrics_module
+from toylib.nn import module
+
+# The optimizer group for frozen parameters, which get no update.
+FROZEN = "frozen"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -77,7 +82,8 @@ class MultiOptimizerConfig:
 
     ``optimizer_for_param(path) -> name`` picks the optimizer for a parameter,
     e.g. Muon for transformer blocks and AdamW for embeddings, or
-    ``optax.set_to_zero()`` to freeze a pretrained encoder.
+    ``optax.set_to_zero()`` for a group that shouldn't train. Parameters frozen with
+    ``Module.freeze`` never reach it: they get their own group.
     """
 
     optimizer_configs: list[OptimizerConfig]
@@ -101,8 +107,9 @@ class TrainingConfig:
 
     max_steps: int = 100_000
 
-    # The effective batch is `dataset.batch_size * num_microbatches`.
-    # The dataset's batch is sharded across local devices.
+    # The dataset's batch is sharded across local devices, then each device's
+    # share is split into this many microbatches whose gradients are averaged.
+    # The effective batch stays `dataset.batch_size`; this only lowers peak memory.
     num_microbatches: int = 1
 
     # A value > 0.0 enables global-norm gradient clipping.
@@ -299,26 +306,45 @@ class Experiment:
             all_metrics.update(metric_results)
         return all_metrics
 
-    def _create_optimizer(self) -> optax.GradientTransformation:
-        """Build the optimizer chain: optional grad-clip then a single or multi-optimizer."""
+    def _create_optimizer(self, has_frozen: bool = False) -> optax.GradientTransformation:
+        """Build the optimizer chain: optional grad-clip then a single or multi-optimizer.
+
+        With frozen parameters, they get their own group, `FROZEN`, whose update is
+        zero and which keeps no state, so they don't move, not even by weight decay.
+        """
         optimizer_chain: list[optax.GradientTransformation] = []
         if self.training_config.max_grad_norm > 0.0:
             optimizer_chain.append(
                 optax.clip_by_global_norm(self.training_config.max_grad_norm)
             )
 
-        if self.training_config.optimizer_config is None:
+        optimizer_config = self.training_config.optimizer_config
+        if optimizer_config is None:
             print("Using default optimizer: Adam, lr=1e-3")
+        if optimizer_config is None and not has_frozen:
             optimizer_chain.append(optax.adam(learning_rate=1e-3))
         else:
-            optimizer_map = self.training_config.optimizer_config.build_optimizer_map()
-            optimizer_for_param = (
-                self.training_config.optimizer_config.optimizer_for_param
-            )
+            if optimizer_config is None:
+                optimizer_map = {"adam": optax.adam(learning_rate=1e-3)}
+
+                def optimizer_for_param(path):
+                    return "adam"
+            else:
+                optimizer_map = optimizer_config.build_optimizer_map()
+                optimizer_for_param = optimizer_config.optimizer_for_param
+
+            if has_frozen:
+                if FROZEN in optimizer_map:
+                    raise ValueError(f"The optimizer group name {FROZEN!r} is reserved")
+                optimizer_map = {**optimizer_map, FROZEN: optax.set_to_zero()}
 
             def label_fn(params):
                 return jax.tree_util.tree_map_with_path(
-                    lambda path, _: optimizer_for_param(path), params
+                    lambda path, _, trainable: (
+                        optimizer_for_param(path) if trainable else FROZEN
+                    ),
+                    params,
+                    module.trainable_mask(params),
                 )
 
             optimizer_chain.append(
@@ -342,10 +368,19 @@ class Experiment:
         num_microbatches = self.training_config.num_microbatches
         microbatch_size = sharded_batch_size // num_microbatches
 
+        # Differentiate only the trainable part. Frozen leaves get zero gradients,
+        # so the rest of the step sees one tree shaped like the model.
+        mask = module.trainable_mask(model)
+        trainable, frozen = module.partition(model, mask)
+
+        def loss_of_trainable(trainable, microbatch):
+            return self.forward_fn(module.combine(trainable, frozen), microbatch)
+
         def compute_microbatch(microbatch):
-            (loss_val, aux), grads = jax.value_and_grad(self.forward_fn, has_aux=True)(
-                model, microbatch
+            (loss_val, aux), grads = jax.value_and_grad(loss_of_trainable, has_aux=True)(
+                trainable, microbatch
             )
+            grads = module.combine(grads, jax.tree.map(jnp.zeros_like, frozen))
             microbatch_metrics = self._compute_metrics(
                 task=self.train_task, loss=loss_val, aux=aux, batch=microbatch
             )
@@ -384,6 +419,15 @@ class Experiment:
 
         with jax.profiler.TraceAnnotation("optimizer_update"):
             updates, opt_state = self.optimizer.update(total_grads, opt_state, model)
+            # Before any clipping, and relative to the weights, so both stay readable
+            # at any learning rate or model size. Frozen weights don't count: RoPE's
+            # tables alone would outweigh a small model's.
+            averaged_metrics = {
+                **averaged_metrics,
+                "grad_norm": optax.global_norm(total_grads),
+                "update_to_weight": optax.global_norm(updates)
+                / optax.global_norm(trainable),
+            }
             model = optax.apply_updates(model, updates)
 
         return model, opt_state, averaged_metrics
@@ -452,7 +496,8 @@ class Experiment:
                 self.model_config, jax.random.key(self.seed)
             )
 
-        self.optimizer = self._create_optimizer()
+        has_frozen = not all(jax.tree.leaves(module.trainable_mask(self.model)))
+        self.optimizer = self._create_optimizer(has_frozen)
 
         with jax.set_mesh(self.mesh):
             self.opt_state = self.optimizer.init(self.model)
@@ -510,21 +555,26 @@ class Experiment:
         model_template = self._unreplicate_for_checkpoint(self.model)
         opt_state_template = self._unreplicate_for_checkpoint(self.opt_state)
 
-        args = {
-            "model": ocp.args.StandardRestore(model_template),
-            "opt_state": ocp.args.StandardRestore(opt_state_template),
-        }
+        # Frozen parameters added since the checkpoint keep their fresh values.
+        frozen = jax.tree.map(lambda m: not m, module.trainable_mask(model_template))
+        model = inference.restore_tree(
+            self.ckpt_manager, step, "model", model_template, frozen
+        )
+        opt_state = inference.restore_tree(
+            self.ckpt_manager, step, "opt_state", opt_state_template
+        )
+        self.model = jax.device_put(model, self.replicated_sharding)
+        self.opt_state = jax.device_put(opt_state, self.replicated_sharding)
+
         if self.checkpoint_config.checkpoint_dataset_iterator:
-            args["dataset_iterator"] = ocp.args.StandardRestore(
-                self.train_task.dataset.get_state()
+            restored = self.ckpt_manager.restore(
+                step,
+                args=ocp.args.Composite(
+                    dataset_iterator=ocp.args.StandardRestore(
+                        self.train_task.dataset.get_state()
+                    )
+                ),
             )
-
-        restored = self.ckpt_manager.restore(step, args=ocp.args.Composite(**args))
-
-        self.model = jax.device_put(restored["model"], self.replicated_sharding)
-        self.opt_state = jax.device_put(restored["opt_state"], self.replicated_sharding)
-
-        if self.checkpoint_config.checkpoint_dataset_iterator:
             self.train_task.dataset.restore_state(restored["dataset_iterator"])
         self.step = step
 
@@ -619,6 +669,10 @@ class Experiment:
 
     # ---- main loop ---------------------------------------------------------
 
+    def extra_train_logs(self, steps_per_sec: float) -> dict[str, float]:
+        """Values to log with the training metrics. Subclasses can add to them."""
+        return {}
+
     def inner_loop(self, batch: jt.PyTree):
         self._assert_initialized()
 
@@ -632,8 +686,11 @@ class Experiment:
             }
             elapsed = time.monotonic() - self._train_start_time
             steps_done = self.step - self._train_start_step
+            steps_per_sec = 0.0
             if elapsed > 0 and steps_done > 0:
-                train_metrics_with_prefix["train/steps_per_sec"] = steps_done / elapsed
+                steps_per_sec = steps_done / elapsed
+                train_metrics_with_prefix["train/steps_per_sec"] = steps_per_sec
+            train_metrics_with_prefix.update(self.extra_train_logs(steps_per_sec))
             self.logger_obj.log(self.step, metrics=train_metrics_with_prefix)
 
     def outer_loop(self):
@@ -657,6 +714,13 @@ class Experiment:
 
             if self.step == epoch_start_step:
                 raise ValueError(f"Dataset for task {self.train_task.name} is empty.")
+
+        # Also save the last step, which the interval usually misses.
+        if self.step == self.training_config.max_steps:
+            self.step -= 1  # Label the checkpoint with the step it finished.
+            if self.step not in self.ckpt_manager.all_steps():
+                self.save_checkpoint()
+            self.step += 1
 
     def cleanup(self):
         """Release logger + checkpoint manager. Call once after training."""
