@@ -16,7 +16,7 @@ from toylib.harness import inference
 from toylib.viz import curves
 from toylib_projects.p02_gpt_web import experiment
 from toylib_projects.p02_gpt_web import train
-from toylib_projects.p02_gpt_web import webtext
+from toylib_projects.p02_gpt_web import tokenize_webtext
 from toylib_projects.p02_gpt_web.tokenizer import bpe
 
 VOCAB_SIZE = 50257
@@ -244,10 +244,10 @@ class TestRunExperiment:
     def data_dir(self, tmp_path):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
-        bpe.Tokenizer([]).save(webtext.tokenizer_path(257, data_dir))
+        bpe.Tokenizer([]).save(tokenize_webtext.tokenizer_path(257, data_dir))
         tokens = np.random.default_rng(0).integers(2, 64, 2_000, dtype=np.uint16)
         for split in ("train", "val"):
-            tokens.tofile(webtext.bin_path(split, 257, data_dir))
+            tokens.tofile(tokenize_webtext.bin_path(split, 257, data_dir))
         return data_dir
 
     def _create(self, data_dir, output_dir):

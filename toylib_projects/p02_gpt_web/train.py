@@ -1,6 +1,6 @@
 """Training script for the decoder-only transformer model.
 
-On ClimbMix, from token files written by webtext.py:
+On ClimbMix, from token files written by tokenize_webtext.py:
     uv run python -m toylib_projects.p02_gpt_web.train --run local
 
 The d20 run goes through notebooks/01_d20_climbmix_colab.ipynb.
@@ -35,7 +35,7 @@ from toylib_projects.p02_gpt_web import data
 from toylib_projects.p02_gpt_web import decoder_only_model
 from toylib_projects.p02_gpt_web import experiment
 from toylib_projects.p02_gpt_web import metrics as metrics_module
-from toylib_projects.p02_gpt_web import webtext
+from toylib_projects.p02_gpt_web import tokenize_webtext
 from toylib_projects.p02_gpt_web.scripts import compile as compile_utils
 from toylib_projects.p02_gpt_web.tokenizer import bytes_per_token
 
@@ -390,7 +390,7 @@ def create_experiment(
 
 @dataclasses.dataclass(frozen=True)
 class Run:
-    """One training configuration, on token files written by webtext.py."""
+    """One training configuration, on token files written by tokenize_webtext.py."""
 
     num_layers: int
     num_heads: int
@@ -459,22 +459,22 @@ def create_run_experiment(
     checkpoint_dir: str | None = None,
     logger_config: experiment.LoggerConfig | None = None,
 ) -> experiment.Experiment:
-    """Create an experiment that trains on the token files from webtext.py.
+    """Create an experiment that trains on the token files from tokenize_webtext.py.
 
     Logs and checkpoints go under `output_dir` unless `checkpoint_dir`, which can be a
     gs:// path, or `logger_config` say otherwise.
     """
     run_dir = pathlib.Path(output_dir).resolve() / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    data_dir = data_dir or webtext.data_dir_for(run.num_train_shards)
+    data_dir = data_dir or tokenize_webtext.data_dir_for(run.num_train_shards)
 
-    tokenizer = webtext.load_tokenizer(run.vocab_size, data_dir)
+    tokenizer = tokenize_webtext.load_tokenizer(run.vocab_size, data_dir)
     bpt_path = run_dir / "bytes_per_token.npy"
     np.save(bpt_path, tokenizer.bytes_per_token())
 
     def dataset(split: str, seed: int, repeatable: bool) -> data.TokenBinDataset:
         return data.TokenBinDataset(
-            path=str(webtext.bin_path(split, run.vocab_size, data_dir)),
+            path=str(tokenize_webtext.bin_path(split, run.vocab_size, data_dir)),
             batch_size=run.batch_size,
             seq_len=run.seq_len,
             seed=seed,
