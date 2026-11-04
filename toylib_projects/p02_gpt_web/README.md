@@ -10,7 +10,7 @@ copying appears at this scale is the open part of the experiment.
 the loss on the second copy with the first, at every checkpoint. If copying
 never appears, mix repeated random sequences into training and show both runs.
 
-**Model.** Reuse `toylib_projects/tinystories/decoder_only_model.py` with a
+**Model.** Reuse `toylib_projects/p02_gpt_web/decoder_only_model.py` with a
 character vocabulary. Fix the RoPE tables first (review fix 1), and consider
 promoting the model into `toylib.nn` once a second post needs it.
 

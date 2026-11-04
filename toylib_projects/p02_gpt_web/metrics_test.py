@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 
-from toylib_projects.tinystories import metrics
+from toylib_projects.p02_gpt_web import metrics
 
 
 class TestBitsPerByteMetric:

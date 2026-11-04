@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import jaxtyping as jt
 
-from toylib_projects.tinystories import decoder_only_model
+from toylib_projects.p02_gpt_web import decoder_only_model
 
 
 class TestDecoderOnlyTransformer:

@@ -2,22 +2,22 @@
 
 Example usage:
 
-python toylib_projects/tinystories/run_tokenize.py \
-    --input-path=toylib_projects/tinystories/data/tinystories_sample.txt \
-    --output-path=toylib_projects/tinystories/data/tokenized.npy \
+python toylib_projects/p02_gpt_web/run_tokenize.py \
+    --input-path=toylib_projects/p02_gpt_web/data/tinystories_sample.txt \
+    --output-path=toylib_projects/p02_gpt_web/data/tokenized.npy \
     --tokenizer=gpt2 \
     --delimiter="<|endoftext|>"
 
 # Full TinyStories v2
-python toylib_projects/tinystories/run_tokenize.py \
-    --input-path=toylib_projects/tinystories/data/TinyStoriesV2-GPT4-valid.txt \
-    --output-path=toylib_projects/tinystories/data/TinyStoriesV2-GPT4-valid-tokenized.npy \
+python toylib_projects/p02_gpt_web/run_tokenize.py \
+    --input-path=toylib_projects/p02_gpt_web/data/TinyStoriesV2-GPT4-valid.txt \
+    --output-path=toylib_projects/p02_gpt_web/data/TinyStoriesV2-GPT4-valid-tokenized.npy \
     --tokenizer=gpt2 \
     --delimiter="<|endoftext|>"
 
-python toylib_projects/tinystories/run_tokenize.py \
-    --input-path=toylib_projects/tinystories/data/TinyStoriesV2-GPT4-train.txt \
-    --output-path=toylib_projects/tinystories/data/TinyStoriesV2-GPT4-train-tokenized.npy \
+python toylib_projects/p02_gpt_web/run_tokenize.py \
+    --input-path=toylib_projects/p02_gpt_web/data/TinyStoriesV2-GPT4-train.txt \
+    --output-path=toylib_projects/p02_gpt_web/data/TinyStoriesV2-GPT4-train-tokenized.npy \
     --tokenizer=gpt2 \
     --delimiter="<|endoftext|>"
 

@@ -11,8 +11,8 @@ from unittest.mock import Mock, MagicMock, patch
 
 from toylib.harness import logger
 from toylib.harness import metrics
-from toylib_projects.tinystories import decoder_only_model
-from toylib_projects.tinystories import experiment
+from toylib_projects.p02_gpt_web import decoder_only_model
+from toylib_projects.p02_gpt_web import experiment
 import optax
 
 
@@ -70,11 +70,11 @@ class TestExperiment:
         assert exp.model is None
 
     @patch(
-        "toylib_projects.tinystories.experiment.jax.device_put",
+        "toylib_projects.p02_gpt_web.experiment.jax.device_put",
         side_effect=lambda x, *a, **kw: x,
     )
     @patch(
-        "toylib_projects.tinystories.experiment.decoder_only_model.DecoderOnlyTransformer"
+        "toylib_projects.p02_gpt_web.experiment.decoder_only_model.DecoderOnlyTransformer"
     )
     @patch("optax.adam")
     def test_init_state(self, mock_opt, mock_model_class, mock_device_put):
@@ -625,7 +625,7 @@ class TestExperimentE2E:
 class TestMultiOptimizer:
     """Tests for multi-optimizer functionality."""
 
-    @patch("toylib_projects.tinystories.experiment.optax.multi_transform")
+    @patch("toylib_projects.p02_gpt_web.experiment.optax.multi_transform")
     def test_default_single_optimizer(self, mock_multi_transform):
         """Test that default behavior uses a single optimizer for all parameters."""
         mock_dataset = MagicMock()  # iterable, as the Dataset protocol requires

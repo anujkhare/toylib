@@ -1,6 +1,6 @@
 """Training entry point for the Track A1 KL-VAE vision codec.
 
-Mirrors the shape of ``toylib_projects/tinystories/train.py``: a
+Mirrors the shape of ``toylib_projects/p02_gpt_web/train.py``: a
 ``create_experiment`` factory that wires together the dataset, model,
 optimizer, logger, and checkpoint manager into a ready-to-run
 ``Experiment``, plus a ``main`` that exposes a small CLI.
