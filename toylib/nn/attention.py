@@ -17,17 +17,16 @@ class RotaryPositionalEmbedding(module.Module):
     base: int = 100_000
 
     def init(self) -> None:
-        # Nothing to create. The rotation tables are a pure function of position,
-        # so they are computed in __call__: `Module` trains any array stored on self.
-        pass
-
-    def _tables(self, t0: int, t: int) -> tuple[jt.Array, jt.Array]:
-        # Construct the frequencies in float32 for precision, then cast to dtype.
-        positions = jnp.arange(t0, t0 + t, dtype=jnp.float32)
+        # Construct the frequencies in float32 for precision, then store in param_dtype.
+        positions = jnp.arange(0, self.seq_len, dtype=jnp.float32)
         freqs = self.base ** (jnp.arange(0, self.qkv_dim, 2) / self.qkv_dim)
-        # [t, qkv_dim // 2]
+        # [seq_len, qkv_dim // 2]
         gamma = einops.einsum(positions, 1.0 / freqs, "t, d -> t d")
-        return jnp.cos(gamma).astype(self.dtype), jnp.sin(gamma).astype(self.dtype)
+        self.cos = jnp.cos(gamma).astype(self.param_dtype)
+        self.sin = jnp.sin(gamma).astype(self.param_dtype)
+        # Saved with the model, so a checkpoint keeps the tables it trained with,
+        # but never trained: a trained table would no longer be a rotation.
+        self.freeze("cos", "sin")
 
     def __call__(
         self, x: jt.Float[jt.Array, "... seq_len qkv_dim"], t0: int = 0
@@ -42,7 +41,8 @@ class RotaryPositionalEmbedding(module.Module):
                 "Position index out of range of RoPE:"
                 f"t0 ({t0}) + t ({t}) > seq_len ({self.seq_len})"
             )
-        cos, sin = self._tables(t0, t)
+        cos = self.cos[t0 : t0 + t, :].astype(self.dtype)
+        sin = self.sin[t0 : t0 + t, :].astype(self.dtype)
 
         x1, x2 = (
             x[..., : d // 2].astype(self.dtype),
