@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import jaxtyping as jt
 
+from toylib.nn import module
 from toylib_projects.p02_gpt_web import decoder_only_model
 
 
@@ -260,14 +261,19 @@ class TestModelConfig:
 
 class TestModelStructure:
     def test_parameters_are_exactly_the_trained_layers(self):
-        """RoPE contributes no leaves, so its tables can't drift during training."""
+        """RoPE's tables are frozen, so only the layers train."""
+        model = _make_model()
+        mask = jax.tree.leaves(module.trainable_mask(model))
         paths = [
             jax.tree_util.keystr(path)
-            for path, _ in jax.tree_util.tree_leaves_with_path(_make_model())
+            for path, _ in jax.tree_util.tree_leaves_with_path(model)
         ]
-        assert not [p for p in paths if "rope" in p]
+        trained = [p for p, trainable in zip(paths, mask) if trainable]
+        frozen = [p for p, trainable in zip(paths, mask) if not trainable]
+        assert not [p for p in trained if "rope" in p]
+        assert all("rope" in p for p in frozen) and len(frozen) == 2 * 2
         # Embedding, output, and six matrices per block.
-        assert len(paths) == 2 + 2 * 6
+        assert len(trained) == 2 + 2 * 6
 
     def test_blocks_start_as_the_identity(self):
         """Zero-initialized output projections let signal pass straight through."""
