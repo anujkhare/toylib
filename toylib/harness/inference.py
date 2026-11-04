@@ -22,6 +22,67 @@ import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
 
+from toylib.nn import module
+
+
+def _key_name(key: typing.Any) -> str:
+    if isinstance(key, jax.tree_util.GetAttrKey):
+        return key.name
+    if isinstance(key, jax.tree_util.SequenceKey):
+        return str(key.idx)
+    if isinstance(key, (jax.tree_util.DictKey, jax.tree_util.FlattenedIndexKey)):
+        return str(key.key)
+    return str(key)
+
+
+def restore_tree(
+    manager: ocp.CheckpointManager,
+    step: int,
+    name: str,
+    template: typing.Any,
+    fillable: typing.Any = None,
+) -> typing.Any:
+    """Restore item `name` at `step` into the structure of `template`, leaf by leaf.
+
+    Leaves are matched by path, so empty nodes in the template, such as an
+    optimizer group with no parameters, don't need to be on disk. A leaf the
+    checkpoint lacks is taken from `template` where `fillable` (a matching tree
+    of bools) is True, and is an error otherwise, as is a leaf on disk that the
+    template doesn't have or one whose shape differs.
+    """
+    saved = manager.restore(
+        step, args=ocp.args.Composite(**{name: ocp.args.StandardRestore()})
+    )[name]
+    saved_flat = ocp.tree.to_flat_dict(saved)
+    leaves_with_path, treedef = jax.tree_util.tree_flatten_with_path(template)
+    if fillable is None:
+        can_fill = [False] * len(leaves_with_path)
+    else:
+        can_fill = jax.tree.leaves(fillable)
+
+    leaves, filled = [], []
+    for (path, leaf), fill in zip(leaves_with_path, can_fill, strict=True):
+        key = tuple(_key_name(k) for k in path)
+        where = f"{name} leaf {'/'.join(key)} at step {step}"
+        if key not in saved_flat:
+            if not fill:
+                raise ValueError(f"The checkpoint has no {where}")
+            leaves.append(leaf)
+            filled.append("/".join(key))
+            continue
+        value = saved_flat.pop(key)
+        if np.shape(value) != np.shape(leaf):
+            raise ValueError(
+                f"The {where} has shape {np.shape(value)}, not {np.shape(leaf)}"
+            )
+        leaves.append(np.asarray(value, dtype=np.asarray(leaf).dtype))
+    if saved_flat:
+        unexpected = ", ".join("/".join(k) for k in saved_flat)
+        raise ValueError(f"Step {step}'s {name} has leaves the template lacks: {unexpected}")
+    if filled:
+        print(f"Step {step}'s {name} lacks frozen leaves, kept from the template: {', '.join(filled)}")
+    return jax.tree_util.tree_unflatten(treedef, leaves)
+
 
 def _manager(checkpoint_dir: str | pathlib.Path) -> ocp.CheckpointManager:
     return ocp.CheckpointManager(
@@ -54,21 +115,20 @@ def load_model(
     """Restore the model saved by ``Experiment`` at ``step`` (default: latest).
 
     ``template`` is a freshly initialized model with the same configuration as
-    the trained one; only its structure, shapes and dtypes are used. The
+    the trained one; only its structure, shapes and dtypes are used, except for
+    frozen parameters the checkpoint predates, which are kept from it. The
     optimizer state and dataset iterator in the checkpoint are ignored.
     """
     if step is None:
         step = latest_step(checkpoint_dir)
     host_template = jax.tree.map(np.asarray, template)
+    frozen = jax.tree.map(lambda m: not m, module.trainable_mask(host_template))
     manager = _manager(checkpoint_dir)
     try:
-        restored = manager.restore(
-            step,
-            args=ocp.args.Composite(model=ocp.args.StandardRestore(host_template)),
-        )
+        restored = restore_tree(manager, step, "model", host_template, frozen)
     finally:
         manager.close()
-    return jax.tree.map(jnp.asarray, restored["model"])
+    return jax.tree.map(jnp.asarray, restored)
 
 
 def batched_apply(
