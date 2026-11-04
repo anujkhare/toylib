@@ -1,4 +1,5 @@
 import dataclasses
+import einops
 import jax
 import jaxtyping as jt
 import jax.numpy as jnp
@@ -34,6 +35,30 @@ class ModelConfig:
     #   everything_saveable                  — save all intermediates (no memory savings)
     remat_policy: object = None
 
+    # nanochat's later additions (its gpt.py, July 2026). All are off by default, so
+    # models trained before them still load; `NANOCHAT` turns them all on.
+    # Sliding windows, tiled across layers: L sees the whole context, S a quarter of
+    # it. The last layer always sees the whole context.
+    window_pattern: str = "L"
+    # A second embedding table per alternate layer, added to the values (ResFormer).
+    value_embeddings: bool = False
+    # Per-layer scalars: scale the residual stream, and mix the embedding back in.
+    residual_scalars: bool = False
+    # Mix each token's embedding with the previous one's: cheap bigram information.
+    smear: bool = False
+    # Subtract the halfway residual stream before the output layer.
+    backout: bool = False
+    # Multiplies normalized queries and keys, which sharpens attention.
+    qk_scale: float = 1.0
+    # Multiplies the MLP's first layer's initial weights.
+    mlp_init_scale: float = 1.0
+    embedding_init_std: float = 1.0
+    rope_base: int = 10_000
+    # None computes attention as plain masked matmuls, which can also return the
+    # weights. "xla" or "cudnn" use `jax.nn.dot_product_attention`, whose cuDNN
+    # kernel is a fused flash attention on NVIDIA GPUs.
+    attention_impl: str | None = None
+
     def __post_init__(self) -> None:
         if self.qkv_dim % self.num_heads != 0:
             raise ValueError(
@@ -41,6 +66,36 @@ class ModelConfig:
             )
         if (self.qkv_dim // self.num_heads) % 2 != 0:
             raise ValueError("RoPE rotates pairs of dimensions: use an even head dim")
+        if not self.window_pattern or set(self.window_pattern) - set("SL"):
+            raise ValueError(f"window_pattern must be S and L only: {self.window_pattern!r}")
+
+    def window_sizes(self) -> list[int]:
+        """How far back each layer's queries can see, as in nanochat's window sizes."""
+        long, short = self.seq_len, -(-self.seq_len // 4)
+        pattern = self.window_pattern
+        sizes = [long if pattern[i % len(pattern)] == "L" else short for i in range(self.num_layers)]
+        sizes[-1] = long
+        return sizes
+
+    def has_value_embedding(self, layer: int) -> bool:
+        """Alternate layers, always including the last, as in nanochat's `has_ve`."""
+        return self.value_embeddings and layer % 2 == (self.num_layers - 1) % 2
+
+
+NANOCHAT = dict(
+    window_pattern="SSSL",
+    value_embeddings=True,
+    residual_scalars=True,
+    smear=True,
+    backout=True,
+    qk_scale=1.2,
+    mlp_init_scale=0.4,
+    embedding_init_std=0.8,
+    rope_base=100_000,
+)
+
+VALUE_GATE_CHANNELS = 12  # Inputs to each value embedding's gate, as in nanochat.
+SMEAR_GATE_CHANNELS = 24
 
 
 class MLP(module.Module):
@@ -48,6 +103,7 @@ class MLP(module.Module):
 
     qkv_dim: int
     key: jt.PRNGKeyArray
+    init_scale: float = 1.0
 
     def init(self) -> None:
         qkv_dim = self.qkv_dim
@@ -60,7 +116,7 @@ class MLP(module.Module):
             in_features=qkv_dim,
             out_features=4 * qkv_dim,
             key=keys[0],
-            init_std=1 / math.sqrt(qkv_dim),
+            init_std=self.init_scale / math.sqrt(qkv_dim),
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
@@ -83,6 +139,12 @@ class MLP(module.Module):
         return x
 
 
+def window_mask(seq_len: int, window: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
+    """Query i sees keys i - window through i, as flash attention's window does."""
+    distance = jnp.arange(seq_len)[:, None] - jnp.arange(seq_len)[None, :]
+    return ((distance >= 0) & (distance <= window)).astype(jnp.float32)
+
+
 class CausalSelfAttention(module.Module):
     """Causal Self-Attention layer with Rotary Positional Embeddings (RoPE)."""
 
@@ -90,6 +152,13 @@ class CausalSelfAttention(module.Module):
     num_heads: int
     seq_len: int
     key: jt.PRNGKeyArray
+    # How far back a query can see; seq_len or more is plain causal attention.
+    window: int | None = None
+    # Whether a value embedding is added to this layer's values.
+    value_embedding: bool = False
+    qk_scale: float = 1.0
+    rope_base: int = 10_000
+    attention_impl: str | None = None
 
     def init(self) -> None:
         self.mha = attention.MultiHeadAttention(
@@ -104,30 +173,71 @@ class CausalSelfAttention(module.Module):
         self.rope = attention.RotaryPositionalEmbedding(
             qkv_dim=self.qkv_dim // self.num_heads,
             seq_len=self.seq_len,
-            base=10_000,
+            base=self.rope_base,
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
 
-    def _make_causal_mask(self, seq_len: int) -> jt.Float[jt.Array, "seq_len seq_len"]:
-        return jnp.tril(jnp.ones((seq_len, seq_len)))
+        if self.value_embedding:
+            # One gate a head, from the first few channels, starting just above
+            # neutral: 3 * sigmoid(small) is about 1.5.
+            channels = min(VALUE_GATE_CHANNELS, self.qkv_dim)
+            self.value_gate = jax.random.uniform(
+                jax.random.fold_in(self.key, 1), (channels, self.num_heads), minval=0.0, maxval=0.02
+            ).astype(self.param_dtype)
 
     def __call__(
         self,
         x: jt.Float[jt.Array, "... seq_len qkv_dim"],
+        value_embedding: jt.Float[jt.Array, "... seq_len qkv_dim"] | None = None,
         return_attention_weights: bool = False,
     ) -> (
         jt.Float[jt.Array, "... seq_len qkv_dim"]
         | tuple[jt.Array, jt.Float[jt.Array, "... num_heads seq_len seq_len"]]
     ):
-        return self.mha(
-            Q=x,
-            K=x,
-            V=x,
-            mask=self._make_causal_mask(x.shape[-2]),
-            rope=self.rope,
-            return_attention_weights=return_attention_weights,
+        mha, seq_len = self.mha, x.shape[-2]
+        split = "... seq_len (num_heads head_dim) -> ... num_heads seq_len head_dim"
+        q, k, v = (
+            einops.rearrange(proj(x), split, num_heads=self.num_heads)
+            for proj in (mha.q_projection, mha.k_projection, mha.v_projection)
         )
+        if value_embedding is not None:
+            # Value residual: each head mixes in the value embedding, through a gate.
+            channels = self.value_gate.shape[0]
+            gate = 3 * jax.nn.sigmoid(x[..., :channels] @ self.value_gate.astype(x.dtype))
+            ve = einops.rearrange(value_embedding, split, num_heads=self.num_heads)
+            v = v + einops.rearrange(gate, "... t h -> ... h t 1") * ve
+
+        q, k = self.rope(q), self.rope(k)
+        q, k = layers.rms_norm(q) * self.qk_scale, layers.rms_norm(k) * self.qk_scale
+
+        window = min(self.window or seq_len, seq_len)
+        if return_attention_weights or self.attention_impl is None:
+            values, weights = attention.scaled_dot_product_attention(
+                q=q, k=k, v=v, mask=window_mask(seq_len, window)
+            )
+        else:
+            values, weights = self._fused_attention(q, k, v, window), None
+        values = einops.rearrange(values, "... num_heads seq_len d -> ... seq_len (num_heads d)")
+        values = mha.linear(values)
+        if return_attention_weights:
+            return values, weights
+        return values
+
+    def _fused_attention(self, q, k, v, window: int) -> jax.Array:
+        """`jax.nn.dot_product_attention`, which wants [batch, seq, heads, dim]."""
+        unbatched = q.ndim == 3
+        q, k, v = (jnp.swapaxes(t[None] if unbatched else t, -2, -3) for t in (q, k, v))
+        values = jax.nn.dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=True,
+            local_window_size=(window, 0) if window < q.shape[-3] else None,
+            implementation=self.attention_impl,
+        )
+        values = jnp.swapaxes(values, -2, -3)
+        return values[0] if unbatched else values
 
 
 class DecoderBlock(module.Module):
@@ -135,6 +245,12 @@ class DecoderBlock(module.Module):
     num_heads: int
     seq_len: int
     key: jt.PRNGKeyArray
+    window: int | None = None
+    value_embedding: bool = False
+    qk_scale: float = 1.0
+    mlp_init_scale: float = 1.0
+    rope_base: int = 10_000
+    attention_impl: str | None = None
 
     def init(self) -> None:
         keys = jax.random.split(self.key, 2)
@@ -143,12 +259,18 @@ class DecoderBlock(module.Module):
             num_heads=self.num_heads,
             seq_len=self.seq_len,
             key=keys[0],
+            window=self.window,
+            value_embedding=self.value_embedding,
+            qk_scale=self.qk_scale,
+            rope_base=self.rope_base,
+            attention_impl=self.attention_impl,
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
         self.mlp = MLP(
             qkv_dim=self.qkv_dim,
             key=keys[1],
+            init_scale=self.mlp_init_scale,
             param_dtype=self.param_dtype,
             dtype=self.dtype,
         )
@@ -156,14 +278,17 @@ class DecoderBlock(module.Module):
     def __call__(
         self,
         x: jt.Float[jt.Array, "... seq_len qkv_dim"],
+        value_embedding: jt.Float[jt.Array, "... seq_len qkv_dim"] | None = None,
         return_intermediates: bool = False,
     ) -> jt.Float[jt.Array, "... seq_len qkv_dim"] | tuple[jt.Array, dict]:
         # "Serial" implementation: y = x + MLP(LN(x + CausalSelfAttention(LN(x))))
         # A "parallel" implementation is also possible (https://arxiv.org/pdf/2204.02311):
         #  y = x + MLP(LN(x)) + CausalSelfAttention(LN(x))
-        attended, attn_weights = self.causal_attn(
-            layers.rms_norm(x), return_attention_weights=True
+        attended = self.causal_attn(
+            layers.rms_norm(x), value_embedding, return_attention_weights=return_intermediates
         )
+        if return_intermediates:
+            attended, attn_weights = attended
         x = x + attended
         x = x + self.mlp(layers.rms_norm(x))
         if return_intermediates:
@@ -196,7 +321,13 @@ class DecoderOnlyTransformer(module.Module):
             param_dtype=config.param_dtype,
             dtype=config.dtype,
         )
+        if config.embedding_init_std != 1.0:
+            self.embedding_layer.init()
+            self.embedding_layer.weights = (
+                self.embedding_layer.weights * config.embedding_init_std
+            ).astype(config.param_dtype)
 
+        windows = config.window_sizes()
         self.blocks = []
         for ix in range(config.num_layers):
             self.blocks.append(
@@ -205,10 +336,54 @@ class DecoderOnlyTransformer(module.Module):
                     num_heads=config.num_heads,
                     seq_len=config.seq_len,
                     key=keys[ix + 1],
+                    window=windows[ix],
+                    value_embedding=config.has_value_embedding(ix),
+                    qk_scale=config.qk_scale,
+                    mlp_init_scale=config.mlp_init_scale,
+                    rope_base=config.rope_base,
+                    attention_impl=config.attention_impl,
                     param_dtype=config.param_dtype,
                     dtype=config.dtype,
                 )
             )
+
+        # nanochat's additions, created only when enabled so older checkpoints load.
+        extra = jax.random.fold_in(self.key, config.num_layers + 2)
+        n = config.num_layers
+        if config.value_embeddings:
+            # Initialized like the value projections: uniform, std 1/sqrt(dim).
+            bound = math.sqrt(3 / config.qkv_dim)
+            self.value_embeds = []
+            for ix in range(n):
+                if config.has_value_embedding(ix):
+                    table = layers.Embedding(
+                        vocab_size=config.vocab_size,
+                        embedding_dim=config.qkv_dim,
+                        key=jax.random.fold_in(extra, ix),
+                        param_dtype=config.param_dtype,
+                        dtype=config.dtype,
+                    )
+                    table.init()
+                    table.weights = jax.random.uniform(
+                        jax.random.fold_in(extra, ix),
+                        table.weights.shape,
+                        minval=-bound,
+                        maxval=bound,
+                    ).astype(config.param_dtype)
+                    self.value_embeds.append(table)
+        if config.residual_scalars:
+            # Stronger residual early and weaker late; more of the embedding early.
+            depth = jnp.arange(n) / max(n - 1, 1)
+            self.resid_lambdas = (1.15 - 0.10 * depth).astype(jnp.float32)
+            self.x0_lambdas = (0.20 - 0.15 * depth).astype(jnp.float32)
+        if config.smear:
+            channels = min(SMEAR_GATE_CHANNELS, config.qkv_dim)
+            self.smear_gate = jax.random.uniform(
+                jax.random.fold_in(extra, n), (channels, 1), minval=0.0, maxval=0.02
+            ).astype(jnp.float32)
+            self.smear_lambda = jnp.zeros((1,), jnp.float32)
+        if config.backout:
+            self.backout_lambda = jnp.full((1,), 0.2, jnp.float32)
 
         # Output projection — always stored and computed in float32 so logits
         # are full precision before the softcap and loss computation.
@@ -249,37 +424,52 @@ class DecoderOnlyTransformer(module.Module):
         return_intermediates: bool = False,
     ) -> jt.Float[jt.Array, "... seq_len qkv_dim"] | tuple[jt.Array, dict]:
         """Run everything up to the output layer."""
+        config = self.config
+        tokens = x
         # Input projection to project the embeddings to the model dimension
-        x = self.embedding_layer(x)
+        x = self.embedding_layer(tokens)
         x = layers.rms_norm(x)
 
-        # Apply each attention layer
-        remat_policy = self.config.remat_policy
-
-        # Self-attention layers
-        def scan_body(block_inputs, block):
-            if return_intermediates:
-                return block(block_inputs, return_intermediates=True)
-            if remat_policy is not None:
-                # remat over a lambda function because Module can't be hashed
-                block_outputs = jax.remat(lambda b, x: b(x), policy=remat_policy)(
-                    block, block_inputs
-                )
-            else:
-                block_outputs = block(block_inputs)
-
-            return block_outputs, None
+        if config.smear:
+            # Mix the previous token's embedding into each position, through a gate.
+            channels = self.smear_gate.shape[0]
+            gate = self.smear_lambda.astype(x.dtype) * jax.nn.sigmoid(
+                x[..., 1:, :channels] @ self.smear_gate.astype(x.dtype)
+            )
+            x = jnp.concatenate([x[..., :1, :], x[..., 1:, :] + gate * x[..., :-1, :]], axis=-2)
 
         embedding = x
-        stacked_blocks = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *self.blocks)
-        x, stacked_acts = jax.lax.scan(scan_body, x, stacked_blocks)
+        value_tables = iter(getattr(self, "value_embeds", []))
+        backout_layer = config.num_layers // 2
+        acts = {"embedding": embedding}
+
+        # Blocks differ (windows, value embeddings), so they run in a Python loop
+        # rather than a scan over stacked weights.
+        for ix, block in enumerate(self.blocks):
+            if config.residual_scalars:
+                x = (
+                    self.resid_lambdas[ix].astype(x.dtype) * x
+                    + self.x0_lambdas[ix].astype(x.dtype) * embedding
+                )
+            ve = next(value_tables)(tokens) if config.has_value_embedding(ix) else None
+            if return_intermediates:
+                x, block_acts = block(x, ve, return_intermediates=True)
+                for name, values in block_acts.items():
+                    acts[f"blocks.{ix}.{name}"] = values
+            elif config.remat_policy is not None:
+                # remat over a lambda function because Module can't be hashed
+                x = jax.remat(lambda b, x, ve: b(x, ve), policy=config.remat_policy)(
+                    block, x, ve
+                )
+            else:
+                x = block(x, ve)
+            if config.backout and ix == backout_layer:
+                halfway = x
+
+        if config.backout:
+            x = x - self.backout_lambda.astype(x.dtype) * halfway
         if not return_intermediates:
             return x
-
-        acts = {"embedding": embedding}
-        for ix in range(self.config.num_layers):
-            for name, values in stacked_acts.items():
-                acts[f"blocks.{ix}.{name}"] = values[ix]
         return x, acts
 
     def logits(

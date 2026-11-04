@@ -7,6 +7,9 @@ tested separately, these tests focus on integration and API compatibility.
 
 from pathlib import Path
 from unittest import mock
+import dataclasses
+import types
+import jax
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -14,6 +17,7 @@ import pytest
 
 from toylib.harness import inference
 from toylib.viz import curves
+from toylib_projects.p02_gpt_web import decoder_only_model
 from toylib_projects.p02_gpt_web import experiment
 from toylib_projects.p02_gpt_web import train
 from toylib_projects.p02_gpt_web import tokenize_webtext
@@ -303,3 +307,139 @@ def test_every_run_fits_its_token_budget():
     for run in train.RUNS.values():
         tokens = run.max_steps * run.batch_size * run.seq_len
         assert tokens < run.num_train_shards * 54_000_000
+
+
+def test_evaluation_reads_one_microbatch_at_a_time(tmp_path):
+    bpe.Tokenizer([]).save(tokenize_webtext.tokenizer_path(257, tmp_path))
+    tokens = np.random.default_rng(0).integers(2, 64, 2_000, dtype=np.uint16)
+    for split in ("train", "val"):
+        tokens.tofile(tokenize_webtext.bin_path(split, 257, tmp_path))
+    run = dataclasses.replace(
+        TestRunExperiment.RUN, batch_size=8, num_microbatches=4
+    )
+    exp = train.create_run_experiment(run, data_dir=tmp_path, output_dir=tmp_path)
+    assert exp.train_task.dataset.batch_size == 8
+    assert exp.eval_task.dataset.batch_size == 2
+    exp.cleanup()
+
+
+def test_training_logs_the_health_metrics(tmp_path):
+    bpe.Tokenizer([]).save(tokenize_webtext.tokenizer_path(257, tmp_path))
+    tokens = np.random.default_rng(0).integers(2, 64, 2_000, dtype=np.uint16)
+    for split in ("train", "val"):
+        tokens.tofile(tokenize_webtext.bin_path(split, 257, tmp_path))
+    run = dataclasses.replace(TestRunExperiment.RUN, max_steps=4)
+    exp = train.create_run_experiment(run, data_dir=tmp_path, output_dir=tmp_path)
+    exp.outer_loop()
+    exp.cleanup()
+    metrics = curves.read_log(tmp_path / "local" / "logs_local.txt")
+    for name in ("grad_norm", "update_to_weight", "lr_multiplier", "tokens_seen"):
+        assert f"train/{name}" in metrics
+    assert metrics["train/tokens_seen"][1][0] == run.batch_size * run.seq_len
+
+
+def test_d12_matches_nanochats_reference_model():
+    config = train.model_config(train.RUNS["d12"])
+    assert config.qkv_dim // config.num_heads == 128
+    scaling_params = 12 * config.qkv_dim**2 * 12 + config.vocab_size * config.qkv_dim
+    assert scaling_params == 110_100_480
+    tokens = train.RUNS["d12"].max_steps * train.RUNS["d12"].batch_size * 2_048
+    assert tokens / scaling_params == pytest.approx(12, abs=0.05)
+
+
+def test_final_evaluation_reads_nanochats_token_count():
+    run = train.RUNS["d20"]
+    exp = types.SimpleNamespace(
+        eval_config=types.SimpleNamespace(num_eval_steps=1),
+        run_validation=lambda: {"val/loss": 1.0},
+    )
+    assert train.final_evaluation(exp, run) == {"val/loss": 1.0}
+    assert exp.eval_config.num_eval_steps == 2_560
+
+
+class TestNanochatSchedules:
+    """Against nanochat's `base_train.py` formulas, written out by hand."""
+
+    def test_learning_rate_warms_up_holds_then_falls_to_five_percent(self):
+        schedule = train.warmup_warmdown_schedule(1.0, max_steps=1_000, warmup_steps=40)
+        assert float(schedule(0)) == pytest.approx(1 / 40)
+        assert float(schedule(39)) == pytest.approx(1.0)
+        assert float(schedule(350)) == pytest.approx(1.0)  # Warmdown starts after 350.
+        assert float(schedule(675)) == pytest.approx(0.5 + 0.5 * 0.05)
+        assert float(schedule(1_000)) == pytest.approx(0.05)
+
+    def test_muon_momentum(self):
+        schedule = train.muon_momentum_schedule(max_steps=2_000)  # Warmdown from 700.
+        assert float(schedule(0)) == pytest.approx(0.85)
+        assert float(schedule(200)) == pytest.approx(0.91)
+        assert float(schedule(400)) == pytest.approx(0.97)
+        assert float(schedule(700)) == pytest.approx(0.97)
+        assert float(schedule(1_350)) == pytest.approx(0.935)
+        assert float(schedule(2_000)) == pytest.approx(0.90)
+        # A short run is in warmdown before the warmup ends, and the warmup wins.
+        short = train.muon_momentum_schedule(max_steps=1_000)
+        assert float(short(399)) == pytest.approx(0.85 + 0.12 * 399 / 400)
+
+    def test_weight_decay_falls_to_zero_on_a_cosine(self):
+        schedule = train.cosine_weight_decay_schedule(0.28, max_steps=1_000)
+        assert float(schedule(0)) == pytest.approx(0.28)
+        assert float(schedule(500)) == pytest.approx(0.14)
+        assert float(schedule(1_000)) == pytest.approx(0.0, abs=1e-7)
+
+
+class TestNanochatOptimizer:
+    def test_scaling_params_match_nanochat(self):
+        d12 = train.model_config(train.RUNS["d12_nanochat"])
+        assert train.scaling_params(d12) == train.D12_SCALING_PARAMS == 110_100_912
+        d20 = dataclasses.replace(train.RUNS["d20"], **train.NANOCHAT_OPTIONS)
+        assert train.scaling_params(train.model_config(d20)) == 435_160_240
+
+    def test_routes_every_parameter_to_its_group(self):
+        config = train.model_config(train.RUNS["local_nanochat"])
+        model = decoder_only_model.DecoderOnlyTransformer(config=config, key=jax.random.key(0))
+        model.init()
+        optimizer_config = train.create_nanochat_optimizer_config(config, 100, 8_192)
+        groups = {
+            jax.tree_util.keystr(path): optimizer_config.optimizer_for_param(path)
+            for path, _ in jax.tree_util.tree_leaves_with_path(model)
+        }
+        assert groups[".embedding_layer.weights"] == "embedding"
+        assert groups[".output_layer.weights"] == "output"
+        assert groups[".value_embeds[0].weights"] == "value_embeds"
+        assert groups[".resid_lambdas"] == "resid_lambdas"
+        assert groups[".x0_lambdas"] == "x0_lambdas"
+        assert {groups[k] for k in (".smear_gate", ".smear_lambda", ".backout_lambda")} == {"smear"}
+        blocks = {v for k, v in groups.items() if k.startswith(".blocks")}
+        assert blocks == {"muon"}
+
+    def test_weight_decay_scales_with_the_token_budget(self):
+        # At d12's budget it is nanochat's 0.28; at d20's 8 tokens per parameter, less.
+        runs = {"d12": train.RUNS["d12_nanochat"], "d20": dataclasses.replace(train.RUNS["d20"], **train.NANOCHAT_OPTIONS)}
+        decays = {}
+        for name, run in runs.items():
+            tokens = run.max_steps * run.batch_size * run.seq_len
+            decays[name] = 0.28 * (12 * train.D12_SCALING_PARAMS / tokens)
+        assert decays["d12"] == pytest.approx(0.28, rel=1e-4)
+        assert decays["d20"] == pytest.approx(0.1063, rel=1e-3)
+
+    def test_trains_end_to_end(self, tmp_path, monkeypatch):
+        # Rates scale with sqrt(batch / B_REF), tiny for 16 tokens a step, and Muon's
+        # weight decay with d12's budget over this one's, huge for 480 tokens.
+        monkeypatch.setattr(train, "B_REF", 16)
+        monkeypatch.setattr(train, "D12_SCALING_PARAMS", 40)
+        bpe.Tokenizer([]).save(tokenize_webtext.tokenizer_path(257, tmp_path))
+        tokens = np.random.default_rng(0).integers(2, 64, 4_000, dtype=np.uint16)
+        for split in ("train", "val"):
+            tokens.tofile(tokenize_webtext.bin_path(split, 257, tmp_path))
+        run = dataclasses.replace(
+            TestRunExperiment.RUN, num_layers=4, qkv_dim=32, max_steps=30, warmup_steps=2,
+            **train.NANOCHAT_OPTIONS,
+        )
+        exp = train.create_run_experiment(run, data_dir=tmp_path, output_dir=tmp_path)
+        first = exp.run_validation()["val/loss"]
+        exp.outer_loop()
+        last = exp.run_validation()["val/loss"]
+        exp.cleanup()
+        assert last < first - 0.5
+        metrics = curves.read_log(tmp_path / "local" / "logs_local.txt")
+        assert all(np.isfinite(metrics["train/loss"][1]))
