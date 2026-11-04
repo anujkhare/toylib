@@ -34,6 +34,14 @@ class ModelConfig:
     #   everything_saveable                  — save all intermediates (no memory savings)
     remat_policy: object = None
 
+    def __post_init__(self) -> None:
+        if self.qkv_dim % self.num_heads != 0:
+            raise ValueError(
+                f"qkv_dim ({self.qkv_dim}) must divide into {self.num_heads} heads"
+            )
+        if (self.qkv_dim // self.num_heads) % 2 != 0:
+            raise ValueError("RoPE rotates pairs of dimensions: use an even head dim")
+
 
 class MLP(module.Module):
     """A simple feedforward MLP with one hidden layer."""
@@ -105,12 +113,21 @@ class CausalSelfAttention(module.Module):
         return jnp.tril(jnp.ones((seq_len, seq_len)))
 
     def __call__(
-        self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
-    ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
-        x = self.mha(
-            Q=x, K=x, V=x, mask=self._make_causal_mask(x.shape[-2]), rope=self.rope
+        self,
+        x: jt.Float[jt.Array, "... seq_len qkv_dim"],
+        return_attention_weights: bool = False,
+    ) -> (
+        jt.Float[jt.Array, "... seq_len qkv_dim"]
+        | tuple[jt.Array, jt.Float[jt.Array, "... num_heads seq_len seq_len"]]
+    ):
+        return self.mha(
+            Q=x,
+            K=x,
+            V=x,
+            mask=self._make_causal_mask(x.shape[-2]),
+            rope=self.rope,
+            return_attention_weights=return_attention_weights,
         )
-        return x
 
 
 class DecoderBlock(module.Module):
@@ -137,13 +154,20 @@ class DecoderBlock(module.Module):
         )
 
     def __call__(
-        self, x: jt.Float[jt.Array, "... seq_len qkv_dim"]
-    ) -> jt.Float[jt.Array, "... seq_len qkv_dim"]:
+        self,
+        x: jt.Float[jt.Array, "... seq_len qkv_dim"],
+        return_intermediates: bool = False,
+    ) -> jt.Float[jt.Array, "... seq_len qkv_dim"] | tuple[jt.Array, dict]:
         # "Serial" implementation: y = x + MLP(LN(x + CausalSelfAttention(LN(x))))
         # A "parallel" implementation is also possible (https://arxiv.org/pdf/2204.02311):
         #  y = x + MLP(LN(x)) + CausalSelfAttention(LN(x))
-        x = x + self.causal_attn(layers.rms_norm(x))
+        attended, attn_weights = self.causal_attn(
+            layers.rms_norm(x), return_attention_weights=True
+        )
+        x = x + attended
         x = x + self.mlp(layers.rms_norm(x))
+        if return_intermediates:
+            return x, {"attn_weights": attn_weights, "hidden": x}
         return x
 
 
@@ -198,18 +222,33 @@ class DecoderOnlyTransformer(module.Module):
         )
 
     def __call__(
-        self, x: jt.Integer[jt.Array, "... seq_len"]
-    ) -> jt.Float[jt.Array, "... seq_len vocab_size"]:
+        self,
+        x: jt.Integer[jt.Array, "... seq_len"],
+        return_intermediates: bool = False,
+    ) -> jt.Float[jt.Array, "... seq_len vocab_size"] | tuple[jt.Array, dict]:
         """Forward pass for the decoder-only transformer model.
 
         Args:
-            x: Input token ids of shape [seq_len]. Note that the sequence
-                length should match the configuration `seq_len` as this is used for
-                positional embeddings.
+            x: Input token ids of shape [..., seq_len]. The length may not exceed
+                the configuration's `seq_len`.
+            return_intermediates: Also return a dict with `embedding` and, for each
+                block k, `blocks.k.hidden` and `blocks.k.attn_weights`
+                ([..., num_heads, seq_len, seq_len]).
 
         Returns:
-            Unnormalized logits over the vocabulary of shape [batch_size, seq_len, vocab_size]
+            Unnormalized logits over the vocabulary of shape [..., seq_len, vocab_size]
         """
+        if return_intermediates:
+            hidden, acts = self.hidden(x, return_intermediates=True)
+            return self.logits(hidden), acts
+        return self.logits(self.hidden(x))
+
+    def hidden(
+        self,
+        x: jt.Integer[jt.Array, "... seq_len"],
+        return_intermediates: bool = False,
+    ) -> jt.Float[jt.Array, "... seq_len qkv_dim"] | tuple[jt.Array, dict]:
+        """Run everything up to the output layer."""
         # Input projection to project the embeddings to the model dimension
         x = self.embedding_layer(x)
         x = layers.rms_norm(x)
@@ -219,6 +258,8 @@ class DecoderOnlyTransformer(module.Module):
 
         # Self-attention layers
         def scan_body(block_inputs, block):
+            if return_intermediates:
+                return block(block_inputs, return_intermediates=True)
             if remat_policy is not None:
                 # remat over a lambda function because Module can't be hashed
                 block_outputs = jax.remat(lambda b, x: b(x), policy=remat_policy)(
@@ -229,8 +270,26 @@ class DecoderOnlyTransformer(module.Module):
 
             return block_outputs, None
 
+        embedding = x
         stacked_blocks = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *self.blocks)
-        x, _ = jax.lax.scan(scan_body, x, stacked_blocks)
+        x, stacked_acts = jax.lax.scan(scan_body, x, stacked_blocks)
+        if not return_intermediates:
+            return x
+
+        acts = {"embedding": embedding}
+        for ix in range(self.config.num_layers):
+            for name, values in stacked_acts.items():
+                acts[f"blocks.{ix}.{name}"] = values[ix]
+        return x, acts
+
+    def logits(
+        self, x: jt.Float[jt.Array, "... qkv_dim"]
+    ) -> jt.Float[jt.Array, "... vocab_size"]:
+        """Project hidden states to the vocabulary.
+
+        Sampling calls this on one position only, which skips most of the cost of
+        a forward pass when the vocabulary is large.
+        """
         x = layers.rms_norm(x)
 
         # Output projection with softcap to prevent large logit values
@@ -243,15 +302,16 @@ def loss_fn(
     logits: jt.Float[jt.Array, "batch_size seq_len vocab_size"],
     targets: jt.Int[jt.Array, "batch_size seq_len"],
     mask: jt.Int[jt.Array, "batch_size seq_len"],
-) -> jt.Float[jt.Array, ""]:
+) -> tuple[jt.Float[jt.Array, ""], jt.Float[jt.Array, "batch_size seq_len"]]:
     """Computes the cross-entropy loss between logits and targets.
 
     Args:
         logits: Logits of shape [batch_size, seq_len, vocab_size].
         targets: Target token ids of shape [batch_size, seq_len].
+        mask: 1 for positions that count towards the loss.
 
     Returns:
-        Scalar loss value.
+        Scalar loss, and the unmasked loss of each position.
     """
     log_probs = jax.nn.log_softmax(logits, axis=-1)  # [batch_size, seq_len, vocab_size]
     per_token_loss = -jnp.take_along_axis(
@@ -271,7 +331,7 @@ def train_step(
     model: DecoderOnlyTransformer,
     batch: jt.PyTree,
     return_aux: bool = False,
-) -> jt.Float[jt.Array, ""]:
+) -> tuple[jt.Float[jt.Array, ""], dict]:
     """A single training step for the model.
 
     Args:
@@ -281,8 +341,8 @@ def train_step(
         return_aux: If True, also return auxiliary information like per-token loss.
 
     Returns:
-        Loss value for the batch. If `return_aux` is True, also returns a dictionary
-        with auxiliary information.
+        Loss value for the batch and a dictionary of auxiliary information, which
+        is empty unless `return_aux` is True.
     """
     tokens, targets, mask = batch["inputs"], batch["targets"], batch["mask"]
     logits = model(tokens)  # doesn't use mask right now
@@ -307,6 +367,8 @@ def sample(
     JIT-compatible: uses lax.scan over a fixed-size pre-padded token buffer.
     input_tokens must be pre-padded to the model's seq_len with zeros.
     prompt_len is the number of real (non-padding) tokens in input_tokens.
+    Once the buffer is full, the oldest token is dropped for each new one.
+    Use `jit_sample` so that repeated calls compile once.
 
     Args:
         model: The DecoderOnlyTransformer model.
@@ -314,28 +376,37 @@ def sample(
         prompt_len: Number of real tokens in input_tokens.
         key: JAX PRNG key for sampling.
         max_output_tokens: Maximum number of tokens to generate.
-        temperature: Sampling temperature. Higher values increase randomness.
-        top_k: If specified, only consider the top_k logits for sampling. Set
-            to 1 for greedy sampling.
+        temperature: Sampling temperature. Higher values increase randomness,
+            and 0 always picks the most likely token.
+        top_k: If specified, only consider the top_k logits for sampling.
 
     Returns:
         Generated token ids of shape [max_output_tokens].
     """
 
+    seq_len = input_tokens.shape[-1]
+
     def step(carry, _):
         tokens, pos, key = carry
 
-        logits = model(tokens)  # [seq_len, vocab_size]
-        # Read logits at the last valid position
-        logit = jax.lax.dynamic_index_in_dim(logits, pos - 1, axis=0, keepdims=False)
-        logit = logit / temperature
+        # A full buffer slides left. The stale last token can't affect the logits
+        # we read, because attention is causal.
+        full = pos == seq_len
+        tokens = jnp.where(full, jnp.roll(tokens, -1), tokens)
+        pos = pos - full
 
-        if top_k:
-            top_k_logits, _ = jax.lax.top_k(logit, top_k)
-            logit = jnp.where(logit < top_k_logits[-1], -jnp.inf, logit)
+        hidden = model.hidden(tokens)  # [seq_len, qkv_dim]
+        # Read logits at the last valid position
+        logit = model.logits(hidden[pos - 1])
 
         key, subkey = jax.random.split(key)
-        next_token = jax.random.categorical(subkey, logits=logit).astype(tokens.dtype)
+        if top_k:
+            top_k_logits, _ = jax.lax.top_k(logit, min(top_k, logit.shape[-1]))
+            logit = jnp.where(logit < top_k_logits[-1], -jnp.inf, logit)
+        # Temperature may be traced, so 0 is approached rather than branched on.
+        next_token = jax.random.categorical(
+            subkey, logits=logit / jnp.maximum(temperature, 1e-6)
+        ).astype(tokens.dtype)
         tokens = jax.lax.dynamic_update_slice(tokens, next_token[None], (pos,))
         return (tokens, pos + 1, key), next_token
 
@@ -346,3 +417,6 @@ def sample(
         length=max_output_tokens,
     )
     return generated
+
+
+jit_sample = jax.jit(sample, static_argnames=("max_output_tokens", "top_k"))
