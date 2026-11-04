@@ -33,7 +33,7 @@ library; everything specific to one model or dataset lives in `toylib_projects/`
 
 ```bash
 uv sync --extra posts --extra dev        # library, harness, viz, data: enough for every post
-uv sync --extra tinystories              # plus the language-model project
+uv sync --extra webtext                  # plus the language-model post (p02)
 uv sync --package toylib-wm              # plus the world-model project
 uv sync --all-extras --all-packages      # everything
 ```

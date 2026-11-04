@@ -1,10 +1,10 @@
 [project]
-name = "toylib-tinystories"
+name = "toylib-gpt-web"
 version = "0.0.1"
 authors = [
   { name="Anuj Khare", email="khareanuj18@gmail.com" },
 ]
-description = "TinyStories GPT-2 implementation using toylib"
+description = "A GPT trained on web text, using toylib"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

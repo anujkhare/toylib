@@ -25,7 +25,10 @@ def download_shard(shard_idx: int, output_dir: Path, client: httpx.Client) -> Pa
     url = f"{BASE_URL}/{filename}"
     with client.stream("GET", url, follow_redirects=True) as resp:
         resp.raise_for_status()
-        dest.write_bytes(resp.read())
+        # Renamed once complete, so an interrupted download isn't taken for a shard.
+        partial = dest.with_suffix(".partial")
+        partial.write_bytes(resp.read())
+        partial.rename(dest)
     return dest
 
 

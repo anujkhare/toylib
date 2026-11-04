@@ -22,7 +22,7 @@ members = [
     "toylib",
     "toylib-bundler",
     "toylib-dotsandboxes",
-    "toylib-tinystories",
+    "toylib-gpt-web",
     "toylib-wm",
 ]
 
@@ -5305,21 +5305,23 @@ posts = [
     { name = "pillow" },
     { name = "wandb" },
 ]
-tinystories = [
+viz = [
+    { name = "matplotlib" },
+    { name = "pillow" },
+]
+webtext = [
     { name = "grain", version = "0.2.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "grain", version = "0.2.15", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "httpx" },
     { name = "jupyter" },
     { name = "orbax-checkpoint" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow" },
     { name = "pyarrow" },
+    { name = "tqdm" },
     { name = "transformers" },
     { name = "wandb" },
-]
-viz = [
-    { name = "matplotlib" },
-    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
@@ -5335,27 +5337,29 @@ requires-dist = [
     { name = "flask", marker = "extra == 'dotsandboxes-web'", specifier = ">=2.3.0" },
     { name = "flask-cors", marker = "extra == 'dotsandboxes-web'", specifier = ">=4.0.0" },
     { name = "gcsfs", marker = "extra == 'gcs'", specifier = ">=2024.0.0" },
-    { name = "grain", marker = "extra == 'tinystories'", specifier = ">=0.0.4" },
+    { name = "grain", marker = "extra == 'webtext'", specifier = ">=0.0.4" },
+    { name = "httpx", marker = "extra == 'webtext'", specifier = ">=0.24.0" },
     { name = "jax", specifier = ">=0.4.0" },
     { name = "jaxtyping", specifier = ">=0.2.0" },
-    { name = "jupyter", marker = "extra == 'tinystories'", specifier = ">=1.0.0" },
+    { name = "jupyter", marker = "extra == 'webtext'", specifier = ">=1.0.0" },
     { name = "matplotlib", marker = "extra == 'dotsandboxes'", specifier = ">=3.7.0" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.7.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "optax", specifier = ">=0.1.7" },
     { name = "orbax-checkpoint", marker = "extra == 'harness'", specifier = ">=0.4.0" },
     { name = "pandas", marker = "extra == 'harness'", specifier = ">=2.0.0" },
-    { name = "pandas", marker = "extra == 'tinystories'", specifier = ">=2.0.0" },
+    { name = "pandas", marker = "extra == 'webtext'", specifier = ">=2.0.0" },
     { name = "pillow", marker = "extra == 'harness'", specifier = ">=10.0.0" },
     { name = "pillow", marker = "extra == 'viz'", specifier = ">=10.0.0" },
-    { name = "pyarrow", marker = "extra == 'tinystories'", specifier = ">=12.0.0" },
+    { name = "pyarrow", marker = "extra == 'webtext'", specifier = ">=12.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "toylib", extras = ["harness"], marker = "extra == 'tinystories'" },
+    { name = "toylib", extras = ["harness"], marker = "extra == 'webtext'" },
     { name = "toylib", extras = ["harness", "viz", "data", "gcs"], marker = "extra == 'posts'" },
-    { name = "transformers", marker = "extra == 'tinystories'", specifier = ">=4.30.0" },
+    { name = "tqdm", marker = "extra == 'webtext'", specifier = ">=4.60.0" },
+    { name = "transformers", marker = "extra == 'webtext'", specifier = ">=4.30.0" },
     { name = "wandb", marker = "extra == 'harness'", specifier = ">=0.25.1" },
 ]
-provides-extras = ["harness", "gcs", "viz", "data", "posts", "dev", "tinystories", "dotsandboxes", "dotsandboxes-web"]
+provides-extras = ["harness", "gcs", "viz", "data", "posts", "dev", "webtext", "dotsandboxes", "dotsandboxes-web"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=7.0.0" }]
@@ -5437,7 +5441,7 @@ dev = [
 ]
 
 [[package]]
-name = "toylib-tinystories"
+name = "toylib-gpt-web"
 version = "0.0.1"
 source = { editable = "toylib_projects/p02_gpt_web" }
 dependencies = [

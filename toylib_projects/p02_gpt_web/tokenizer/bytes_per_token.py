@@ -7,8 +7,8 @@ python toylib_projects/p02_gpt_web/tokenizer/bytes_per_token.py \
 """
 
 import argparse
-from transformers import AutoTokenizer
 import numpy as np
+from transformers import AutoTokenizer
 
 
 def parse_command_line_args():
@@ -32,6 +32,16 @@ def parse_command_line_args():
     return parser.parse_args()
 
 
+def token_bytes(tokenizer, token_id: int) -> int:
+    """Count a token's bytes in the text.
+
+    Decoding one token at a time would not work: tokens that hold part of a UTF-8
+    character come back as the three-byte replacement character. GPT-2 stores each
+    byte as one printable character, so we count those instead.
+    """
+    return len(tokenizer.convert_ids_to_tokens(token_id))
+
+
 def compute_bytes_per_token(tokenizer_name: str) -> np.ndarray:
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     special_token_ids = [
@@ -46,9 +56,7 @@ def compute_bytes_per_token(tokenizer_name: str) -> np.ndarray:
             # for special tokens, use -1 to mark as invalid
             bpt.append(-1)
         else:
-            # Decode the token to its actual string representation
-            decoded = tokenizer.decode([token_id])
-            bpt.append(len(decoded.encode("utf-8")))
+            bpt.append(token_bytes(tokenizer, token_id))
     return np.array(bpt)
 
 

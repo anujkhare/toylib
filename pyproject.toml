@@ -49,11 +49,13 @@ posts = [
 dev = [
     "pytest>=7.0.0",
 ]
-tinystories = [
+webtext = [
     "toylib[harness]",
     "transformers>=4.30.0",
     "grain>=0.0.4",
+    "httpx>=0.24.0",
     "pyarrow>=12.0.0",
+    "tqdm>=4.60.0",
     "pandas>=2.0.0",
     "jupyter>=1.0.0",
 ]
