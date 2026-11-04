@@ -97,8 +97,7 @@ treat any number from before these fixes as out of date.
 | 10 | Comment said microbatches multiply the batch size | They split it | Comment corrected |
 
 Also new: `return_intermediates` on the model (`blocks.k.attn_weights`, `blocks.k.hidden`),
-and `save_steps` and `save_final` in `CheckpointConfig`, for dense early checkpoints and a
-final one, which the interval used to miss.
+and the harness always saves the last step, which the interval used to miss.
 
 ## Compared with nanoGPT
 
