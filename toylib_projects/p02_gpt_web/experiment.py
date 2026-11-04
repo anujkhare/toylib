@@ -70,10 +70,12 @@ class Experiment(harness.Experiment):
     model_config: decoder_only_model.ModelConfig = dataclasses.field(
         default_factory=decoder_only_model.ModelConfig
     )
+    sampling_prompts: list[str] = dataclasses.field(
+        default_factory=lambda: list(DEFAULT_PROMPTS)
+    )
+    sampling_max_tokens: int = 10
 
-    def sampling_evaluation(
-        self, prompts: list[str] | None = None, max_tokens: int = 10
-    ) -> None:
+    def sampling_evaluation(self) -> None:
         """Sample a continuation of each prompt and log the decoded text.
 
         Runs on a single device for simplicity. Skipped when the dataset has no
@@ -83,8 +85,7 @@ class Experiment(harness.Experiment):
         tokenizer = getattr(self.train_task.dataset, "tokenizer", None)
         if tokenizer is None:
             return
-        if prompts is None:
-            prompts = DEFAULT_PROMPTS
+        prompts = self.sampling_prompts
 
         tokenized_prompts = tokenizer(
             prompts,
@@ -97,16 +98,18 @@ class Experiment(harness.Experiment):
         seq_len = self.model_config.seq_len
         results = []
         for ix, prompt_tokens in enumerate(tokenized_prompts):
+            # Training text follows a BOS token, so prompts should too.
+            prompt_tokens = ([tokenizer.bos_token_id] + prompt_tokens)[-seq_len:]
             padded = jnp.zeros(seq_len, dtype=jnp.uint16)
             padded = padded.at[: len(prompt_tokens)].set(
                 jnp.array(prompt_tokens, dtype=jnp.uint16)
             )
-            generated = decoder_only_model.sample(
-                model=self.model,
-                input_tokens=padded,
-                prompt_len=len(prompt_tokens),
-                key=jax.random.key(0),
-                max_output_tokens=max_tokens,
+            generated = decoder_only_model.jit_sample(
+                self.model,
+                padded,
+                len(prompt_tokens),
+                jax.random.key(0),
+                max_output_tokens=self.sampling_max_tokens,
                 temperature=1.0,
                 top_k=5,
             )

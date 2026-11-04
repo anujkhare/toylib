@@ -1,5 +1,7 @@
 """Tests for model.py."""
 
+import numpy as np
+import optax
 import pytest
 import jax
 import jax.numpy as jnp
@@ -212,3 +214,237 @@ class TestSampling:
                 top_k=1,
             )
             assert int(generated[0]) == expected_token
+
+
+SMALL_CONFIG = decoder_only_model.ModelConfig(
+    num_layers=2, num_heads=2, qkv_dim=16, vocab_size=10, seq_len=8
+)
+
+
+def _make_model(config=SMALL_CONFIG, seed=42):
+    model = decoder_only_model.DecoderOnlyTransformer(
+        config=config, key=jax.random.key(seed)
+    )
+    model.init()
+    return model
+
+
+def _trained_a_little(config=SMALL_CONFIG):
+    """Blocks start as the identity, so give them weights that do something."""
+    model = _make_model(config)
+    tokens = jax.random.randint(jax.random.key(0), (4, 8), 0, 10)
+    batch = {"inputs": tokens, "targets": tokens, "mask": jnp.ones_like(tokens)}
+    optimizer = optax.adam(1e-2)
+    state = optimizer.init(model)
+
+    @jax.jit
+    def step(model, state):
+        grads = jax.grad(lambda m: decoder_only_model.train_step(m, batch)[0])(model)
+        updates, state = optimizer.update(grads, state, model)
+        return optax.apply_updates(model, updates), state
+
+    for _ in range(10):
+        model, state = step(model, state)
+    return model
+
+
+class TestModelConfig:
+    def test_rejects_uneven_head_split(self):
+        with pytest.raises(ValueError, match="heads"):
+            decoder_only_model.ModelConfig(num_heads=3, qkv_dim=16)
+
+    def test_rejects_odd_head_dim(self):
+        with pytest.raises(ValueError, match="even"):
+            decoder_only_model.ModelConfig(num_heads=4, qkv_dim=12)
+
+
+class TestModelStructure:
+    def test_parameters_are_exactly_the_trained_layers(self):
+        """RoPE contributes no leaves, so its tables can't drift during training."""
+        paths = [
+            jax.tree_util.keystr(path)
+            for path, _ in jax.tree_util.tree_leaves_with_path(_make_model())
+        ]
+        assert not [p for p in paths if "rope" in p]
+        # Embedding, output, and six matrices per block.
+        assert len(paths) == 2 + 2 * 6
+
+    def test_blocks_start_as_the_identity(self):
+        """Zero-initialized output projections let signal pass straight through."""
+        model = _make_model()
+        tokens = jnp.arange(8)
+        _, acts = model(tokens, return_intermediates=True)
+        np.testing.assert_allclose(acts["blocks.1.hidden"], acts["embedding"], atol=1e-6)
+
+    def test_is_causal(self):
+        """A later token can't change the logits at earlier positions."""
+        model = _trained_a_little()
+        tokens = jnp.array([1, 2, 3, 4, 5, 6, 7, 8])
+        changed = tokens.at[5].set(9)
+        before, after = model(tokens), model(changed)
+        np.testing.assert_allclose(before[:5], after[:5], atol=1e-5)
+        assert not np.allclose(before[5:], after[5:], atol=1e-5)
+
+    def test_shorter_sequences_match_a_prefix(self):
+        model = _trained_a_little()
+        tokens = jnp.array([1, 2, 3, 4, 5, 6, 7, 8])
+        np.testing.assert_allclose(model(tokens[:5]), model(tokens)[:5], atol=1e-5)
+
+    def test_batched_matches_unbatched(self):
+        model = _trained_a_little()
+        tokens = jnp.array([[1, 2, 3, 4, 5, 6, 7, 8], [8, 7, 6, 5, 4, 3, 2, 1]])
+        batched = model(tokens)
+        np.testing.assert_allclose(batched[1], model(tokens[1]), atol=1e-5)
+
+    def test_logits_are_softcapped(self):
+        model = _make_model()
+        huge = jax.tree.map(lambda x: x * 1e6, model)
+        logits = huge(jnp.arange(8))
+        assert jnp.abs(logits).max() <= SMALL_CONFIG.logit_softcap + 1e-3
+
+    def test_remat_does_not_change_outputs(self):
+        tokens = jnp.arange(8)
+        config = decoder_only_model.ModelConfig(
+            num_layers=2,
+            num_heads=2,
+            qkv_dim=16,
+            vocab_size=10,
+            seq_len=8,
+            remat_policy=jax.checkpoint_policies.nothing_saveable,
+        )
+        np.testing.assert_allclose(_make_model(config)(tokens), _make_model()(tokens))
+
+
+class TestReturnIntermediates:
+    def test_matches_the_plain_forward_pass(self):
+        model = _trained_a_little()
+        tokens = jnp.arange(8)
+        logits, acts = model(tokens, return_intermediates=True)
+        np.testing.assert_allclose(logits, model(tokens), atol=1e-6)
+        np.testing.assert_allclose(model.logits(acts["blocks.1.hidden"]), logits, atol=1e-6)
+
+    def test_names_and_shapes(self):
+        tokens = jnp.zeros((3, 8), dtype=jnp.int32)
+        _, acts = _make_model()(tokens, return_intermediates=True)
+        assert set(acts) == {
+            "embedding",
+            "blocks.0.hidden",
+            "blocks.0.attn_weights",
+            "blocks.1.hidden",
+            "blocks.1.attn_weights",
+        }
+        assert acts["embedding"].shape == (3, 8, 16)
+        assert acts["blocks.0.attn_weights"].shape == (3, 2, 8, 8)
+
+    def test_attention_is_a_causal_distribution(self):
+        _, acts = _trained_a_little()(jnp.arange(8), return_intermediates=True)
+        weights = acts["blocks.0.attn_weights"]
+        np.testing.assert_allclose(weights.sum(-1), 1.0, atol=1e-5)
+        np.testing.assert_allclose(jnp.triu(weights, k=1), 0.0, atol=1e-5)
+
+    def test_works_under_jit(self):
+        model = _make_model()
+        forward = jax.jit(lambda m, t: m(t, return_intermediates=True))
+        logits, acts = forward(model, jnp.arange(8))
+        assert logits.shape == (8, 10)
+        assert "blocks.1.attn_weights" in acts
+
+
+class TestLoss:
+    def test_uniform_logits_give_log_vocab(self):
+        logits = jnp.zeros((2, 3, 10))
+        targets = jnp.zeros((2, 3), dtype=jnp.int32)
+        loss, per_token = decoder_only_model.loss_fn(logits, targets, jnp.ones((2, 3)))
+        np.testing.assert_allclose(loss, np.log(10), rtol=1e-6)
+        assert per_token.shape == (2, 3)
+
+    def test_mask_excludes_tokens_from_the_mean(self):
+        # Position 0 is certain and position 1 is uniform, in a vocabulary of two.
+        logits = jnp.array([[[100.0, -100.0], [0.0, 0.0]]])
+        targets = jnp.array([[0, 0]])
+        all_tokens, _ = decoder_only_model.loss_fn(logits, targets, jnp.ones((1, 2)))
+        second, _ = decoder_only_model.loss_fn(logits, targets, jnp.array([[0, 1]]))
+        np.testing.assert_allclose(all_tokens, np.log(2) / 2, rtol=1e-5)
+        np.testing.assert_allclose(second, np.log(2), rtol=1e-5)
+
+    def test_one_batch_overfits(self):
+        config = decoder_only_model.ModelConfig(
+            num_layers=2, num_heads=2, qkv_dim=32, vocab_size=10, seq_len=8
+        )
+        model = _make_model(config)
+        tokens = jax.random.randint(jax.random.key(1), (4, 9), 0, 10)
+        batch = {
+            "inputs": tokens[:, :-1],
+            "targets": tokens[:, 1:],
+            "mask": jnp.ones((4, 8)),
+        }
+        optimizer = optax.adam(3e-3)
+        state = optimizer.init(model)
+
+        @jax.jit
+        def step(model, state):
+            (loss, _), grads = jax.value_and_grad(
+                decoder_only_model.train_step, has_aux=True
+            )(model, batch)
+            updates, state = optimizer.update(grads, state, model)
+            return optax.apply_updates(model, updates), state, loss
+
+        for _ in range(200):
+            model, state, loss = step(model, state)
+        assert loss < 0.5
+
+
+class TestSamplingWindow:
+    def _greedy_by_hand(self, model, tokens, count, seq_len):
+        tokens = list(tokens)
+        for _ in range(count):
+            context = jnp.array(tokens[-seq_len:])
+            tokens.append(int(jnp.argmax(model(context)[-1])))
+        return tokens[-count:]
+
+    def test_short_prompt_matches_stepping_by_hand(self):
+        model = _trained_a_little()
+        prompt = [1, 2, 3]
+        padded = jnp.zeros(8, dtype=jnp.uint16).at[:3].set(jnp.array(prompt, jnp.uint16))
+        generated = decoder_only_model.sample(
+            model, padded, 3, jax.random.key(0), max_output_tokens=4, temperature=0
+        )
+        assert generated.tolist() == self._greedy_by_hand(model, prompt, 4, 8)
+
+    def test_slides_when_the_buffer_fills(self):
+        """Past seq_len the oldest tokens drop off, as in nanoGPT's generate."""
+        model = _trained_a_little()
+        prompt = [1, 2, 3, 4, 5, 6]
+        padded = jnp.zeros(8, dtype=jnp.uint16).at[:6].set(jnp.array(prompt, jnp.uint16))
+        generated = decoder_only_model.sample(
+            model, padded, 6, jax.random.key(0), max_output_tokens=7, temperature=0
+        )
+        assert generated.tolist() == self._greedy_by_hand(model, prompt, 7, 8)
+
+    def test_full_buffer_prompt(self):
+        model = _trained_a_little()
+        prompt = [1, 2, 3, 4, 5, 6, 7, 8]
+        padded = jnp.array(prompt, dtype=jnp.uint16)
+        generated = decoder_only_model.sample(
+            model, padded, 8, jax.random.key(0), max_output_tokens=3, temperature=0
+        )
+        assert generated.tolist() == self._greedy_by_hand(model, prompt, 3, 8)
+
+    def test_top_k_larger_than_the_vocabulary(self):
+        model = _make_model()
+        padded = jnp.zeros(8, dtype=jnp.uint16)
+        generated = decoder_only_model.sample(
+            model, padded, 1, jax.random.key(0), max_output_tokens=2, top_k=1000
+        )
+        assert generated.shape == (2,)
+
+    def test_jit_sample_matches_sample(self):
+        model = _trained_a_little()
+        padded = jnp.zeros(8, dtype=jnp.uint16).at[0].set(3)
+        expected = decoder_only_model.sample(
+            model, padded, 1, jax.random.key(3), max_output_tokens=5, top_k=4
+        )
+        actual = decoder_only_model.jit_sample(
+            model, padded, 1, jax.random.key(3), max_output_tokens=5, top_k=4
+        )
+        np.testing.assert_array_equal(actual, expected)

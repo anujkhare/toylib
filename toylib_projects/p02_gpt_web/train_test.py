@@ -12,8 +12,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from toylib.harness import inference
+from toylib.viz import curves
 from toylib_projects.p02_gpt_web import experiment
 from toylib_projects.p02_gpt_web import train
+from toylib_projects.p02_gpt_web import webtext
+from toylib_projects.p02_gpt_web.tokenizer import bpe
 
 VOCAB_SIZE = 50257
 
@@ -195,3 +199,107 @@ class TestCreateExperiment:
         assert "muon" in names
         assert "adamw_embed" in names
         assert "adamw_output" in names
+
+
+class TestFindNumHeads:
+    @pytest.mark.parametrize("depth", range(1, 25))
+    def test_every_depth_gets_a_valid_model(self, depth):
+        model_dim = depth * 64
+        heads = train.find_num_heads(model_dim)
+        assert model_dim % heads == 0
+        assert (model_dim // heads) % 2 == 0
+
+    @pytest.mark.parametrize("model_dim,heads", [(64, 1), (256, 2), (768, 6)])
+    def test_keeps_the_nanochat_values(self, model_dim, heads):
+        assert train.find_num_heads(model_dim) == heads
+
+
+class TestSchedules:
+    def test_warmup_cosine(self):
+        schedule = train.warmup_cosine_schedule(1e-3, max_steps=100, warmup_steps=10)
+        assert float(schedule(0)) == 0.0
+        assert float(schedule(10)) == pytest.approx(1e-3)
+        assert float(schedule(100)) == pytest.approx(1e-4)
+
+
+
+class TestRunExperiment:
+    """Everything from token files to checkpoints, logs and samples."""
+
+    RUN = train.Run(
+        num_layers=2,
+        num_heads=2,
+        qkv_dim=16,
+        batch_size=2,
+        max_steps=6,
+        seq_len=8,
+        vocab_size=257,
+        warmup_steps=2,
+        eval_interval_steps=2,
+        num_eval_steps=1,
+        save_interval_steps=4,
+    )
+
+    @pytest.fixture
+    def data_dir(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        bpe.Tokenizer([]).save(webtext.tokenizer_path(257, data_dir))
+        tokens = np.random.default_rng(0).integers(2, 64, 2_000, dtype=np.uint16)
+        for split in ("train", "val"):
+            tokens.tofile(webtext.bin_path(split, 257, data_dir))
+        return data_dir
+
+    def _create(self, data_dir, output_dir):
+        return train.create_run_experiment(
+            self.RUN, run_id="test", data_dir=data_dir, output_dir=output_dir
+        )
+
+    def test_end_to_end(self, data_dir, tmp_path):
+        output_dir = tmp_path / "outputs"
+        exp = self._create(data_dir, output_dir)
+        exp.outer_loop()
+        exp.cleanup()
+
+        checkpoint_dir = output_dir / "test" / "checkpoints"
+        # The interval and the last step.
+        assert inference.checkpoint_steps(checkpoint_dir) == [0, 4, 5]
+
+        log = output_dir / "test" / "logs_test.txt"
+        metrics = curves.read_log(log)
+        assert "train/loss" in metrics
+        assert "val/loss" in metrics
+        assert "val/bits_per_byte" in metrics
+        assert "samples" in log.read_text()
+
+    def test_resume_continues_the_data_stream(self, data_dir, tmp_path):
+        output_dir = tmp_path / "outputs"
+        exp = self._create(data_dir, output_dir)
+        exp.outer_loop()
+        index = exp.train_task.dataset.get_state()["index"]
+        exp.cleanup()
+
+        resumed = self._create(data_dir, output_dir)
+        assert resumed.resume()
+        assert resumed.step == self.RUN.max_steps
+        assert resumed.train_task.dataset.get_state()["index"] == index
+        resumed.cleanup()
+
+    def test_val_loss_is_comparable_between_evals(self, data_dir, tmp_path):
+        exp = self._create(data_dir, tmp_path / "outputs")
+        assert exp.run_validation() == exp.run_validation()
+        exp.cleanup()
+
+
+def test_d20_is_the_size_the_post_says():
+    config = train.model_config(train.RUNS["d20"])
+    assert config.qkv_dim // config.num_heads == 128
+    assert config.remat_policy is not None
+    blocks = 12 * config.qkv_dim**2 * config.num_layers
+    assert blocks + 2 * config.vocab_size * config.qkv_dim == 477_102_080
+
+
+def test_every_run_fits_its_token_budget():
+    for run in train.RUNS.values():
+        tokens = run.max_steps * run.batch_size * run.seq_len
+        assert tokens < run.num_train_shards * 54_000_000

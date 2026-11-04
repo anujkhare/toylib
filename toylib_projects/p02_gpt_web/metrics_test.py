@@ -27,44 +27,32 @@ class TestBitsPerByteMetric:
     @pytest.mark.parametrize(
         "batch,per_token_loss,expected_bpb",
         [
+            # Total bits over total bytes, not a mean of per-token ratios.
             (
                 {
-                    "inputs": jnp.array([[0, 1], [2, 3]]),
+                    "inputs": None,  # unused
+                    "targets": jnp.array([[0, 1], [2, 3]]),
                     "mask": jnp.ones((2, 2)),
-                    "targets": None,  # unused
                 },
-                # Use uniform loss of 1.0 nat for simplicity
+                # 1 nat per token, and 1 + 2 + 3 + 4 bytes in total.
                 jnp.ones((2, 2)),
-                # Manual calculation:
-                # loss in nats = 1.0 everywhere
-                # loss in bits = 1.0 * log2(e) ≈ 1.4427
-                # bits_per_byte for each position:
-                #   position [0,0]: 1.4427 / 1 = 1.4427
-                #   position [0,1]: 1.4427 / 2 = 0.7213
-                #   position [1,0]: 1.4427 / 3 = 0.4809
-                #   position [1,1]: 1.4427 / 4 = 0.3607
-                # mean = (1.4427 + 0.7213 + 0.4809 + 0.3607) / 4 = 0.7514
-                jnp.log2(jnp.e) * jnp.mean(1.0 / jnp.array([1.0, 2.0, 3.0, 4.0])),
+                4.0 / (np.log(2) * 10.0),
             ),
             # Varying loss per token
             (
                 {
-                    "inputs": jnp.array([[0, 1]]),
-                    "targets": None,  # unused
+                    "inputs": None,  # unused
+                    "targets": jnp.array([[0, 1]]),
                     "mask": jnp.ones((1, 2)),
                 },
                 jnp.array([[2.0, 4.0]]),
-                # Manual calculation:
-                # position 0: 2.0 * log2(e) / 1 = 2.8854 bits/byte
-                # position 1: 4.0 * log2(e) / 2 = 2.8854 bits/byte
-                # mean = 2.8854
-                jnp.log2(jnp.e) * (2.0 / 1.0 + 4.0 / 2.0) / 2.0,
+                6.0 / (np.log(2) * 3.0),
             ),
             # Tokens masked out
             (
                 {
-                    "inputs": jnp.array([[0, 1]]),
-                    "targets": None,  # unused
+                    "inputs": None,  # unused
+                    "targets": jnp.array([[0, 1]]),
                     "mask": jnp.zeros((1, 2)),
                 },
                 # Varying loss per token
@@ -72,17 +60,26 @@ class TestBitsPerByteMetric:
                 # All tokens should be masked out
                 0,
             ),
-            # Special tokens in inputs
+            # A partly masked batch counts only the valid token
             (
                 {
-                    "inputs": jnp.array([[0, 5]]),
-                    "targets": None,  # unused
+                    "inputs": None,  # unused
+                    "targets": jnp.array([[0, 1]]),
+                    "mask": jnp.array([[1.0, 0.0]]),
+                },
+                jnp.array([[2.0, 4.0]]),
+                2.0 / np.log(2),
+            ),
+            # Special tokens in targets count in neither sum
+            (
+                {
+                    "inputs": None,  # unused
+                    "targets": jnp.array([[0, 4]]),
                     "mask": jnp.ones((1, 2)),
                 },
                 # Varying loss per token
                 jnp.array([[2.0, 4.0]]),
-                # All tokens should be masked out
-                jnp.log2(jnp.e) * (2.0 / 1.0),
+                2.0 / np.log(2),
             ),
         ],
     )
@@ -110,3 +107,14 @@ class TestBitsPerByteMetric:
         assert "bits_per_byte" in result
 
         assert jnp.isclose(result["bits_per_byte"], expected_bpb, rtol=1e-5)
+
+    def test_uses_targets_not_inputs(self, bytes_per_token_file):
+        """The loss at a position is the cost of its target token, so bytes come from there."""
+        bpb_metric = metrics.BitsPerByte(bytes_per_token_path=str(bytes_per_token_file))
+        batch = {
+            "inputs": jnp.array([[3]]),  # 4 bytes
+            "targets": jnp.array([[0]]),  # 1 byte
+            "mask": jnp.ones((1, 1)),
+        }
+        result = bpb_metric(None, {"per_token_loss": jnp.ones((1, 1))}, batch)
+        assert jnp.isclose(result["bits_per_byte"], 1.0 / np.log(2), rtol=1e-5)
