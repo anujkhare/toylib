@@ -12,7 +12,7 @@ W&B project.
 | `d12` | Our baseline recipe at nanochat's reference size | 0.949, 6 to 10% behind nanochat |
 | `local_nanochat` | nanochat's current recipe, on a laptop | 1.692 against the baseline's 1.753 |
 | `d12_nanochat` | nanochat's current recipe at d12 | **0.877**, 7.6% ahead of the baseline and inside nanochat's range |
-| `d20_nanochat` | The post's model | **0.783**, inside the 0.75 to 0.90 expected |
+| `d20_nanochat` | The post's model | **0.783**, inside the 0.75 to 0.90 expected; CORE **0.222**; ChatCORE −0.012 before fine-tuning |
 
 ## Health run
 
@@ -240,5 +240,165 @@ hours on one A100 runtime, against the 31 planned, and never needed to resume.
 
 **Cost: about 145 compute units**, against the 209 planned.
 
-**Not yet checked:** samples. The run printed none, so whether they read as real text, the
-other half of milestone 4, needs the checkpoint.
+**Samples read as real text**, the other half of milestone 4. See below.
+
+## d20: CORE, samples and speed
+
+### CORE
+
+CORE is the DCLM paper's 22 in-context tasks, each centered on its random baseline so 0 is
+chance and 1 is perfect, then averaged. nanochat's "time to GPT-2" target is GPT-2 1.5B's
+0.2565. `scripts/core_eval.py` ports nanochat's `core_eval.py`: its prompts, few-shot draws,
+scoring and the same eval bundle. It batches prompts by length rather than running them one
+at a time. The full set, about 118M tokens, took 25 minutes on a Colab A100 for d20 and 45
+for GPT-2. Together they cost about 8 compute units.
+
+**d20 scores 0.2218**, level with nanochat's original d20 speedrun's 0.2219 and below GPT-2
+1.5B's 0.2565.
+
+| Model | Parameters | Training tokens | Data | CORE |
+| --- | --- | --- | --- | --- |
+| GPT-2 124M, the bundle's reference | 124M | | WebText | 0.1139 |
+| **Our d20** | 477M (435M by nanochat's count) | 3.5B | ClimbMix | **0.2218** |
+| nanochat d20 speedrun, October 2025 | 561M | 11.2B | FineWeb-EDU | 0.2219 |
+| GPT-2 1.5B, the bundle's reference | 1.5B | | WebText | 0.2565 |
+| nanochat d24 on ClimbMix, March 2026 leaderboard | | | ClimbMix | 0.2571 to 0.2690 |
+
+nanochat's numbers come from its README leaderboard and its d20 report card
+([discussion #1](https://github.com/karpathy/nanochat/discussions/1)), which gives only the total.
+The bundle holds per-task scores for GPT-2 only. Our d20 matches the old speedrun with less
+than a third of its training tokens. Some of that is probably ClimbMix, which nanochat found
+clearly better than FineWeb-EDU for CORE, and some the newer architecture and optimizer. Neither
+was measured separately.
+
+**Checking the port: GPT-2 124M through our script scores 0.1217, against the bundle's
+0.1139.** 6 of the 22 tasks match to 0.001, and most others are within 0.01. The largest gaps
+are copa (+0.06, 6 of its 100 items), winogrande (+0.035), winograd (+0.029) and boolq
+(−0.027). We run fp32 where nanochat runs bf16 autocast, which can flip near-ties, but the
+cause wasn't measured. So treat d20's score as accurate to about ±0.01. That still puts it
+level with nanochat's d20, not above it.
+
+Against GPT-2 1.5B, d20 is ahead on ARC, OpenBookQA and SQuAD. It's level on PIQA, CS
+algorithms and language ID, and slightly behind on HellaSwag. It's behind on jeopardy, wikidata
+QA, LAMBADA, COPA, the Winograd tasks, Dyck languages and copying. With 3.5B tokens it has seen fewer facts and has had less practice holding text
+in context.
+
+| Task | Shots | d20 accuracy | d20 | GPT-2 124M | GPT-2 124M, our harness | GPT-2 1.5B |
+| --- | --- | --- | --- | --- | --- | --- |
+| hellaswag_zeroshot | 0 | 0.490 | 0.320 | 0.078 | 0.080 | 0.336 |
+| jeopardy | 10 | 0.064 | 0.064 | 0.002 | 0.004 | 0.092 |
+| bigbench_qa_wikidata | 10 | 0.421 | 0.421 | 0.283 | 0.286 | 0.531 |
+| arc_easy | 10 | 0.654 | 0.538 | 0.217 | 0.224 | 0.460 |
+| arc_challenge | 10 | 0.361 | 0.148 | -0.038 | -0.034 | 0.065 |
+| copa | 0 | 0.620 | 0.240 | 0.200 | 0.260 | 0.340 |
+| commonsense_qa | 10 | 0.219 | 0.023 | 0.031 | 0.038 | 0.034 |
+| piqa | 10 | 0.718 | 0.436 | 0.246 | 0.261 | 0.450 |
+| openbook_qa | 0 | 0.378 | 0.171 | 0.037 | 0.037 | 0.128 |
+| lambada_openai | 0 | 0.406 | 0.406 | 0.323 | 0.337 | 0.523 |
+| hellaswag | 10 | 0.488 | 0.317 | 0.077 | 0.075 | 0.349 |
+| winograd | 0 | 0.626 | 0.253 | 0.158 | 0.187 | 0.429 |
+| winogrande | 0 | 0.537 | 0.075 | -0.028 | 0.007 | 0.138 |
+| bigbench_dyck_languages | 10 | 0.148 | 0.148 | 0.155 | 0.159 | 0.247 |
+| agi_eval_lsat_ar | 3 | 0.265 | 0.082 | 0.033 | 0.033 | 0.092 |
+| bigbench_cs_algorithms | 10 | 0.433 | 0.433 | 0.420 | 0.419 | 0.417 |
+| bigbench_operators | 10 | 0.152 | 0.152 | 0.086 | 0.086 | 0.157 |
+| bigbench_repeat_copy_logic | 10 | 0.000 | 0.000 | 0.031 | 0.031 | 0.094 |
+| squad | 10 | 0.381 | 0.381 | 0.058 | 0.066 | 0.309 |
+| coqa | 0 | 0.260 | 0.260 | 0.134 | 0.142 | 0.280 |
+| boolq | 10 | 0.557 | -0.164 | -0.178 | -0.205 | -0.003 |
+| bigbench_language_identification | 10 | 0.250 | 0.175 | 0.182 | 0.183 | 0.175 |
+| **CORE** | | | **0.2218** | 0.1139 | 0.1217 | 0.2565 |
+
+### Samples
+
+`scripts/sample.py`, greedy, on nanochat's base-model prompts:
+
+| Prompt | d20 continues |
+| --- | --- |
+| The capital of France is | Paris. It is the largest city in France. It is the capital of France. … |
+| The chemical symbol of gold is | Au. It is a soft, malleable, and ductile metal. It is a very good conductor of heat and electricity. … |
+| If yesterday was Friday, then tomorrow will be | Saturday. If yesterday was Saturday, then tomorrow will be Sunday. … |
+| The opposite of hot is | cold. Cold is the opposite of hot. … |
+| The planets of the solar system are: | Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune, and Pluto. … |
+| My favorite color is | blue. I love the color blue. … |
+| If 5*x + 3 = 13, then x is | 5 times 3. … |
+
+Most facts are right. The arithmetic is wrong, "tomorrow" after Friday should be Sunday, and
+it still counts Pluto as a planet. Greedy
+decoding loops, as it does for any base model this size. At temperature 1 and top-k 50, from
+an empty document, it writes plausible web pages: a science news item, a Q&A page, a recipe,
+a health article. They're grammatical and on topic for a paragraph or more, with invented
+details.
+
+### Speed on a laptop
+
+`generate.py` adds a key-value cache, so each new token runs through the model once instead of
+recomputing the context. `generate_test.py` checks its logits against the model's. On an M4
+Pro CPU, with JAX:
+
+| Compute dtype | Prefill, 512 tokens | Decode, short context | Decode, 1,536-token context |
+| --- | --- | --- | --- |
+| bfloat16 (the run's) | 485 tok/s | 4.7 tok/s | 4.5 tok/s |
+| **float32** | 863 tok/s | **29.2 tok/s** | 28.4 tok/s |
+
+XLA's CPU backend is slow in bfloat16, so the chat page and `sample.py` default to float32 on
+a CPU. 29 tokens a second is faster than reading speed, so a hosted API isn't needed to chat.
+It reads 1.7 GB of weights per token, about 50 GB/s against the chip's 273, so there is room
+to go faster.
+
+### Chat
+
+`scripts/chat_web.py` serves `scripts/chat.html` at http://localhost:8000, like nanochat's
+chat_web, streaming tokens as server-sent events. Unlike nanochat's, our model has had no
+conversation fine-tuning (SFT) and has no chat tokens. Chat mode writes the conversation as a
+"User: / Assistant:" transcript and stops at the next "User:". Asked why the sky is blue, it
+answered "because of the scattering of light by the Earth's atmosphere". Asked why sunsets
+are red, it answered "because of the way light bends when it comes from the sun". Expect
+fluent replies that are often wrong. Real conversation needs conversation fine-tuning: nanochat's
+`chat_sft.py`, which since January 2026 is a single stage, with midtraining folded in.
+
+### ChatCORE
+
+ChatCORE is nanochat's benchmark for its chat models: ARC-Easy, ARC-Challenge and MMLU as
+multiple choice (chance is 25%), GSM8K math and HumanEval code generated greedily (chance is
+0%), each centered on chance, then averaged. `scripts/chat_eval.py` ports nanochat's
+`chat_eval.py` and `tasks/`: the same test sets, shuffle seed, multiple-choice format, answer
+extraction and code tests. Two checks back the port: every HumanEval reference solution passes
+our test runner (164 of 164), and a test recomputes nanochat's published 0.0884 from its
+per-task scores. The full set took 12 minutes on a Colab A100, about 1.5 compute units at the CORE run's rate.
+
+nanochat runs ChatCORE only after fine-tuning, on conversations written with chat tokens. Our
+d20 is a base model with no chat tokens, so each problem is the chat page's transcript,
+"User: <problem>" then "Assistant:", and the reply ends where the model starts the next
+"User:". This row is therefore a baseline from before fine-tuning, which nanochat doesn't
+report.
+
+**d20 scores −0.012: chance on every task.**
+
+| Task | Chance | d20, base | nanochat d20, midtrained | nanochat d20, SFT |
+| --- | --- | --- | --- | --- |
+| ARC-Easy | 0.25 | 0.250 | 0.356 | 0.388 |
+| ARC-Challenge | 0.25 | 0.227 | 0.288 | 0.281 |
+| MMLU | 0.25 | 0.230 | 0.311 | 0.315 |
+| GSM8K | 0 | 0.000 | 0.025 | 0.046 |
+| HumanEval | 0 | 0.000 | 0.067 | 0.085 |
+| **ChatCORE** | 0 | **−0.012** | 0.073 | 0.088 |
+
+nanochat's columns are its October 2025 d20 report card, from the README of that time. That
+model had the same CORE as ours, 0.2219.
+
+**The knowledge is in the model, but the chat format isn't.** CORE asks the same ARC questions
+in-context, scoring which answer text the model finds most likely, and there d20 gets 65% on
+ARC-Easy and 36% on ARC-Challenge. In the chat format it has to read a lettered list and reply
+with a letter, which it has never practiced: it picks letters at chance. The generations show
+the same thing:
+
+- **GSM8K:** none of the 1,319 replies has the "#### <number>" line that grading reads.
+  Most restate the problem or loop, for example "The truck is traveling at 10 mph. The children
+  are traveling at 5 mph. The truck is traveling at 10 mph. …".
+- **HumanEval:** 131 of 164 replies start a `def`, but they copy the function's signature and
+  docstring back, often several times, without a body.
+
+nanochat's fine-tuned d20, from a base model with the same CORE, scored 0.073 to 0.088, most of
+it on the multiple-choice tasks, whose answer format its training mixture teaches (MMLU's
+training split is in it). Fine-tuning our d20 is the test of whether it gets there too.
