@@ -12,7 +12,7 @@ W&B project.
 | `d12` | Our baseline recipe at nanochat's reference size | 0.949, 6 to 10% behind nanochat |
 | `local_nanochat` | nanochat's current recipe, on a laptop | 1.692 against the baseline's 1.753 |
 | `d12_nanochat` | nanochat's current recipe at d12 | **0.877**, 7.6% ahead of the baseline and inside nanochat's range |
-| `d20_nanochat` | The post's model | **0.783**, inside the 0.75 to 0.90 expected; CORE **0.222** |
+| `d20_nanochat` | The post's model | **0.783**, inside the 0.75 to 0.90 expected; CORE **0.222**; ChatCORE −0.012 before fine-tuning |
 
 ## Health run
 
@@ -354,5 +354,51 @@ conversation fine-tuning (SFT) and has no chat tokens. Chat mode writes the conv
 "User: / Assistant:" transcript and stops at the next "User:". Asked why the sky is blue, it
 answered "because of the scattering of light by the Earth's atmosphere". Asked why sunsets
 are red, it answered "because of the way light bends when it comes from the sun". Expect
-fluent replies that are often wrong. Real conversation needs nanochat's midtraining and SFT
-stages.
+fluent replies that are often wrong. Real conversation needs conversation fine-tuning: nanochat's
+`chat_sft.py`, which since January 2026 is a single stage, with midtraining folded in.
+
+### ChatCORE
+
+ChatCORE is nanochat's benchmark for its chat models: ARC-Easy, ARC-Challenge and MMLU as
+multiple choice (chance is 25%), GSM8K math and HumanEval code generated greedily (chance is
+0%), each centered on chance, then averaged. `scripts/chat_eval.py` ports nanochat's
+`chat_eval.py` and `tasks/`: the same test sets, shuffle seed, multiple-choice format, answer
+extraction and code tests. Two checks back the port: every HumanEval reference solution passes
+our test runner (164 of 164), and a test recomputes nanochat's published 0.0884 from its
+per-task scores. The full set took 12 minutes on a Colab A100, about 1.5 compute units at the CORE run's rate.
+
+nanochat runs ChatCORE only after fine-tuning, on conversations written with chat tokens. Our
+d20 is a base model with no chat tokens, so each problem is the chat page's transcript,
+"User: <problem>" then "Assistant:", and the reply ends where the model starts the next
+"User:". This row is therefore a baseline from before fine-tuning, which nanochat doesn't
+report.
+
+**d20 scores −0.012: chance on every task.**
+
+| Task | Chance | d20, base | nanochat d20, midtrained | nanochat d20, SFT |
+| --- | --- | --- | --- | --- |
+| ARC-Easy | 0.25 | 0.250 | 0.356 | 0.388 |
+| ARC-Challenge | 0.25 | 0.227 | 0.288 | 0.281 |
+| MMLU | 0.25 | 0.230 | 0.311 | 0.315 |
+| GSM8K | 0 | 0.000 | 0.025 | 0.046 |
+| HumanEval | 0 | 0.000 | 0.067 | 0.085 |
+| **ChatCORE** | 0 | **−0.012** | 0.073 | 0.088 |
+
+nanochat's columns are its October 2025 d20 report card, from the README of that time. That
+model had the same CORE as ours, 0.2219.
+
+**The knowledge is in the model, but the chat format isn't.** CORE asks the same ARC questions
+in-context, scoring which answer text the model finds most likely, and there d20 gets 65% on
+ARC-Easy and 36% on ARC-Challenge. In the chat format it has to read a lettered list and reply
+with a letter, which it has never practiced: it picks letters at chance. The generations show
+the same thing:
+
+- **GSM8K:** none of the 1,319 replies has the "#### <number>" line that grading reads.
+  Most restate the problem or loop, for example "The truck is traveling at 10 mph. The children
+  are traveling at 5 mph. The truck is traveling at 10 mph. …".
+- **HumanEval:** 131 of 164 replies start a `def`, but they copy the function's signature and
+  docstring back, often several times, without a body.
+
+nanochat's fine-tuned d20, from a base model with the same CORE, scored 0.073 to 0.088, most of
+it on the multiple-choice tasks, whose answer format its training mixture teaches (MMLU's
+training split is in it). Fine-tuning our d20 is the test of whether it gets there too.

@@ -117,3 +117,33 @@ class TestGenerator:
             next(gen.stream([]))
         with pytest.raises(ValueError):
             next(gen.stream([1] * CONFIG.seq_len))
+
+
+class TestGreedyBatch:
+    def _single(self, model, prompt, n, **kwargs):
+        return list(generate.Generator(model).stream(prompt, max_new_tokens=n, temperature=0.0, **kwargs))
+
+    def test_rows_match_one_prompt_at_a_time(self):
+        """Prompts of different lengths, each decoding at its own position."""
+        model = _model()
+        prompts = [[int(t) for t in _tokens(n, seed=n)] for n in (1, 3, 6)]
+        outs = generate.greedy_batch(model, prompts, max_new_tokens=6)
+        assert outs == [self._single(model, p, 6) for p in prompts]
+
+    def test_rows_end_at_their_own_stop_token(self):
+        model = _model()
+        prompts = [[int(t) for t in _tokens(3, seed=s)] for s in (0, 1)]
+        full = generate.greedy_batch(model, prompts, max_new_tokens=8)
+        stop = full[0][3]
+        outs = generate.greedy_batch(model, prompts, max_new_tokens=8, stop_tokens={stop})
+        assert outs == [row[: row.index(stop)] if stop in row else row for row in full]
+
+    def test_stops_when_the_context_is_full(self):
+        model = _model()
+        outs = generate.greedy_batch(model, [[1] * 10, [2] * 4], max_new_tokens=100)
+        assert [len(o) for o in outs] == [CONFIG.seq_len - 10 + 1, CONFIG.seq_len - 4 + 1]
+
+    def test_is_done_ends_a_row_early(self):
+        model = _model()
+        outs = generate.greedy_batch(model, [[1, 2]], max_new_tokens=12, is_done=lambda out: len(out) >= 2, check_every=4)
+        assert len(outs[0]) == 4

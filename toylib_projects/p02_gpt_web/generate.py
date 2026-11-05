@@ -35,10 +35,20 @@ class Cache(typing.NamedTuple):
     last_embedding: jax.Array  # [qkv_dim]
 
 
-def empty_cache(model: decoder_only_model.DecoderOnlyTransformer) -> Cache:
+def empty_cache(
+    model: decoder_only_model.DecoderOnlyTransformer,
+    length: int | None = None,
+    batch: tuple[int, ...] = (),
+) -> Cache:
+    """A cache for `length` positions (default: the whole context), with leading `batch` dims.
+
+    A shorter cache is exact: no query can see a key beyond the positions it holds.
+    """
     c = model.config
-    shape = (c.num_layers, c.num_heads, c.seq_len, c.qkv_dim // c.num_heads)
-    return Cache(jnp.zeros(shape, c.dtype), jnp.zeros(shape, c.dtype), jnp.zeros((c.qkv_dim,), c.dtype))
+    shape = (*batch, c.num_layers, c.num_heads, length or c.seq_len, c.qkv_dim // c.num_heads)
+    return Cache(
+        jnp.zeros(shape, c.dtype), jnp.zeros(shape, c.dtype), jnp.zeros((*batch, c.qkv_dim), c.dtype)
+    )
 
 
 def _rope(rope, x: jax.Array, pos: jax.Array) -> jax.Array:
@@ -153,6 +163,72 @@ def _step(model, token, pos, cache, key, temperature, top_k):
 
 def _bucket(n: int) -> int:
     return max(64, 1 << (n - 1).bit_length())
+
+
+@functools.partial(jax.jit, donate_argnames=("cache",))
+def _prefill_batch(model, tokens, num_valid, cache):
+    def one(tokens, n, cache):
+        hidden, cache = forward(model, tokens, jnp.int32(0), cache, n)
+        return model.logits(hidden[n - 1]).argmax(-1).astype(jnp.int32), cache
+
+    return jax.vmap(one)(tokens, num_valid, cache)
+
+
+@functools.partial(jax.jit, donate_argnames=("cache",))
+def _step_batch(model, tokens, pos, cache):
+    def one(token, pos, cache):
+        hidden, cache = forward(model, token[None], pos, cache)
+        return model.logits(hidden[0]).argmax(-1).astype(jnp.int32), cache
+
+    return jax.vmap(one)(tokens, pos, cache)
+
+
+def greedy_batch(
+    model: decoder_only_model.DecoderOnlyTransformer,
+    prompts: typing.Sequence[typing.Sequence[int]],
+    max_new_tokens: int,
+    stop_tokens: typing.Container[int] = (),
+    is_done: typing.Callable[[list[int]], bool] | None = None,
+    check_every: int = 16,
+) -> list[list[int]]:
+    """Greedy continuations of several prompts at once, for evaluations.
+
+    Each row decodes at its own position, so prompts of different lengths share a batch.
+    A row ends at a stop token (not included), after `max_new_tokens`, when the context
+    is full, or once `is_done(tokens so far)` is true, checked every `check_every` steps.
+    Finished rows keep computing until every row is done; their output is ignored.
+    """
+    seq_len = model.config.seq_len
+    lengths = np.array([len(p) for p in prompts], dtype=np.int32)
+    if lengths.min() < 1 or lengths.max() >= seq_len:
+        raise ValueError(f"Prompts need 1 to {seq_len - 1} tokens, not {lengths.min()}..{lengths.max()}")
+    width = min(_bucket(int(lengths.max())), seq_len)
+    length = min(width + max_new_tokens, seq_len)
+    padded = np.zeros((len(prompts), width), dtype=np.int32)
+    for row, prompt in zip(padded, prompts):
+        row[: len(prompt)] = prompt
+
+    cache = empty_cache(model, length, batch=(len(prompts),))
+    token, cache = _prefill_batch(model, jnp.asarray(padded), jnp.asarray(lengths), cache)
+    pos, outs = lengths.copy(), [[] for _ in prompts]
+    done = np.zeros(len(prompts), dtype=bool)
+    for step in range(max_new_tokens):
+        for i, t in enumerate(np.asarray(token)):
+            if done[i]:
+                continue
+            if t in stop_tokens:
+                done[i] = True
+                continue
+            outs[i].append(int(t))
+            done[i] = pos[i] >= length  # The cache has no room to feed this token.
+        if is_done and (step + 1) % check_every == 0:
+            done |= [d or is_done(out) for d, out in zip(done, outs)]
+        if done.all():
+            break
+        # Finished rows write past their end, clamped into the cache; nothing reads them.
+        token, cache = _step_batch(model, token, jnp.asarray(np.minimum(pos, length - 1)), cache)
+        pos += 1
+    return outs
 
 
 @dataclasses.dataclass
