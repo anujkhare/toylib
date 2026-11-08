@@ -126,6 +126,9 @@ def create_nanochat_optimizer_config(
     tokens_per_step: int,
     warmup_steps: int = 40,
     weight_decay: float = 0.28,
+    lr_multiplier: optax.Schedule | None = None,
+    muon_momentum: optax.Schedule | None = None,
+    muon_weight_decay: optax.Schedule | None = None,
 ) -> experiment.MultiOptimizerConfig:
     """nanochat's optimizer, from its `setup_optimizer` and `base_train.py`.
 
@@ -133,14 +136,19 @@ def create_nanochat_optimizer_config(
     follows `warmup_warmdown_schedule`. Rates scale with sqrt(batch / B_REF), the
     AdamW ones for embeddings and output with 1/sqrt(dim / 768), and Muon's weight
     decay with sqrt(batch / B_REF) * (D_REF / tokens), as nanochat derives.
+
+    Fine-tuning keeps the groups and their peak rates but replaces the schedules:
+    `lr_multiplier` scales every rate, and the other two replace Muon's.
     """
     batch_scale = (tokens_per_step / B_REF) ** 0.5
     dim_scale = (config.qkv_dim / 768) ** -0.5
     tokens = max_steps * tokens_per_step
     decay = weight_decay * batch_scale * (12 * D12_SCALING_PARAMS / tokens)
+    if lr_multiplier is None:
+        lr_multiplier = warmup_warmdown_schedule(1.0, max_steps, warmup_steps)
 
-    def lr(peak: float) -> optax.Schedule:
-        return warmup_warmdown_schedule(peak * batch_scale, max_steps, warmup_steps)
+    def lr(peak: float, scale: float = batch_scale) -> optax.Schedule:
+        return lambda step: peak * scale * lr_multiplier(step)
 
     def adamw(peak: float, b1: float, b2: float, wd: float) -> optax.GradientTransformation:
         return optax.adamw(learning_rate=lr(peak), b1=b1, b2=b2, eps=1e-10, weight_decay=wd)
@@ -153,13 +161,12 @@ def create_nanochat_optimizer_config(
         "x0_lambdas": adamw(0.5, 0.96, 0.95, 0.0),
         # nanochat doesn't scale this group's rate with the batch.
         "smear": optax.adamw(
-            learning_rate=warmup_warmdown_schedule(0.2, max_steps, warmup_steps),
-            b1=0.8, b2=0.95, eps=1e-10, weight_decay=0.0,
+            learning_rate=lr(0.2, scale=1.0), b1=0.8, b2=0.95, eps=1e-10, weight_decay=0.0
         ),
         "muon": muon.muon(
             learning_rate=lr(0.02),
-            momentum=muon_momentum_schedule(max_steps),
-            weight_decay=cosine_weight_decay_schedule(decay, max_steps),
+            momentum=muon_momentum or muon_momentum_schedule(max_steps),
+            weight_decay=muon_weight_decay or cosine_weight_decay_schedule(decay, max_steps),
         ),
     }
     groups = {

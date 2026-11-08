@@ -76,3 +76,17 @@ def test_batched_apply_pads_last_batch_and_compiles_once():
     np.testing.assert_allclose(out["y"], x @ np.asarray(model["w"]), rtol=1e-5)
     np.testing.assert_allclose(out["norm"], np.linalg.norm(x, axis=-1), rtol=1e-5)
     assert traces == [(4, 3)]  # one shape, one compile, despite the short last batch
+
+
+def test_restore_tree_grows_smaller_leaves_into_the_template(ckpt_dir: Path):
+    manager = inference._manager(ckpt_dir)
+    template = {"w": np.full((4, 3), 9.0, np.float32), "b": np.full((2,), 9.0, np.float32)}
+    with pytest.raises(ValueError, match="shape"):
+        inference.restore_tree(manager, 5, "model", template)
+    grown = inference.restore_tree(manager, 5, "model", template, grow=True)
+    np.testing.assert_array_equal(grown["w"][:3, :2], np.full((3, 2), 5.0))
+    np.testing.assert_array_equal(grown["w"][3], np.full(3, 9.0))  # The template's.
+    np.testing.assert_array_equal(grown["w"][:, 2], np.full(4, 9.0))
+    np.testing.assert_array_equal(grown["b"], np.full((2,), -5.0))
+    with pytest.raises(ValueError, match="shape"):  # Smaller templates never fit.
+        inference.restore_tree(manager, 5, "model", {"w": np.zeros((2, 2)), "b": np.zeros(2)}, grow=True)

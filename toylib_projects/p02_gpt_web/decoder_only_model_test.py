@@ -605,3 +605,9 @@ class TestNanochatAdditions:
             model, padded, 1, jax.random.key(3), max_output_tokens=10, temperature=0
         )
         np.testing.assert_array_equal(actual, expected)
+
+
+def test_loss_of_a_batch_with_nothing_to_train_is_zero():
+    logits = jnp.zeros((1, 3, 5))
+    loss, _ = decoder_only_model.loss_fn(logits, jnp.zeros((1, 3), jnp.int32), jnp.zeros((1, 3)))
+    assert float(loss) == 0.0
