@@ -196,6 +196,7 @@ reasonable time.
 - `BENCHMARK.md`: hardware, configuration, speed and cost.
   `scripts/benchmark.py` and `scripts/health_check.py` reproduce it.
 - `EXPERIMENTS.md`: the training runs and their results, and the nanochat recipe port.
+- `MODEL_CARD.md`: the d20 base and chat models: architecture, data, training and evaluations.
 - `muon.py`: nanochat's current Muon, as an optax transform.
 - `data.py`: `TokenBinDataset` for token files; older parquet and Grain loaders for text
   shards.
