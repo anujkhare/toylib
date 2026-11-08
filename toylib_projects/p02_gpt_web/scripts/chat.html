@@ -123,6 +123,10 @@ let mode = "chat", messages = [], controller = null;
 
 fetch("/health").then((r) => r.json()).then((h) => {
   $("model").textContent = `${h.run} · ${h.context}-token context`;
+  if (h.chat_tokens) {
+    $("note-chat").textContent = "This model was pretrained on web text, then fine-tuned on " +
+      "nanochat's conversations. It is small, so expect confident mistakes.";
+  }
 }).catch(() => { $("model").textContent = "server not reachable"; });
 
 function setMode(m) {

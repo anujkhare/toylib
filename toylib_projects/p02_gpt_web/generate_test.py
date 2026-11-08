@@ -147,3 +147,14 @@ class TestGreedyBatch:
         model = _model()
         outs = generate.greedy_batch(model, [[1, 2]], max_new_tokens=12, is_done=lambda out: len(out) >= 2, check_every=4)
         assert len(outs[0]) == 4
+
+    def test_tool_tokens_are_forced_and_then_read(self):
+        """Forced tokens replace the model's picks, and the model continues from them."""
+        model = _model()
+        prompt = [int(t) for t in _tokens(3, seed=0)]
+        first = generate.greedy_batch(model, [prompt], max_new_tokens=1)[0][0]
+        forced = [(first + 1) % CONFIG.vocab_size, (first + 2) % CONFIG.vocab_size]
+        tool = lambda out: forced if out == [first] else []
+        outs = generate.greedy_batch(model, [prompt, prompt], max_new_tokens=6, tool=tool)
+        expected = [first, *forced, *self._single(model, prompt + [first, *forced], 3)]
+        assert outs == [expected, expected]

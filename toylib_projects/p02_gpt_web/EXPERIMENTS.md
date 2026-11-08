@@ -13,6 +13,7 @@ W&B project.
 | `local_nanochat` | nanochat's current recipe, on a laptop | 1.692 against the baseline's 1.753 |
 | `d12_nanochat` | nanochat's current recipe at d12 | **0.877**, 7.6% ahead of the baseline and inside nanochat's range |
 | `d20_nanochat` | The post's model | **0.783**, inside the 0.75 to 0.90 expected; CORE **0.222**; ChatCORE −0.012 before fine-tuning |
+| `d20_sft` | d20 fine-tuned on nanochat's SFT mixture | ChatCORE **0.182**, against nanochat d20's 0.088 |
 
 ## Health run
 
@@ -402,3 +403,62 @@ the same thing:
 nanochat's fine-tuned d20, from a base model with the same CORE, scored 0.073 to 0.088, most of
 it on the multiple-choice tasks, whose answer format its training mixture teaches (MMLU's
 training split is in it). Fine-tuning our d20 is the test of whether it gets there too.
+
+## d20 fine-tuned to chat
+
+`sft.py` fine-tunes `d20_nanochat` as nanochat's single-stage `chat_sft.py` does:
+
+- **Data:** one pass over SmolTalk's 460K conversations, with MMLU's auxiliary_train three
+  times and GSM8K's train split four times (`sft_data.py`). That is 790K conversations and
+  486M tokens. Only the assistant's 294M are trained.
+- **Packing:** rows of 2,049 tokens, each starting a conversation and filled best-fit from the
+  next 100. Rows are 99.1% full, and no conversation is cut. 256 rows a step gives 933 steps.
+- **Chat tokens:** our tokenizer uses all 32,768 ids, so nanochat's 8 chat tokens are appended
+  as ids 32,768 to 32,775. The embedding, value-embedding and output tables each gain 8 rows,
+  which start at their initial values. The GSM8K calculator spans become tool calls, and
+  evaluation writes the calculator's result back in, as nanochat's engine does.
+- **Optimizer:** it continues from pre-training's state at step 6,640. Every learning rate
+  starts at 0.8 of its pre-training peak, holds for half the run, then falls linearly to 0.
+  Muon's momentum ramps from 0.85 to 0.95 over 300 steps, and its weight decay is 0.
+
+It took 2 h 20 min of training and 1 h 30 min of evaluation on one Colab A100, about 28
+compute units in all.
+
+**ChatCORE went from chance to 0.182, twice nanochat's d20.**
+
+| Step | Val bits per byte | ARC-Easy | ARC-Challenge | MMLU | GSM8K | HumanEval | ChatCORE |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 0.475 | 0.245 | 0.258 | 0.255 | 0.000 | 0.000 | 0.002 |
+| 200 | 0.355 | 0.447 | 0.356 | 0.333 | 0.000 | 0.000 | 0.103 |
+| 400 | 0.345 | 0.478 | 0.414 | 0.338 | 0.000 | 0.042 | 0.136 |
+| 600 | 0.326 | 0.517 | 0.427 | 0.332 | 0.000 | 0.167 | 0.174 |
+| 800 | 0.304 | 0.541 | 0.433 | 0.343 | 0.000 | 0.042 | 0.159 |
+| **933, all problems** | **0.295** | **0.542** | **0.436** | **0.345** | **0.030** | **0.116** | **0.182** |
+| nanochat d20, SFT | | 0.388 | 0.281 | 0.315 | 0.046 | 0.085 | 0.088 |
+
+Validation is on the mixture's validation split, the assistant's tokens only, so it isn't
+comparable with pre-training's 0.783. Evaluations during the run use every multiple-choice
+problem but only 24 of each generative task, so their GSM8K and HumanEval columns are noisy.
+The last row uses every problem. At step 0, the base model in the chat format scores chance,
+as it did on the plain transcript (−0.012).
+
+nanochat's row is its October 2025 report card, whose base model had the same CORE as ours.
+That model was midtrained and fine-tuned on an older, smaller mixture. The current mixture
+repeats MMLU and GSM8K for their answer formats, so most of our lead is likely the recipe, not
+the model. We haven't run nanochat's current code to check.
+
+**The multiple-choice gain is the format, learned in the first 200 steps.** ARC-Easy rose from
+25% to 45% by step 200 and to 54% by the end, closer to the 65% that CORE measures in-context.
+The model knew the answers before. Fine-tuning taught it to read a lettered list and reply
+with a letter.
+
+**Generation learned its format but not the skill.**
+
+- **GSM8K:** 565 of 1,319 replies end in a "#### <number>" line, and 458 call the calculator,
+  where before none did either. Only 39 are right. The steps are set up wrongly, for example
+  dividing 162 by 18 to get "Allen's age is 9" and then multiplying by 10.
+- **HumanEval:** 160 of 164 replies write a function body, against none before, and 19 pass
+  the tests.
+
+The weights are in `gs://tinystories-checkpoints/toylib-p02-climbmix/d20_sft`, and
+`scripts/chat_web.py --run d20_sft` chats with them.

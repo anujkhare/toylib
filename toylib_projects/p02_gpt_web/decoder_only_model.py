@@ -511,8 +511,9 @@ def loss_fn(
     # masked loss - [batch_size, seq_len]
     masked_loss = mask * per_token_loss
 
-    # The total loss is averaged per valid token - this treats all tokens equally
-    total_loss = jnp.sum(masked_loss) / jnp.sum(mask)
+    # The total loss is averaged per valid token - this treats all tokens equally. A
+    # fine-tuning batch can hold no trained tokens (only users' turns); its loss is 0.
+    total_loss = jnp.sum(masked_loss) / jnp.maximum(jnp.sum(mask), 1)
 
     return total_loss, per_token_loss
 

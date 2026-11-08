@@ -8,6 +8,7 @@ import pytest
 from toylib_projects.p02_gpt_web.scripts import chat_eval
 
 BOS = 0
+FMT = chat_eval.Transcript(lambda text: [ord(c) for c in text], BOS)
 
 
 def encode(text: str) -> list[int]:
@@ -43,21 +44,21 @@ class TestData:
 
 class TestPrompts:
     def test_prompt_is_a_transcript_ending_at_the_reply(self):
-        ids = chat_eval.prompt_ids(encode, BOS, chat_eval.Problem("Hi there", "x"), max_len=1000)
+        ids = FMT.prompt("Hi there", max_len=1000)
         text = "".join(map(chr, ids[1:]))
         assert ids[0] == BOS and text.endswith("User: Hi there\nAssistant:")
 
     def test_long_prompts_keep_their_end(self):
-        ids = chat_eval.prompt_ids(encode, BOS, chat_eval.Problem("x" * 500, "x"), max_len=50)
+        ids = FMT.prompt("x" * 500, max_len=50)
         assert len(ids) == 50 and "".join(map(chr, ids)).endswith("\nAssistant:")
 
     def test_choice_tokens_share_the_space(self):
-        shared, ids = chat_eval.choice_tokens(encode, ["A", "B", "C"])
+        shared, ids = chat_eval.choice_tokens(FMT, ["A", "B", "C"])
         assert shared == encode(" ") and ids == encode("ABC")
 
     def test_choice_tokens_reject_answers_that_differ_twice(self):
         with pytest.raises(ValueError):
-            chat_eval.choice_tokens(encode, ["A", "AB"])
+            chat_eval.choice_tokens(FMT, ["A", "AB"])
 
 
 class TestCategorical:
@@ -74,7 +75,7 @@ class TestCategorical:
 
     def test_picks_the_highest_letter_among_the_choices(self):
         problems = [_mc("B"), _mc("C"), _mc("B", letters=("A", "C", "D", "E"))]
-        correct = chat_eval.categorical_correct(self._prefers("B"), problems, encode, BOS, 4096, 4096)
+        correct = chat_eval.categorical_correct(self._prefers("B"), problems, FMT, 4096, 4096)
         # The third problem doesn't offer "B", so its pick falls among the others.
         assert correct[:2] == [True, False]
 
@@ -87,8 +88,8 @@ class TestCategorical:
                 logits[row, ord("ABCD"[pos % 4])] = 1.0
             return logits
 
-        small = chat_eval.categorical_correct(by_length, problems, encode, BOS, 4096, 256)
-        large = chat_eval.categorical_correct(by_length, problems, encode, BOS, 4096, 65536)
+        small = chat_eval.categorical_correct(by_length, problems, FMT, 4096, 256)
+        large = chat_eval.categorical_correct(by_length, problems, FMT, 4096, 65536)
         assert small == large and any(small) and not all(small)
 
 
@@ -118,9 +119,9 @@ class TestGenerative:
         problems = [chat_eval.Problem("q" * n, str(n)) for n in (30, 5, 12)]
 
         def complete(prompts):  # Answers each prompt with its own length.
-            return [f"#### {len(p) - len(chat_eval.prompt_ids(encode, BOS, chat_eval.Problem('', ''), 10**6))}" for p in prompts]
+            return [f"#### {len(p) - len(FMT.prompt('', 10**6))}" for p in prompts]
 
-        results = chat_eval.generative_results(complete, "GSM8K", problems, encode, BOS, 10**6, batch_size=2)
+        results = chat_eval.generative_results(complete, "GSM8K", problems, FMT, 10**6, batch_size=2, verbose=False)
         assert [text for text, _ in results] == ["#### 30", "#### 5", "#### 12"]
         assert all(ok for _, ok in results)
 
@@ -131,3 +132,14 @@ def test_summarize_reproduces_nanochats_d20_sft_chatcore():
     out = chat_eval.summarize(sft)
     assert out["ChatCORE"] == pytest.approx(0.0884, abs=1e-4)
     assert "ChatCORE" not in chat_eval.summarize({"MMLU": 0.3})
+
+
+def test_chat_tokens_prompt_like_nanochat():
+    from toylib_projects.p02_gpt_web import chat_format
+    from toylib_projects.p02_gpt_web.tokenizer import bpe
+
+    tok = chat_format.ChatTokenizer(bpe.Tokenizer([]))
+    fmt = chat_eval.ChatTokens(tok)
+    assert tok.decode(fmt.prompt("Hi", 100)) == "<|endoftext|><|user_start|>Hi<|user_end|><|assistant_start|>"
+    shared, ids = chat_eval.choice_tokens(fmt, ["A", "B", "1"])
+    assert shared == [] and ids == tok.encode("AB1")  # No space after <|assistant_start|>.

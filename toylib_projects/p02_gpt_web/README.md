@@ -179,8 +179,10 @@ size, about 6 to 10% behind. Porting nanochat's current architecture and optimiz
 `RUNS["d12_nanochat"]`, reached 0.877, 7.6% below that baseline and inside nanochat's range, and
 d20 trained with that recipe, `RUNS["d20_nanochat"]`, and reached 0.783 in 21.3 hours for
 about 145 units. Its CORE is 0.222, level with nanochat's original d20 speedrun, and it
-chats locally at 29 tokens a second. Its ChatCORE is chance, −0.012: without conversation
-fine-tuning it can't answer in a chat format, though CORE shows it knows many of the answers. `EXPERIMENTS.md` has every run and the full list of what was ported. The notebook
+chats locally at 29 tokens a second. Its ChatCORE was chance, −0.012: without conversation
+fine-tuning it couldn't answer in a chat format, though CORE shows it knows many of the answers.
+Fine-tuning it on nanochat's SFT mixture, `RUNS["d20_sft"]` in `sft.py`, raised ChatCORE to
+0.182 in 3.8 hours on an A100 for about 28 units, against nanochat d20's 0.088. `EXPERIMENTS.md` has every run and the full list of what was ported. The notebook
 itself has only run locally so far. Figures read checkpoints from the bucket
 with `--checkpoint-dir`, and a model this size needs an accelerator to draw them in
 reasonable time.
@@ -204,8 +206,12 @@ reasonable time.
 - `metrics.py`: bits per byte. `analyze.py`: token budget and Chinchilla estimate.
 - `probes.py`: measurements on a trained model. `figures.py`: every figure.
 - `generate.py`: sampling with a key-value cache, fast enough to chat on a laptop.
+- `chat_format.py`: nanochat's chat tokens, added after our tokenizer's ids, and its
+  conversation format. `sft_data.py`: nanochat's fine-tuning mixture, rendered and packed
+  into rows. `sft.py`: fine-tuning a pretrained run on it, as nanochat's `chat_sft.py` does.
 - `scripts/core_eval.py`: the CORE metric, as nanochat runs it. `scripts/chat_eval.py`:
-  nanochat's ChatCORE, on a chat transcript until the model has chat tokens. `scripts/sample.py`:
+  nanochat's ChatCORE, in the chat format for fine-tuned runs and on a plain transcript
+  for base models. `scripts/sample.py`:
   nanochat's sample prompts and a speed benchmark. `scripts/chat_web.py` and `chat.html`:
   a local chat page.
 - `tokenizer/` (other files), `scripts/` (the rest): tokenizer tools and compilation
@@ -274,4 +280,29 @@ on a throwaway machine such as Colab; on a laptop, pass `--max-problems` or `--t
 
 ```bash
 uv run python -m toylib_projects.p02_gpt_web.scripts.chat_eval --run d20_nanochat --checkpoint-dir gs://tinystories-checkpoints/toylib-p02-climbmix/d20_nanochat --batch-size 64 --token-budget 32768 --output chatcore_d20.json --completions chatcore_d20.jsonl
+```
+
+### Fine-tuning d20 to chat
+
+nanochat's SFT stage: one pass over SmolTalk, MMLU's auxiliary_train three times and
+GSM8K four times, 486M tokens in 239,000 rows of 2,049 tokens, 933 steps. Render and pack
+the mixture once (40 seconds on 10 cores; it downloads the datasets the first time):
+
+```bash
+uv run python -m toylib_projects.p02_gpt_web.sft_data
+```
+
+Then fine-tune from d20's last checkpoint, which needs its optimizer state too. It checks
+validation bits per byte and ChatCORE every 200 steps and ends with ChatCORE on every
+problem, written to `outputs/d20_sft/chatcore.json`. As with ChatCORE, run it on a
+throwaway machine:
+
+```bash
+uv run python -m toylib_projects.p02_gpt_web.sft --run d20_sft --checkpoint-dir gs://tinystories-checkpoints/toylib-p02-climbmix/d20_sft
+```
+
+Chat with the result:
+
+```bash
+uv run python -m toylib_projects.p02_gpt_web.scripts.chat_web --run d20_sft --checkpoint-dir toylib_projects/p02_gpt_web/outputs/d20_sft/checkpoints
 ```

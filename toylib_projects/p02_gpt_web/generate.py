@@ -14,6 +14,7 @@ here.
         ...
 """
 
+import collections
 import dataclasses
 import functools
 import typing
@@ -190,6 +191,7 @@ def greedy_batch(
     stop_tokens: typing.Container[int] = (),
     is_done: typing.Callable[[list[int]], bool] | None = None,
     check_every: int = 16,
+    tool: typing.Callable[[list[int]], list[int]] | None = None,
 ) -> list[list[int]]:
     """Greedy continuations of several prompts at once, for evaluations.
 
@@ -197,6 +199,10 @@ def greedy_batch(
     A row ends at a stop token (not included), after `max_new_tokens`, when the context
     is full, or once `is_done(tokens so far)` is true, checked every `check_every` steps.
     Finished rows keep computing until every row is done; their output is ignored.
+
+    `tool(tokens so far)`, called after each token, returns tokens to force next instead
+    of the model's picks, as nanochat's Engine writes in its calculator's results. Forced
+    tokens count towards `max_new_tokens`.
     """
     seq_len = model.config.seq_len
     lengths = np.array([len(p) for p in prompts], dtype=np.int32)
@@ -211,22 +217,28 @@ def greedy_batch(
     cache = empty_cache(model, length, batch=(len(prompts),))
     token, cache = _prefill_batch(model, jnp.asarray(padded), jnp.asarray(lengths), cache)
     pos, outs = lengths.copy(), [[] for _ in prompts]
+    forced: list[collections.deque] = [collections.deque() for _ in prompts]
     done = np.zeros(len(prompts), dtype=bool)
     for step in range(max_new_tokens):
-        for i, t in enumerate(np.asarray(token)):
+        feed = np.array(token)
+        for i in range(len(prompts)):
             if done[i]:
                 continue
+            t = forced[i].popleft() if forced[i] else int(feed[i])
             if t in stop_tokens:
                 done[i] = True
                 continue
-            outs[i].append(int(t))
+            outs[i].append(t)
+            feed[i] = t
             done[i] = pos[i] >= length  # The cache has no room to feed this token.
+            if tool:
+                forced[i].extend(tool(outs[i]))
         if is_done and (step + 1) % check_every == 0:
             done |= [d or is_done(out) for d, out in zip(done, outs)]
         if done.all():
             break
         # Finished rows write past their end, clamped into the cache; nothing reads them.
-        token, cache = _step_batch(model, token, jnp.asarray(np.minimum(pos, length - 1)), cache)
+        token, cache = _step_batch(model, jnp.asarray(feed), jnp.asarray(np.minimum(pos, length - 1)), cache)
         pos += 1
     return outs
 
@@ -286,21 +298,28 @@ def load(
 ):
     """A trained run's model and tokenizer. `dtype` overrides the compute dtype.
 
+    `run_name` is a key of `train.RUNS`, or of `sft.RUNS` for a fine-tuned run, whose
+    tokenizer is a `chat_format.ChatTokenizer`.
+
     On a CPU it defaults to float32: XLA's CPU matmuls are slow in bfloat16, and d20
     decoded 29 tokens a second in float32 against 4.6 in bfloat16 on an M4 Pro.
     """
     from toylib.harness import inference
-    from toylib_projects.p02_gpt_web import experiment, tokenize_webtext, train
+    from toylib_projects.p02_gpt_web import experiment, sft, tokenize_webtext, train
 
+    if run_name in sft.RUNS:
+        run, tokenizer = sft.model_run(sft.RUNS[run_name]), sft.load_tokenizer(sft.RUNS[run_name])
+    else:
+        run = train.RUNS[run_name]
+        tokenizer = tokenize_webtext.load_tokenizer(
+            run.vocab_size, tokenize_webtext.data_dir_for(run.num_train_shards)
+        )
     # Masked attention runs anywhere; the cuDNN kernel the run trained with needs a GPU.
-    run = dataclasses.replace(train.RUNS[run_name], attention_impl=None)
+    run = dataclasses.replace(run, attention_impl=None)
     if dtype is None and jax.default_backend() == "cpu":
         dtype = jnp.float32
     if dtype is not None:
         run = dataclasses.replace(run, dtype=dtype)
     template = experiment.build_model(train.model_config(run), jax.random.key(0))
     model = inference.load_model(template, checkpoint_dir, step)
-    tokenizer = tokenize_webtext.load_tokenizer(
-        run.vocab_size, tokenize_webtext.data_dir_for(run.num_train_shards)
-    )
     return model, tokenizer

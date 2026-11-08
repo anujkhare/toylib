@@ -6,10 +6,12 @@
 then open http://localhost:8000. The server streams tokens as server-sent events from
 POST /generate, so the same endpoint can later sit behind a hosted API.
 
-Our model is a base model: unlike nanochat's, it was never fine-tuned on conversations and
-has no chat tokens. Chat mode therefore writes the conversation as a plain transcript,
+A fine-tuned run (`--run d20_sft`) chats in nanochat's format, between chat tokens, and
+replies until <|assistant_end|>. A base model was never fine-tuned on conversations and has
+no chat tokens, so chat mode writes the conversation as a plain transcript,
 "User: ... / Assistant: ...", and stops when the model starts the user's next turn.
-Complete mode continues raw text.
+Complete mode continues raw text either way. The page doesn't run the calculator, so a
+fine-tuned model's calculator calls show as written and it guesses their results.
 """
 
 import argparse
@@ -22,7 +24,7 @@ from http import server
 
 import jax.numpy as jnp
 
-from toylib_projects.p02_gpt_web import generate, tokenize_webtext
+from toylib_projects.p02_gpt_web import chat_format, generate, tokenize_webtext
 
 PAGE = pathlib.Path(__file__).with_name("chat.html")
 EOT = tokenize_webtext.EOT_ID
@@ -39,10 +41,18 @@ def transcript(messages: list[dict]) -> str:
     return PREAMBLE + "\n".join(turns) + "\nAssistant:"
 
 
+def is_chat(tokenizer) -> bool:
+    """Whether the run was fine-tuned with chat tokens."""
+    return isinstance(tokenizer, chat_format.ChatTokenizer)
+
+
 def fit(tokenizer, messages: list[dict], budget: int) -> list[int]:
-    """The transcript's tokens, dropping the oldest turns until it fits `budget`."""
+    """The conversation's tokens, dropping the oldest turns until it fits `budget`."""
     while True:
-        ids = [EOT] + tokenizer.encode(transcript(messages))
+        if is_chat(tokenizer):
+            ids = chat_format.render_for_completion(tokenizer, messages)
+        else:
+            ids = [EOT] + tokenizer.encode(transcript(messages))
         if len(ids) <= budget or len(messages) <= 1:
             return ids[-budget:]
         messages = messages[2:] if len(messages) > 2 else messages[1:]
@@ -61,11 +71,12 @@ def stream_text(
     tokenizer,
     prompt: list[int],
     stop: str | None,
+    stop_tokens: typing.Container[int] = (EOT,),
     **kwargs,
 ) -> typing.Iterator[str]:
     """Decoded text as it grows, never splitting a UTF-8 character or emitting `stop`."""
     ids, sent = [], 0
-    for token in gen.stream(prompt, stop_tokens={EOT}, **kwargs):
+    for token in gen.stream(prompt, stop_tokens=stop_tokens, **kwargs):
         ids.append(token)
         text = tokenizer.decode(ids)
         if stop and stop in text:
@@ -107,7 +118,7 @@ class Handler(server.BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
         elif self.path == "/health":
-            info = dict(run=self.run_name, context=self.gen.seq_len)
+            info = dict(run=self.run_name, context=self.gen.seq_len, chat_tokens=is_chat(self.tokenizer))
             self._send(200, json.dumps(info).encode(), "application/json")
         else:
             self._send(404, b"Not found", "text/plain")
@@ -125,9 +136,13 @@ class Handler(server.BaseHTTPRequestHandler):
                 seed=int(request.get("seed", time.time_ns() % 2**31)),
             )
             budget = self.gen.seq_len - max_tokens
+            stop_tokens = {EOT}
             if request.get("mode") == "complete":
                 prompt = ([EOT] + self.tokenizer.encode(request["prompt"]))[-budget:]
                 stop = None
+            elif is_chat(self.tokenizer):
+                prompt, stop = fit(self.tokenizer, request["messages"], budget), None
+                stop_tokens = {EOT, self.tokenizer.assistant_end}
             else:
                 prompt, stop = fit(self.tokenizer, request["messages"], budget), STOP
         except (KeyError, TypeError, ValueError) as e:
@@ -140,7 +155,7 @@ class Handler(server.BaseHTTPRequestHandler):
         with self.lock:  # One generation at a time: the model is the bottleneck.
             start = time.perf_counter()
             try:
-                for piece in stream_text(self.gen, self.tokenizer, prompt, stop, **options):
+                for piece in stream_text(self.gen, self.tokenizer, prompt, stop, stop_tokens, **options):
                     self._event({"text": piece})
                 elapsed = time.perf_counter() - start
                 self._event({"done": True, "prompt_tokens": len(prompt), "seconds": round(elapsed, 2)})

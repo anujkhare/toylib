@@ -70,3 +70,24 @@ class TestTranscript:
         ids = chat_web.fit(ByteTokenizer(), messages, budget=300)
         text = ByteTokenizer().decode(ids[1:])
         assert len(ids) <= 300 and "last" in text and "x" not in text
+
+
+class TestChatTokens:
+    def test_a_fine_tuned_run_gets_the_chat_format(self):
+        from toylib_projects.p02_gpt_web import chat_format
+        from toylib_projects.p02_gpt_web.tokenizer import bpe
+
+        tok = chat_format.ChatTokenizer(bpe.Tokenizer([]))
+        messages = [
+            {"role": "user", "content": "x" * 400},
+            {"role": "assistant", "content": "y" * 400},
+            {"role": "user", "content": "last"},
+        ]
+        ids = chat_web.fit(tok, messages, budget=300)
+        assert tok.decode(ids) == "<|endoftext|><|user_start|>last<|user_end|><|assistant_start|>"
+        assert chat_web.is_chat(tok) and not chat_web.is_chat(ByteTokenizer())
+
+    def test_stops_at_a_stop_token(self):
+        reply = "ok" + chr(7) + "more"
+        pieces = chat_web.stream_text(Scripted(reply), ByteTokenizer(), [0], None, stop_tokens={7})
+        assert "".join(pieces) == "ok"

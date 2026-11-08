@@ -41,6 +41,7 @@ def restore_tree(
     name: str,
     template: typing.Any,
     fillable: typing.Any = None,
+    grow: bool = False,
 ) -> typing.Any:
     """Restore item `name` at `step` into the structure of `template`, leaf by leaf.
 
@@ -49,6 +50,10 @@ def restore_tree(
     checkpoint lacks is taken from `template` where `fillable` (a matching tree
     of bools) is True, and is an error otherwise, as is a leaf on disk that the
     template doesn't have or one whose shape differs.
+
+    With `grow`, a saved leaf may be smaller than the template's along any axes, as when
+    a vocabulary gains tokens: it fills the leading corner, and the rest keeps the
+    template's values.
     """
     saved = manager.restore(
         step, args=ocp.args.Composite(**{name: ocp.args.StandardRestore()})
@@ -71,11 +76,20 @@ def restore_tree(
             filled.append("/".join(key))
             continue
         value = saved_flat.pop(key)
+        dtype = np.asarray(leaf).dtype
         if np.shape(value) != np.shape(leaf):
-            raise ValueError(
-                f"The {where} has shape {np.shape(value)}, not {np.shape(leaf)}"
+            fits = np.ndim(value) == np.ndim(leaf) and all(
+                a <= b for a, b in zip(np.shape(value), np.shape(leaf))
             )
-        leaves.append(np.asarray(value, dtype=np.asarray(leaf).dtype))
+            if not (grow and fits):
+                raise ValueError(
+                    f"The {where} has shape {np.shape(value)}, not {np.shape(leaf)}"
+                )
+            grown = np.array(leaf, dtype=dtype)
+            grown[tuple(slice(0, n) for n in np.shape(value))] = value
+            leaves.append(grown)
+            continue
+        leaves.append(np.asarray(value, dtype=dtype))
     if saved_flat:
         unexpected = ", ".join("/".join(k) for k in saved_flat)
         raise ValueError(f"Step {step}'s {name} has leaves the template lacks: {unexpected}")

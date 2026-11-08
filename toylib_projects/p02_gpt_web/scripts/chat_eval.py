@@ -12,13 +12,14 @@ averaged. Data, prompts and grading follow nanochat's `scripts/chat_eval.py` and
   passes the task's tests (baseline 0%).
 - ChatCORE averages all five; ChatCORE_cat averages the three multiple-choice ones.
 
-One difference matters. nanochat runs this on its fine-tuned models, which write each turn
-between chat tokens such as `<|user_start|>`. Ours is a base model that has no chat
+Prompts take one of two forms. A fine-tuned run (`sft.py`) has nanochat's chat tokens, so
+each problem is written exactly as nanochat writes it (`chat_format.render_for_completion`),
+letters are scored without a space, and generation stops at <|assistant_end|>, with the
+calculator's results written in as nanochat's Engine does. A base model has no chat
 tokens, so each problem is written as the chat page's plain transcript
-(`chat_web.transcript`): a preamble, "User: <question>", then "Assistant:". The model's
-answer is what follows, up to the point where it starts the user's next turn. That makes
-the score a baseline from before fine-tuning, which nanochat never reports; its
-published d20 scores are after midtraining and SFT.
+(`chat_web.transcript`): a preamble, "User: <question>", then "Assistant:". Its answer is
+what follows, up to the point where it starts the user's next turn. That score is a
+baseline from before fine-tuning, which nanochat never reports.
 
 Multiple-choice prompts are scored in batches packed to a token budget, like CORE.
 Generations run in batches through `generate.greedy_batch`. HumanEval runs the model's
@@ -50,12 +51,14 @@ import numpy as np
 
 from toylib.data import download
 from toylib_projects.p02_gpt_web.scripts import core_eval
+from toylib_projects.p02_gpt_web.tokenizer import bpe
 
 DATA_DIR = pathlib.Path(__file__).parents[1] / "data" / "chat_eval"
 HUB_PARQUET = "https://huggingface.co/api/datasets/{repo}/parquet/{subset}/{split}"
 TASKS = ("ARC-Easy", "ARC-Challenge", "MMLU", "GSM8K", "HumanEval")
 CATEGORICAL = ("ARC-Easy", "ARC-Challenge", "MMLU")
 BASELINES = {"ARC-Easy": 0.25, "ARC-Challenge": 0.25, "MMLU": 0.25, "GSM8K": 0.0, "HumanEval": 0.0}
+BOS = bpe.EOT_ID  # Pads batches too: padded positions are never read.
 STOP = "\nUser:"  # Where the model starts the user's next turn: the end of its answer.
 
 # last_logits(tokens [batch, time], positions [batch]) -> logits [batch, vocab] at those positions.
@@ -145,21 +148,50 @@ def load_task(name: str, data_dir: pathlib.Path = DATA_DIR) -> list[Problem]:
 # --- Prompts ---------------------------------------------------------------------------
 
 
-def prompt_ids(encode, bos: int, problem: Problem, max_len: int) -> list[int]:
-    """The problem as a one-turn transcript, ending where the assistant's reply begins."""
-    from toylib_projects.p02_gpt_web.scripts import chat_web
+@dataclasses.dataclass(frozen=True)
+class Transcript:
+    """A base model's prompts: the problem as the chat page's plain transcript."""
 
-    text = chat_web.transcript([{"role": "user", "content": problem.question}])
-    return ([bos] + encode(text))[-max_len:]
+    encode: typing.Callable[[str], list[int]]
+    bos: int
+    choice_prefix: str = " "  # After "Assistant:" an answer is " A".
+
+    def prompt(self, question: str, max_len: int) -> list[int]:
+        """The problem as a one-turn transcript, ending where the assistant's reply begins."""
+        from toylib_projects.p02_gpt_web.scripts import chat_web
+
+        text = chat_web.transcript([{"role": "user", "content": question}])
+        return ([self.bos] + self.encode(text))[-max_len:]
 
 
-def choice_tokens(encode, letters: typing.Sequence[str]) -> tuple[list[int], list[int]]:
+@dataclasses.dataclass(frozen=True)
+class ChatTokens:
+    """A fine-tuned model's prompts, in nanochat's chat format."""
+
+    tokenizer: typing.Any  # chat_format.ChatTokenizer
+    choice_prefix: str = ""  # After <|assistant_start|> an answer is "A".
+
+    @property
+    def encode(self) -> typing.Callable[[str], list[int]]:
+        return self.tokenizer.encode
+
+    def prompt(self, question: str, max_len: int) -> list[int]:
+        from toylib_projects.p02_gpt_web import chat_format
+
+        ids = chat_format.render_for_completion(self.tokenizer, [{"role": "user", "content": question}])
+        return ids[-max_len:]
+
+
+Format = Transcript | ChatTokens
+
+
+def choice_tokens(fmt: Format, letters: typing.Sequence[str]) -> tuple[list[int], list[int]]:
     """The tokens all answers share, then the one token that tells each letter apart.
 
-    After "Assistant:" an answer is " A". ARC sometimes labels choices "1".."4", and our
-    tokenizer writes " 1" as a space then a digit, so the shared space joins the prompt.
+    ARC sometimes labels choices "1".."4", and our tokenizer writes " 1" as a space then a
+    digit, so in a transcript the shared space joins the prompt.
     """
-    ids = [encode(" " + letter) for letter in letters]
+    ids = [fmt.encode(fmt.choice_prefix + letter) for letter in letters]
     shared = core_eval.common_length(ids)
     if any(len(x) != shared + 1 for x in ids):
         raise ValueError(f"Choices {letters} differ in more than one token: {ids}")
@@ -170,13 +202,13 @@ def choice_tokens(encode, letters: typing.Sequence[str]) -> tuple[list[int], lis
 
 
 def categorical_correct(
-    last_logits: LastLogits, problems: list[Problem], encode, bos: int, max_len: int, token_budget: int
+    last_logits: LastLogits, problems: list[Problem], fmt: Format, max_len: int, token_budget: int
 ) -> list[bool]:
     """Whether the model rates the right letter highest among each problem's letters."""
     prompts, options = [], []
     for p in problems:
-        shared, letter_ids = choice_tokens(encode, p.letters)
-        prompts.append(prompt_ids(encode, bos, p, max_len - len(shared)) + shared)
+        shared, letter_ids = choice_tokens(fmt, p.letters)
+        prompts.append(fmt.prompt(p.question, max_len - len(shared)) + shared)
         options.append(letter_ids)
     correct = [False] * len(problems)
     order = sorted(range(len(problems)), key=lambda i: len(prompts[i]))
@@ -186,7 +218,7 @@ def categorical_correct(
         rows = max(1, token_budget // width)
         batch = [i for i in order[start : start + rows] if len(prompts[i]) <= width]
         start += len(batch)
-        tokens = np.full((len(batch), width), bos, dtype=np.int32)
+        tokens = np.full((len(batch), width), BOS, dtype=np.int32)
         for row, i in enumerate(batch):
             tokens[row, : len(prompts[i])] = prompts[i]
         logits = last_logits(tokens, np.array([len(prompts[i]) - 1 for i in batch]))
@@ -251,17 +283,19 @@ def grade(task: str, problem: Problem, completion: str) -> bool:
 
 
 def generative_results(
-    complete: Complete, task: str, problems: list[Problem], encode, bos: int, max_len: int, batch_size: int
+    complete: Complete, task: str, problems: list[Problem], fmt: Format, max_len: int, batch_size: int,
+    verbose: bool = True,
 ) -> list[tuple[str, bool]]:
     """Each problem's completion and whether it is right, generated in length-sorted batches."""
-    prompts = [prompt_ids(encode, bos, p, max_len) for p in problems]
+    prompts = [fmt.prompt(p.question, max_len) for p in problems]
     order = sorted(range(len(problems)), key=lambda i: len(prompts[i]))
     out: list[tuple[str, bool]] = [("", False)] * len(problems)
     for start in range(0, len(order), batch_size):
         batch = order[start : start + batch_size]
         for i, text in zip(batch, complete([prompts[i] for i in batch])):
             out[i] = (text, grade(task, problems[i], text))
-        print(f"  {task}: {min(start + batch_size, len(order))}/{len(order)}", flush=True)
+        if verbose:
+            print(f"  {task}: {min(start + batch_size, len(order))}/{len(order)}", flush=True)
     return out
 
 
@@ -279,17 +313,55 @@ def summarize(accuracy: dict[str, float]) -> dict:
     return out
 
 
+def evaluate(
+    last_logits: LastLogits,
+    complete: Complete,
+    fmt: Format,
+    max_len: int,
+    tasks: typing.Sequence[str] = TASKS,
+    max_problems: dict[str, int | None] | int | None = None,
+    token_budget: int = 16_384,
+    batch_size: int = 32,
+    max_new_tokens: int = 512,
+    verbose: bool = True,
+) -> tuple[dict, list[dict]]:
+    """Run the tasks; returns `summarize`'s scores and every generated answer.
+
+    `max_problems` caps each task, or each task named in a dict: nanochat checks progress
+    during fine-tuning on every multiple-choice problem but 24 of each generative task.
+    """
+    accuracy, completions = {}, []
+    for task in tasks:
+        limit = max_problems.get(task) if isinstance(max_problems, dict) else max_problems
+        problems = load_task(task)[:limit]
+        start = time.perf_counter()
+        if task in CATEGORICAL:
+            correct = categorical_correct(last_logits, problems, fmt, max_len, token_budget)
+        else:
+            results = generative_results(
+                complete, task, problems, fmt, max_len - max_new_tokens, batch_size, verbose
+            )
+            correct = [ok for _, ok in results]
+            completions += [
+                dict(task=task, index=i, question=p.question, completion=text, correct=ok)
+                for i, (p, (text, ok)) in enumerate(zip(problems, results))
+            ]
+        accuracy[task] = float(np.mean(correct))
+        if verbose:
+            print(f"{task} accuracy: {accuracy[task]:.4f} ({sum(correct)}/{len(correct)}, "
+                  f"{time.perf_counter() - start:.0f} s)", flush=True)
+    return summarize(accuracy), completions
+
+
 # --- Model -----------------------------------------------------------------------------
 
 
-def load_run(run_name: str, checkpoint_dir: str, step: int | None, max_new_tokens: int):
-    """Our model as (last_logits, complete, tokenizer, max_len)."""
+def model_functions(model, tokenizer, max_new_tokens: int):
+    """(last_logits, complete, fmt) for a model, in the format its tokenizer implies."""
     import jax
     import jax.numpy as jnp
 
-    from toylib_projects.p02_gpt_web import generate, tokenize_webtext
-
-    model, tokenizer = generate.load(run_name, checkpoint_dir, step)
+    from toylib_projects.p02_gpt_web import chat_format, generate
 
     @jax.jit
     def run_last_logits(model, tokens, positions):
@@ -300,19 +372,40 @@ def load_run(run_name: str, checkpoint_dir: str, step: int | None, max_new_token
     def last_logits(tokens, positions):
         return np.asarray(run_last_logits(model, jnp.asarray(tokens), jnp.asarray(positions)))
 
-    def complete(prompts):
-        outs = generate.greedy_batch(
-            model, prompts, max_new_tokens, stop_tokens={tokenize_webtext.EOT_ID},
-            is_done=lambda ids: STOP in tokenizer.decode(ids),
-        )
-        return [tokenizer.decode(ids).split(STOP)[0] for ids in outs]
+    bos = BOS
+    if isinstance(tokenizer, chat_format.ChatTokenizer):
+        fmt = ChatTokens(tokenizer)
 
-    return last_logits, complete, tokenizer, model.config.seq_len
+        def complete(prompts):
+            outs = generate.greedy_batch(
+                model, prompts, max_new_tokens, stop_tokens={tokenizer.assistant_end, bos},
+                tool=lambda ids: chat_format.tool_tokens(tokenizer, ids),
+            )
+            return [tokenizer.decode(ids) for ids in outs]
+    else:
+        fmt = Transcript(tokenizer.encode, bos)
+
+        def complete(prompts):
+            outs = generate.greedy_batch(
+                model, prompts, max_new_tokens, stop_tokens={bos},
+                is_done=lambda ids: STOP in tokenizer.decode(ids),
+            )
+            return [tokenizer.decode(ids).split(STOP)[0] for ids in outs]
+
+    return last_logits, complete, fmt
+
+
+def load_run(run_name: str, checkpoint_dir: str, step: int | None, max_new_tokens: int):
+    """A run's model as (last_logits, complete, fmt, max_len). Fine-tuned runs are in sft.RUNS."""
+    from toylib_projects.p02_gpt_web import generate
+
+    model, tokenizer = generate.load(run_name, checkpoint_dir, step)
+    return (*model_functions(model, tokenizer, max_new_tokens), model.config.seq_len)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--run", default="d20_nanochat", help="A key of train.RUNS")
+    parser.add_argument("--run", default="d20_nanochat", help="A key of train.RUNS or sft.RUNS")
     parser.add_argument("--checkpoint-dir", required=True, help="Local or gs:// directory of checkpoints")
     parser.add_argument("--step", type=int, default=None, help="Default: the latest")
     parser.add_argument("--tasks", default="|".join(TASKS), help="Tasks to run, joined by |")
@@ -324,31 +417,13 @@ def main():
     parser.add_argument("--completions", type=pathlib.Path, help="JSONL of every generated answer")
     args = parser.parse_args()
 
-    from toylib_projects.p02_gpt_web import tokenize_webtext
-
-    last_logits, complete, tokenizer, max_len = load_run(
+    last_logits, complete, fmt, max_len = load_run(
         args.run, args.checkpoint_dir, args.step, args.max_new_tokens
     )
-    bos, encode = tokenize_webtext.EOT_ID, tokenizer.encode
-    accuracy, completions = {}, []
-    for task in args.tasks.split("|"):
-        problems = load_task(task)[: args.max_problems]
-        start = time.perf_counter()
-        if task in CATEGORICAL:
-            correct = categorical_correct(last_logits, problems, encode, bos, max_len, args.token_budget)
-        else:
-            gen_budget = max_len - args.max_new_tokens
-            results = generative_results(complete, task, problems, encode, bos, gen_budget, args.batch_size)
-            correct = [ok for _, ok in results]
-            completions += [
-                dict(task=task, index=i, question=p.question, completion=text, correct=ok)
-                for i, (p, (text, ok)) in enumerate(zip(problems, results))
-            ]
-        accuracy[task] = float(np.mean(correct))
-        print(f"{task} accuracy: {accuracy[task]:.4f} ({sum(correct)}/{len(correct)}, "
-              f"{time.perf_counter() - start:.0f} s)", flush=True)
-
-    out = summarize(accuracy)
+    out, completions = evaluate(
+        last_logits, complete, fmt, max_len, args.tasks.split("|"), args.max_problems,
+        args.token_budget, args.batch_size, args.max_new_tokens,
+    )
     for key in ("ChatCORE_cat", "ChatCORE"):
         if key in out:
             print(f"{key}: {out[key]:.4f}")
